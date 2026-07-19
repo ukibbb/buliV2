@@ -1,0 +1,23 @@
+{
+  "name": "buli",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.3.12",
+  "engines": {
+    "bun": ">=1.3.12"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun test",
+    "dev": "bun run --cwd apps/buli dev",
+    "start": "bun run --cwd apps/buli start"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  }
+}

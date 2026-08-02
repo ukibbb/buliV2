@@ -1,6 +1,7 @@
 export const OPENAI_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 export const OPENAI_ISSUER = "https://auth.openai.com";
-export const OPENAI_CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
+export const OPENAI_CODEX_API_BASE_URL = "https://chatgpt.com/backend-api/codex";
+export const OPENAI_CODEX_API_ENDPOINT = `${OPENAI_CODEX_API_BASE_URL}/responses`;
 export const OPENAI_CODEX_MODELS_ENDPOINT = "https://chatgpt.com/backend-api/codex/models";
 export const OPENAI_CODEX_CLIENT_VERSION = "0.144.6";
 export const OPENAI_OAUTH_PORT = 1455;

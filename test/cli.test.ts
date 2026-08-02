@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 test("prints formatted help instead of the raw yargs instance", async () => {
   const helpProcess = Bun.spawn({
-    cmd: ["bun", "src/main.ts", "--help"],
+    cmd: ["bun", "cli/main.ts", "--help"],
     cwd: import.meta.dir + "/..",
     stdout: "pipe",
     stderr: "pipe",
@@ -25,7 +25,7 @@ test("prints formatted help instead of the raw yargs instance", async () => {
 
 test("does not expose an explicit buli tui command", async () => {
   const tuiProcess = Bun.spawn({
-    cmd: ["bun", "src/main.ts", "tui"],
+    cmd: ["bun", "cli/main.ts", "tui"],
     cwd: import.meta.dir + "/..",
     stdout: "pipe",
     stderr: "pipe",

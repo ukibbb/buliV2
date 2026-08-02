@@ -1,5 +1,5 @@
-import { runBuliTui } from "@buli/tui";
-import type { ArgumentsCamelCase, Argv, CommandModule } from "yargs";
+import { runBuliTui } from "@/tui";
+import type { ArgumentsCamelCase, CommandModule } from "yargs";
 
 type RunBuliTuiArgs = {};
 

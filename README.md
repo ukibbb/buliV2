@@ -1,16 +1,16 @@
 # Buli
 
-Small Bun workspace for the Buli terminal app.
+Small Bun project for the Buli terminal app.
 
 ## Terminal app development
 
-Run the app in restart-on-save mode from the workspace root:
+Run the app in restart-on-save mode from the project root:
 
 ```bash
 bun run dev
 ```
 
-That runs `apps/buli` with Bun watch and opens the OpenTUI console overlay so `console.log`, `console.debug`, `console.warn`, and `console.error` are visible while the TUI owns the terminal screen.
+That runs `cli/main.ts` with Bun watch and opens the OpenTUI console overlay so `console.log`, `console.debug`, `console.warn`, and `console.error` are visible while the TUI owns the terminal screen.
 
 Inside the TUI:
 
@@ -23,7 +23,7 @@ Inside the TUI:
 If you want watch mode with the console hidden at startup:
 
 ```bash
-bun run --cwd apps/buli dev:quiet
+bun run dev:quiet
 ```
 
 Useful feedback commands:

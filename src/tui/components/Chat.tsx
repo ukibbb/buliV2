@@ -1,5 +1,9 @@
 import { TextareaRenderable, type KeyBinding } from "@opentui/core"
 import { useRef } from "react"
+
+import { useBuli } from "@/application-state"
+
+
 const CHAT_MIN_ROW_COUNT = 3
 const CHAT_MAX_ROW_COUNT = 6
 
@@ -11,13 +15,26 @@ const chatTextAreaKeybindings: KeyBinding[] = [
 ]
 
 
+interface ChatProps {
+  sessionId: string
+}
 
-export function Chat() {
+
+
+
+export function Chat(props: ChatProps) {
   console.count("Chat")
+  const runtime = useBuli()
   const textAreaRef = useRef<TextareaRenderable | null>(null)
 
   const sendPromptToBuli = () => {
-    console.log("promptSubmited", textAreaRef.current?.plainText)
+    // TODO: Trim the value, ignore empty prompts, handle rejected submissions,
+    // and clear the textarea only after a successful submission.
+    const message = textAreaRef.current?.plainText ?? ""
+
+    console.log("promptSubmited", message)
+    // fire async function without await
+    void runtime.submitPrompt(message, props.sessionId)
   }
 
   const contentChange = () => {
@@ -55,7 +72,6 @@ export function Chat() {
 
           />
         </box>
-
       </box>
     </box>
   )

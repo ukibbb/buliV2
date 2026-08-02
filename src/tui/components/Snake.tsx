@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react"
 
-import { glyphs, theme } from "@buli/tui/theme";
+import { glyphs, theme } from "@/tui/theme";
 
 const SNAKE_TRACK_LENGTH = 8;
 

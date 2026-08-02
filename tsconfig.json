@@ -1,13 +1,16 @@
 {
   "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
+  },
   "include": [
-    "apps/*/src/**/*.ts",
-    "apps/*/src/**/*.tsx",
-    "apps/*/test/**/*.ts",
-    "apps/*/test/**/*.tsx",
-    "packages/*/src/**/*.ts",
-    "packages/*/src/**/*.tsx",
-    "packages/*/test/**/*.ts",
-    "packages/*/test/**/*.tsx"
+    "cli/**/*.ts",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "test/**/*.ts",
+    "test/**/*.tsx"
   ]
 }

@@ -1,4 +1,3 @@
-import { streamOpenAiTextWithAuth } from "@/providers/openai/transport"
 
 type TMessageRole = "user" | "assistant"
 
@@ -9,9 +8,23 @@ interface IMessageBase {
   createdAt: number
 }
 
+export interface IUserMessage extends IMessageBase {
+  role: "user"
+}
+
 export interface IBuliMessage extends IMessageBase {
   role: "assistant"
+  completedAt?: number
+  finish?: string
+  error?: {
+    name: string
+    message: string
+
+  }
+
 }
+
+export type TMessage = IUserMessage | IBuliMessage
 
 
 // interface can describe only objects
@@ -24,42 +37,45 @@ interface PartBase {
 }
 
 
-interface TextPart extends PartBase {
-
+export interface TextPart extends PartBase {
+  type: "text"
+  text: string
 }
-export type Part = TextPart
 
-interface IBuliMessageWithParts {
-  info: IBuliMessage
+interface ReasoningPart extends PartBase {
+  type: "reasoning",
+  text: string
+}
+
+export type Part = TextPart | ReasoningPart
+
+export interface IBuliMessageWithParts {
+  info: TMessage
   parts: Part[]
 }
 
-
-interface IUserInteractionRequest {
+export interface IBuliUserInteractionRequest {
   sessionId: string
   history: IBuliMessageWithParts[]
 }
 
 
-type IInteractionEvent =
-  | { type: "text-start", id: string }
-  | { type: "text-delta", id: string }
-  | { type: "text-end", id: string }
-  | { type: "reasoning-start", id: string }
-  | { type: "reasoning-delta", id: string }
-  | { type: "reasoning-end", id: string }
+export type IInteractionEvent =
+  | { type: "text-start"; id: string }
+  | { type: "text-delta"; id: string; delta: string }
+  | { type: "text-end"; id: string }
+  | { type: "reasoning-start"; id: string }
+  | { type: "reasoning-delta"; id: string; delta: string }
+  | { type: "reasoning-end"; id: string }
+  | { type: "finish"; reason: string }
+  | { type: "abort"; reason?: string }
+  | { type: "error"; error: Error }
 
-export interface IUserBuliInteractionDriver {
-  interaction(request: IUserInteractionRequest): Promise<AsyncIterable<IInteractionEvent>>
+export interface IInteractionState {
+
 }
 
-
-
-
-
-export class OpenAiUserBuliInteractionDriver implements IUserBuliInteractionDriver {
-  async *interaction(request: IUserInteractionRequest): Promise<AsyncIterable<IInteractionEvent>> {
-    streamOpenAiTextWithAuth()
-
-  }
+// put somewhere else
+export interface IUserBuliInteractionDriver {
+  interaction(request: IBuliUserInteractionRequest): AsyncIterable<IInteractionEvent>
 }

@@ -3,6 +3,7 @@ import { join } from "node:path"
 import { readFile } from "node:fs/promises"
 
 import { streamOpenAiTextWithAuth } from "@/providers/openai/transport"
+import type { ModelMessage } from "ai"
 
 export type OpenAiAuth = {
   provider: "openai"
@@ -129,7 +130,7 @@ const loadAuth = async (): Promise<OpenAiAuthStore> => {
   return parseOpenAiAuthStore(value)
 }
 
-export const streamOpenAiText = async (prompt: string) => {
+export const streamOpenAiText = async (messages: ModelMessage[]) => {
   const { openai: auth } = await loadAuth()
 
   if (!auth) {
@@ -140,48 +141,5 @@ export const streamOpenAiText = async (prompt: string) => {
     throw new Error("OpenAI access token has expired; sign in again")
   }
 
-  return streamOpenAiTextWithAuth(prompt, auth)
+  return streamOpenAiTextWithAuth(messages, auth)
 }
-
-if (import.meta.main) {
-  try {
-    const result = await streamOpenAiText("Jak mogę iterować przez obiekt w typscript")
-
-    for await (const chunk of result.textStream) {
-      process.stdout.write(chunk)
-    }
-
-    process.stdout.write("\n")
-  } catch (error) {
-    console.error(error)
-    process.exitCode = 1
-  }
-}
-
-
-class Agent {
-  constructor() { }
-}
-
-
-
-// class SessionStore {
-//   constructor() { }
-// }
-//
-// class OpenAiEngine {
-//   constructor() { }
-//   async prompt(prompt: string) { }
-// }
-//
-// class Runtime {
-//   constructor(private engine: OpenAiEngine) { }
-//
-//   async submit(prompt: string, sessionId: string) {
-//     await this.engine.prompt(prompt)
-//   }
-// }
-//
-// class OpenAiDriver { }
-//
-//

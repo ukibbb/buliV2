@@ -1,12 +1,16 @@
 import { createContext, useContext, useSyncExternalStore, type ReactNode } from "react"
 
-import { SessionEngine } from "@/engine"
-import { OpenAiUserBuliInteractionDriver } from "@/engine/interaction-driver"
+
+import type { IBuliApplicationSnapshot, ViewSubscribe } from "@/application-snapshot"
+
+import { OpenAiUserBuliInteractionDriver } from "@/providers/openai"
 import {
   BuliApplicationRuntime,
   type IBuliApplicationRuntime,
-  type IBuliApplicationSnapshot,
 } from "@/runtime"
+
+import { SessionEngine } from "@/engine/session-engine"
+import type { ISessionSnapshot } from "@/engine/session-view-store"
 
 
 export const BuliApplicationRuntimeContext = createContext<IBuliApplicationRuntime | undefined>(undefined)
@@ -17,7 +21,7 @@ interface IBuliRuntimeProviderProps {
 }
 
 export function BuliRuntimeProvider(props: IBuliRuntimeProviderProps) {
-  return <BuliApplicationRuntimeContext.Provider value={props.runtime}> {props.children} </BuliApplicationRuntimeContext.Provider>
+  return <BuliApplicationRuntimeContext.Provider value={props.runtime}>{props.children}</BuliApplicationRuntimeContext.Provider>
 }
 
 export function useBuliRuntime(): IBuliApplicationRuntime {
@@ -31,13 +35,17 @@ export function useBuli(): IBuliApplicationSnapshot {
   return useSyncExternalStore(runtime.subscribe, runtime.getSnapshot)
 }
 
-export function useSession(sessionId: string): SessionEngine {
+export function useSession(sessionId: string): ISessionSnapshot {
   const runtime: IBuliApplicationRuntime = useBuliRuntime()
-  const session = runtime.sessions.get(sessionId)
-  return useSyncExternalStore(session.subscribe, session.getSnapshot)
+  const view: ViewSubscribe<ISessionSnapshot> = runtime.view(sessionId)
+  return useSyncExternalStore(view.subscribe, view.getSnapshot)
 }
 
-export function createBuliApplication(): BuliApplicationRuntime {
+interface IBuliApplicationOptions {
+  signal: AbortSignal
+}
+
+export async function createBuliApplication(options: IBuliApplicationOptions): Promise<IBuliApplicationRuntime> {
   const sessions = new SessionEngine({
     driver: new OpenAiUserBuliInteractionDriver(),
   })

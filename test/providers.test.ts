@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { parseOpenAiAuthStore, streamOpenAiText } from "@/providers";
-import { OpenAiProvider } from "@/providers/openai";
+import { OpenAiUserBuliInteractionDriver } from "@/providers/openai";
 import { OPENAI_CODEX_API_ENDPOINT, OPENAI_CODEX_CLIENT_VERSION } from "@/providers/openai/constants";
 import { streamOpenAiTextWithAuth } from "@/providers/openai/transport";
 
@@ -20,7 +20,7 @@ const validAuth = {
 
 test("@/providers exposes its module entry points", () => {
   expect(streamOpenAiText).toBeDefined();
-  expect(OpenAiProvider).toBeDefined();
+  expect(OpenAiUserBuliInteractionDriver).toBeDefined();
 });
 
 test("parses OpenAI authentication", () => {
@@ -72,7 +72,7 @@ test("streams through the ChatGPT Codex endpoint with OAuth headers", async () =
   );
 
   const result = streamOpenAiTextWithAuth(
-    "Hello from Buli",
+    [{ role: "user", content: "Hello from Buli" }],
     {
       accessToken: "test-access-token",
       accountId: "test-account-id",

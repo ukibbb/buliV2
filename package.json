@@ -18,7 +18,7 @@
     "common": "bun src/common/index.ts",
     "engine": "bun src/engine/index.ts",
     "providers": "bun src/providers/index.ts",
-    "tui": "bun src/tui/index.ts"
+    "tui": "bun cli/main.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.16",

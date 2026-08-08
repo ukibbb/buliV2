@@ -1,3 +1,0 @@
-export class OpenAiProvider {
-  constructor() {}
-}

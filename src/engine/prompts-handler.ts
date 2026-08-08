@@ -1,11 +1,23 @@
-import { SessionEngine } from "@/engine/session-engine"
+import type { SessionEngine } from "@/engine/session-engine"
+import type { IBuliPromptInput } from "@/runtime"
 
-type TBuliPromptGetCreateSelectModelSessionPort = Pick<SessionEngine, "get" | "create" | "updateSelectedModel" | "prompt">
+type TBuliPromptSessionPort = Pick<SessionEngine, "prompt">
+
+interface IBuliPromptsHandlerOptions {
+  sessions: TBuliPromptSessionPort
+}
 
 export class BuliPromptsHandler {
-  sessions: TBuliPromptGetCreateSelectModelSessionPort
-  constructor(sessions: TBuliPromptGetCreateSelectModelSessionPort) {
-    this.sessions = sessions
+  readonly sessions: TBuliPromptSessionPort
+
+  constructor(options: IBuliPromptsHandlerOptions) {
+    this.sessions = options.sessions
   }
 
+  async submitPrompt(input: IBuliPromptInput): Promise<void> {
+    await this.sessions.prompt({
+      sessionId: input.sessionId,
+      parts: [{ type: "text", text: input.text }],
+    })
+  }
 }

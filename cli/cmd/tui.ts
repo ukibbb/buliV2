@@ -1,4 +1,4 @@
-import { runBuliTui } from "@/tui";
+import { main } from "@/main";
 import type { ArgumentsCamelCase, CommandModule } from "yargs";
 
 type RunBuliTuiArgs = {};
@@ -8,6 +8,6 @@ export const RunBuliTuiCommand: CommandModule<{}, RunBuliTuiArgs> = {
   // This text appears in `buli --help` so users can discover what the command does.
   describe: "start the Buli terminal user interface",
   handler: async (argv: ArgumentsCamelCase<RunBuliTuiArgs>) => {
-    await runBuliTui();
+    await main();
   },
 };

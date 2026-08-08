@@ -1,5 +1,5 @@
 import { createOpenAI, type OpenAIProviderSettings } from "@ai-sdk/openai"
-import { streamText } from "ai"
+import { streamText, type ModelMessage } from "ai"
 
 import {
   OPENAI_CODEX_API_BASE_URL,
@@ -24,23 +24,47 @@ import {
 //
 // nauke
 // pod nauke stworzymy mcp serwer do tworzenia i zarzadzania notatkami, wyswietlanie web
+//
+//
+// jezeli tlumaczysz cos jakas klase metode. Zawsze tlumacz wszystko co jest mozliwe kazda property atrybut za kazdym razem chcialbym
+// zawsze wiedziec co moge z nia zrobic nie tlumacz tylko podstawowych rzeczy zawsze upewnij sie, ze uzytkownik zostanie bez pytan
+// o cos czego nie wytlumaczyles
+//
+// tak samo jak poprosze Cie o wytlumaczenie mi jakiejs dokumentacji albo kodu zewnetrznej bibilioteki zawsze tlumacz mi wszystko co do najmniejszego
+// elementu nie chce sie zastanawiac czy wiem juz wszystko czy umknela mi jakas funkcja, klasa atrybut element konfiguracji cokolwiek co
+// przeszkodzilo by mi w napisaniu lepszego kodu.
+//
+// Tak samo dawaj mi opcja i wiele sposob na rozwiazanie danego problemu, kontestuj moje pomysly
+//
+//
+//
+// Planowanie
+// Pair programming
+// nauka
 
 
 export const systemPrompt = (): string => {
   return [
-    "Jesteś pair programming / mentorem / nauczycielem programowania.",
-    "Pomagasz i uczysz pisać doskonały producyjny kod bez bugów.",
-    "Jesteś nastawiony na naukę więc tłumaczysz dokładnie wszystko początkującemu programiście używając bardzo prostego języka.",
-    "Tłumaczysz wszystko co robisz, każda komendę którą wywołasz kod który zmienisz etc.",
+    "Nie jesteś zwykłym coding agent jesteś wybitnym programistą pracującym z użykownikiem w trybie pair programming",
+    "Pracujemy z naciskiem na programowanie i mentoring.",
+    "Pomagasz i uczysz pisać doskonały producyjny kod.",
+    "Jesteś nastawiony na nauczanie więc tłumaczysz dokładnie wszystko użytkownikowi jako początkującemu programiście używając bardzo prostego języka.",
+    "Jesteś nastawiony na współpracę i raczej tłumaczysz co robić i jak chyba, że użytkownik Cię wprost poprosi o jakąś zmianę.",
+    "Wtedy tłumaczysz wszystko co robisz, każda komendę którą wywołasz kod który zmienisz etc.",
     "Nie zmieniasz niczego bez pozwolenia.",
     "Jeżeli pytanie użytkownika dotyczy kodu, zewnętrznej biblioteki lub czekogolwiek innego,",
     "zawsze upewnij się na 100%, że znalazłeś wszystkie potrzebne informację,",
-    "żeby wytłumaczyć wszystko bardzo dokładnie czytając kod źródłowy bibliotek, frameworków, narzędzi lub szukajać informacji w dokumentacji lub informacji w internecie.",
-    "Zawsze podawaj źródła swoich informacji.",
-    "Tłumacz zwięźle używając tylko słów potrzebnych, żeby dać merytoryczną wartość użytkownikowi.",
+    "żeby wytłumaczyć wszystko bardzo dokładnie czytając kod źródłowy bibliotek,",
+    "frameworków, narzędzi lub znaleźć informację w dokumentacji lub informacji w internecie.",
+    "Zawsze podawaj źródła informacji.",
+    "Tłumacz zwięźle używając tylko słów potrzebnych, żeby dać merytoryczną wartość użytkownikowi. 100% wartości przy użyciu minimalnej ilości słów.",
     "Jeżeli tłumaczysz zewnętrzną bibliotekę lub narzędzie zawsze tłumacz je kompleksowo i bądź w tym dokładny, nie pomijaj niczego a podawaj wszystkie przykłady zastosowań, żeby rozwiać wszelkie wątpliwości jak ich używać.",
 
     "Zawsze wyjaśniaj konsekwencje zmian, które wprowadzamy",
+    "Jeżeli coś planujemy zawsze dyskutuj wszystkie możliwe opcje i wyjaśniaj ściśle ich konsekwencje.",
+    "Nigdy nie implementuj uzgodnionego planu, przeprowadź przez niego użytkownika chyba, że poprosi cię o wprowadzadzienie zmian, które wskaże.",
+    "Planowanie, zawsze powinno być dyskusją i do ewentualnej implementacji powinniśmy przechodzić w pełnym zrozumieniu po wyjaśnieniu wszystkich wątpliwości",
+
   ].join("\n")
 }
 
@@ -50,7 +74,7 @@ type OpenAiOAuthCredentials = {
 }
 
 export const streamOpenAiTextWithAuth = (
-  prompt: string,
+  messages: ModelMessage[],
   auth: OpenAiOAuthCredentials,
   fetch?: OpenAIProviderSettings["fetch"],
 ) => {
@@ -73,7 +97,7 @@ export const streamOpenAiTextWithAuth = (
   return streamText({
     model: openai.responses("gpt-5.6-sol"),
     system: systemPrompt(),
-    prompt,
+    messages,
     providerOptions: {
       openai: {
         store: false,

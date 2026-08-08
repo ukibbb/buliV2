@@ -2,17 +2,18 @@ import { expect, test } from "bun:test"
 import { testRender } from "@opentui/react/test-utils"
 import { act, createElement } from "react"
 
-import {
-  BuliEngine,
-  BuliRuntime,
-  BuliSessionRead,
-  BuliTuiRoot,
-} from "@/tui"
+import { BuliRuntimeProvider, createBuliApplication } from "@/application-state"
+import { BuliTui } from "@/tui/Buli"
 
 test("provides the runtime above Buli", async () => {
-  const runtime = new BuliRuntime(new BuliEngine(), new BuliSessionRead())
+  const runtime = await createBuliApplication({
+    signal: new AbortController().signal,
+  })
   const setup = await testRender(
-    createElement(BuliTuiRoot, { runtime, sessionId: "test-session" }),
+    createElement(BuliRuntimeProvider, {
+      runtime,
+      children: createElement(BuliTui),
+    }),
     { width: 80, height: 24 },
   )
 

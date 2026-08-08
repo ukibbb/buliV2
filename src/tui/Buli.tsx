@@ -4,7 +4,9 @@ import { type ReactNode } from "react"
 import { useSession } from "@/application-state";
 import { Chat } from "@/tui/components/Chat";
 import { Layout } from "@/tui/components/Layout";
+import { Transcript } from "@/tui/components/Transcript";
 import type { KeyEvent } from "@opentui/core";
+import type { ISessionSnapshot } from "@/engine/session-view-store"
 
 
 
@@ -13,27 +15,29 @@ interface SessionProps {
 }
 
 
-function Transcript(): ReactNode {
-  console.count("Transcript")
-  // TODO: Accept the selected session snapshot and render its messages.
-  return
-}
 
 function Session({ sessionId }: SessionProps): ReactNode {
   console.count("Session")
-
-  const session = useSession(sessionId)
+  const session: ISessionSnapshot = useSession(sessionId)
 
   return (
-    <box>
-      <box>
-        <scrollbox>
-          <Transcript />
-        </scrollbox>
-        <box>
-          <Chat sessionId={sessionId} />
-        </box>
-      </box>
+    <box
+      width="100%"
+      height="100%"
+      minHeight={0}
+      flexDirection="column"
+    >
+      <scrollbox
+        width="100%"
+        minHeight={0}
+        flexGrow={1}
+        stickyScroll
+        stickyStart="bottom"
+      >
+        <Transcript messages={session.messages} />
+      </scrollbox>
+
+      <Chat sessionId={sessionId} />
     </box>
   )
 }

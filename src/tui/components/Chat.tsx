@@ -1,7 +1,7 @@
 import { TextareaRenderable, type KeyBinding } from "@opentui/core"
 import { useRef } from "react"
 
-import { useBuli } from "@/application-state"
+import { useBuliRuntime } from "@/application-state"
 
 
 const CHAT_MIN_ROW_COUNT = 3
@@ -15,26 +15,27 @@ const chatTextAreaKeybindings: KeyBinding[] = [
 ]
 
 
-interface ChatProps {
+interface IChatProps {
   sessionId: string
 }
 
 
 
 
-export function Chat(props: ChatProps) {
+export function Chat(props: IChatProps) {
   console.count("Chat")
-  const runtime = useBuli()
+  const runtime = useBuliRuntime()
   const textAreaRef = useRef<TextareaRenderable | null>(null)
 
   const sendPromptToBuli = () => {
-    // TODO: Trim the value, ignore empty prompts, handle rejected submissions,
-    // and clear the textarea only after a successful submission.
-    const message = textAreaRef.current?.plainText ?? ""
+    const message = textAreaRef.current?.plainText.trim() ?? ""
+    if (!message) return
 
     console.log("promptSubmited", message)
-    // fire async function without await
-    void runtime.submitPrompt(message, props.sessionId)
+    void runtime.submitPrompt({ sessionId: props.sessionId, text: message })
+      .catch((error: unknown) => {
+        console.error("Failed to submit prompt", error)
+      })
   }
 
   const contentChange = () => {
@@ -59,16 +60,19 @@ export function Chat(props: ChatProps) {
       }}>
         <box style={{
           borderStyle: "rounded",
-          flexGrow: 1 // takes all horizontal space left
+          flexGrow: 1, // takes all horizontal space left
+          width: "100%"
         }}>
           <textarea
             ref={textAreaRef}
             onSubmit={sendPromptToBuli}
             onContentChange={contentChange}
             onCursorChange={cursorChange}
+            focused
             style={{
               keyBindings: chatTextAreaKeybindings,
             }}
+
 
           />
         </box>

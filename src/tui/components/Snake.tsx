@@ -72,5 +72,4 @@ export function SnakeAnimation(): ReactNode {
 
 
 
-
 }

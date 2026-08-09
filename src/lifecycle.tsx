@@ -376,59 +376,50 @@
 // It is an object through which you observe the operation's future completion.
 //
 
-import type { IBuliApplicationRuntime } from "@/runtime";
-import { BuliRuntimeProvider } from "@/application-state";
-import { useState, useEffect } from "react";
-import { BuliTui } from "@/tui/Buli";
+import { useEffect, useState, type ReactNode } from "react"
+
+import type { IBuliApplicationRuntime } from "@/application"
+import { BuliRuntimeProvider } from "@/application-state"
+import { BuliTui } from "@/tui/Buli"
 
 type TBuliLifecycleState =
   | { type: "startup" }
-  | { type: "ready", runtime: IBuliApplicationRuntime }
-  | { type: "error", error: unknown }
-
-type TBuliLifecycleStateType = TBuliLifecycleState["type"]
-
-type TBuliLifecycleStateEnum = {
-  [K in TBuliLifecycleStateType]: K
-}
-
-const BuliLifeCycleState: TBuliLifecycleStateEnum = {
-  startup: "startup",
-  error: "error",
-  ready: "ready"
-}
-
+  | { type: "ready"; runtime: IBuliApplicationRuntime }
+  | { type: "error" }
 
 // Decides which terminal screen to show while the application starts and run
 interface IBuliApplicationLifecycleProps {
   runtimeTask: Promise<IBuliApplicationRuntime>
-  onStartupError: (error: unknown) => void
-  onExit: () => void
 }
 
-export function BuliApplicationLifcycle(props: IBuliApplicationLifecycleProps) {
+/** Presents startup state; bootstrap remains responsible for owned resources. */
+export function BuliApplicationLifecycle(
+  props: IBuliApplicationLifecycleProps,
+): ReactNode {
   const [state, setState] = useState<TBuliLifecycleState>({ type: "startup" })
 
   useEffect(() => {
     let mounted = true
+
     void props.runtimeTask.then(
-      (runtime: IBuliApplicationRuntime) => {
+      (runtime) => {
         if (mounted) setState({ type: "ready", runtime })
       },
-      (error: unknown) => {
-        if (!mounted) return
-        props.onStartupError(error)
-        setState({ type: "error", error })
-      }
+      () => {
+        if (mounted) setState({ type: "error" })
+      },
     )
 
-    return () => { mounted = false }
+    return () => {
+      mounted = false
+    }
+  }, [props.runtimeTask])
 
-  }, [props.runtimeTask, props.onStartupError])
+  if (state.type !== "ready") return null
 
-  if (state.type === BuliLifeCycleState.startup) return
-  if (state.type === BuliLifeCycleState.error) return
-
-  return <BuliRuntimeProvider runtime={state.runtime}><BuliTui /></BuliRuntimeProvider>
-
+  return (
+    <BuliRuntimeProvider runtime={state.runtime}>
+      <BuliTui />
+    </BuliRuntimeProvider>
+  )
 }

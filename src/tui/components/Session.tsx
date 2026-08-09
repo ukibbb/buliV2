@@ -1,0 +1,35 @@
+import type { ReactNode } from "react"
+
+import { useSession } from "@/application-state"
+import { Chat } from "@/tui/components/Chat"
+import { Transcript } from "@/tui/components/Transcript"
+
+interface ISessionScreenProps {
+  sessionId: string
+}
+
+export function SessionScreen(props: ISessionScreenProps): ReactNode {
+  console.count("Session")
+  const session = useSession(props.sessionId)
+
+  return (
+    <box
+      width="100%"
+      height="100%"
+      minHeight={0}
+      flexDirection="column"
+    >
+      <scrollbox
+        width="100%"
+        minHeight={0}
+        flexGrow={1}
+        stickyScroll
+        stickyStart="bottom"
+      >
+        <Transcript messages={session.messages} />
+      </scrollbox>
+
+      <Chat sessionId={props.sessionId} />
+    </box>
+  )
+}

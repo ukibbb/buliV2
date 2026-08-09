@@ -123,7 +123,6 @@ const authFilePath = join(homedir(), ".buli", "auth.json")
 //   stream: boolean
 // }
 
-
 const loadAuth = async (): Promise<OpenAiAuthStore> => {
   const value: unknown = JSON.parse(await readFile(authFilePath, "utf8"))
 

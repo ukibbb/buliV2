@@ -1,46 +1,71 @@
 import { expect, test } from "bun:test"
-
-import { BuliPromptsHandler } from "@/engine/prompts-handler"
-import { SessionEngine, type ISessionPromptInput } from "@/engine/session-engine"
-import { OpenAiUserBuliInteractionDriver } from "@/providers/openai"
 import {
   BuliApplicationRuntime,
   type IBuliPromptInput,
-} from "@/runtime"
+} from "@/application"
+import type {
+  IInteractionEvent,
+  IUserBuliInteractionDriver,
+} from "@/engine/interaction-driver"
+import { SessionEngine } from "@/engine/session-engine"
 
-test("maps application prompts to session prompts", async () => {
-  let receivedInput: ISessionPromptInput | undefined
-  const handler = new BuliPromptsHandler({
-    sessions: {
-      prompt: async (input) => {
-        receivedInput = input
-        return undefined
+const driver: IUserBuliInteractionDriver = {
+  async *interaction() {},
+}
+
+test("application runtime submits prompts into its session view", async () => {
+  const events: IInteractionEvent[] = [
+    { type: "text-start", id: "answer" },
+    { type: "text-delta", id: "answer", delta: "Hello from Buli" },
+    { type: "text-end", id: "answer" },
+    { type: "finish", reason: "stop" },
+  ]
+  const sessions = new SessionEngine({
+    driver: {
+      async *interaction() {
+        yield* events
       },
     },
   })
-
-  await handler.submitPrompt({ sessionId: "session-1", text: "Hello" })
-
-  expect(receivedInput).toEqual({
-    sessionId: "session-1",
-    parts: [{ type: "text", text: "Hello" }],
-  })
-})
-
-test("application runtime delegates prompts through its session engine", async () => {
-  const sessions = new SessionEngine({
-    driver: new OpenAiUserBuliInteractionDriver(),
-  })
   const runtime = new BuliApplicationRuntime({ sessions })
   const input: IBuliPromptInput = { sessionId: "session-1", text: "Hello" }
-  let receivedInput: IBuliPromptInput | undefined
-
-  runtime.prompts.submitPrompt = async (prompt) => {
-    receivedInput = prompt
-  }
+  const view = runtime.view("session-1")
+  const initial = view.getSnapshot()
 
   await runtime.submitPrompt(input)
 
-  expect(runtime.prompts.sessions).toBe(sessions)
-  expect(receivedInput).toEqual(input)
+  expect(view.getSnapshot()).not.toBe(initial)
+  expect(view.getSnapshot().messages.map((message) => message.info.role)).toEqual([
+    "user",
+    "assistant",
+  ])
+  expect(view.getSnapshot().messages[1]?.parts).toContainEqual(
+    expect.objectContaining({ type: "text", text: "Hello from Buli" }),
+  )
+
+  runtime.dispose()
+})
+
+test("application runtime ignores blank prompts", async () => {
+  const sessions = new SessionEngine({ driver })
+  const runtime = new BuliApplicationRuntime({ sessions })
+
+  await runtime.submitPrompt({ sessionId: "session-1", text: "   " })
+
+  expect(runtime.view("session-1").getSnapshot().messages).toEqual([])
+  runtime.dispose()
+})
+
+test("application runtime returns one stable view per session", () => {
+  const sessions = new SessionEngine({ driver })
+  const runtime = new BuliApplicationRuntime({ sessions })
+
+  const first = runtime.view("session-1")
+  const second = runtime.view("session-1")
+  const other = runtime.view("session-2")
+
+  expect(second).toBe(first)
+  expect(other).not.toBe(first)
+
+  runtime.dispose()
 })

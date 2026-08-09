@@ -42,7 +42,7 @@ import {
 // Pair programming
 // nauka
 
-
+/** Stable instructions included with every OpenAI turn. */
 export const systemPrompt = (): string => {
   return [
     "Nie jesteś zwykłym coding agent jesteś wybitnym programistą pracującym z użykownikiem w trybie pair programming",
@@ -105,15 +105,3 @@ export const streamOpenAiTextWithAuth = (
     },
   })
 }
-
-
-
-
-
-
-
-
-
-
-
-

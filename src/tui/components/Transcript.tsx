@@ -1,20 +1,21 @@
 import type { ReactNode } from "react"
-import type { IBuliMessageWithParts, Part } from "@/engine/interaction-driver"
+import type { IBuliMessageWithParts, Part } from "@/domain"
 import { theme } from "@/tui/theme"
 
 interface ITranscriptProps {
   messages: readonly IBuliMessageWithParts[]
 }
+
 interface IUserCardProps {
-  id: string
   parts: readonly Part[]
 }
+
 function UserCard(props: IUserCardProps): ReactNode {
-  const text: string = props.parts
+  const text = props.parts
     // map callback Part to string result string[]
-    .map((part: Part): string => part.text.trim())
+    .map((part) => part.text.trim())
     // filter callback string->boolean result string[]
-    .filter((text: string): boolean => text.length > 0)
+    .filter((partText) => partText.length > 0)
     .join("\n\n")
 
   return <text>{text}</text>
@@ -22,10 +23,12 @@ function UserCard(props: IUserCardProps): ReactNode {
 interface IBuliCardProps {
   parts: readonly Part[]
 }
+
 function BuliCard(props: IBuliCardProps): ReactNode {
-  const text: string = props.parts
-    .filter((part: Part): boolean => part.type === "text")
-    .map((part: Part): string => part.text)
+  // Reasoning remains in the session snapshot but is intentionally not presented yet.
+  const text = props.parts
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
     .join("\n\n")
 
   return <text fg={theme.text}>{text}</text>
@@ -34,23 +37,19 @@ function BuliCard(props: IBuliCardProps): ReactNode {
 export function Transcript(props: ITranscriptProps): ReactNode {
   console.count("Transcript")
   // TODO: Accept the selected session snapshot and render its messages.
-  if (props.messages.length === 0) return <text fg={theme.textMuted}>Start converstation</text>
+  if (props.messages.length === 0) {
+    return <text fg={theme.textMuted}>Start converstation</text>
+  }
 
-  return (<box width="100%" flexDirection="column">
-    {props.messages.map((message: IBuliMessageWithParts) => {
-      if (message.info.role === "user") {
-        return <UserCard
-          key={message.info.id}
-          id={message.info.id}
-          parts={message.parts}
-        />
-      }
+  return (
+    <box width="100%" flexDirection="column">
+      {props.messages.map((message) => {
+        if (message.info.role === "user") {
+          return <UserCard key={message.info.id} parts={message.parts} />
+        }
 
-      return <BuliCard
-        key={message.info.id}
-        parts={message.parts}
-      />
-    })}
-
-  </box>)
+        return <BuliCard key={message.info.id} parts={message.parts} />
+      })}
+    </box>
+  )
 }

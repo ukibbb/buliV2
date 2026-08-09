@@ -1,18 +1,15 @@
-import React from "react"
-
+import type { ReactNode } from "react"
 
 interface LayoutProps {
   width: number
   height: number
-  children: React.ReactNode
+  children: ReactNode
 }
 
-
-export function Layout(props: LayoutProps): React.ReactNode {
+export function Layout(props: LayoutProps): ReactNode {
   return (
     // I can add backgroundColor in future
     <box width={props.width} height={props.height} flexDirection="column">
-
       {
         /* minHeight - must be at least this tall.
          * it can grow taller
@@ -21,12 +18,11 @@ export function Layout(props: LayoutProps): React.ReactNode {
          * what amount of available space inside
          * flex container if all items are 1 they will be distribiuted equally
          *
-        */
+         */
       }
       <box minHeight={0} flexGrow={1} flexDirection="column">
         {props.children}
       </box>
     </box>
   )
-
 }

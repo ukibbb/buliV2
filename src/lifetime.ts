@@ -92,6 +92,7 @@
 // A signal is a separate mechanism used by the work represented by the Promise:
 // const promise = doSomething({ signal })
 //
+/** Keeps cancellation authority in bootstrap while children receive only a signal. */
 export class Lifetime {
   // # private fields and methods  in javascript
   // enforces privacy at runtime
@@ -103,7 +104,6 @@ export class Lifetime {
   // cancellation of asynchronous work
   // AbortController -
   readonly #controller = new AbortController()
-
 
   get signal(): AbortSignal {
     return this.#controller.signal

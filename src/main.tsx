@@ -1,21 +1,13 @@
-import type { IBuliApplicationRuntime } from "@/runtime";
-import { createCliRenderer, type CliRenderer } from "@opentui/core";
-import { type Root, createRoot } from "@opentui/react";
+import { createCliRenderer } from "@opentui/core"
+import { createRoot } from "@opentui/react"
 
-import { BuliApplicationLifcycle } from "@/lifecycle";
-import { createBuliApplication } from "@/application-state";
-import { Lifetime } from "@/lifetime";
-
+import { createBuliApplication } from "@/application"
+import { BuliApplicationLifecycle } from "@/lifecycle"
+import { Lifetime } from "@/lifetime"
 
 export async function main(): Promise<void> {
-  let renderer: CliRenderer | undefined
-
-  let root: Root | undefined
-  let runtimeTask: Promise<IBuliApplicationRuntime> | undefined
   const lifetime = new Lifetime()
-
-
-  renderer = await createCliRenderer({
+  const renderer = await createCliRenderer({
     externalOutputMode: "passthrough",
     targetFps: 60,
     gatherStats: false,
@@ -30,20 +22,8 @@ export async function main(): Promise<void> {
       keyBindings: [{ name: "y", ctrl: true, action: "copy-selection" }],
     },
   })
+  const root = createRoot(renderer)
+  const runtimeTask = createBuliApplication({ signal: lifetime.signal })
 
-  root = createRoot(renderer)
-
-  runtimeTask = createBuliApplication({ signal: lifetime.signal })
-
-  root.render(<BuliApplicationLifcycle runtimeTask={runtimeTask} onStartupError={(error) => { }} onExit={() => { }} />)
-
-
-
-
-
-
-
-
-
-
+  root.render(<BuliApplicationLifecycle runtimeTask={runtimeTask} />)
 }

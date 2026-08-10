@@ -1,15 +1,18 @@
-import { BuliInteractionState } from "@/engine/buli-interaction-state"
+import { BuliIterationState } from "@/engine/buli-iteration-state"
 import { generateRandomId } from "@/common"
 import type {
   IBuliMessage,
   IBuliMessageWithParts,
-  Part,
+  TPart,
 } from "@/domain"
 import type { IUserBuliInteractionDriver } from "@/engine/interaction-driver"
 import {
   InMemorySessionStore,
   type ISessionStore,
 } from "@/engine/session-store"
+
+const MAX_PROVIDER_ITERATIONS = 5
+
 export type TPromptPartInput = {
   readonly type: "text"
   readonly text: string
@@ -32,6 +35,7 @@ export class SessionEngine {
 
   private readonly driver: IUserBuliInteractionDriver
   private readonly now: () => number
+  private readonly activePrompts = new Map<string, AbortController>()
 
   constructor(options: ISessionEngineOptions) {
     this.driver = options.driver
@@ -39,39 +43,81 @@ export class SessionEngine {
     this.now = options.now ?? Date.now
   }
 
-  // TODO: Concurrent prompts for one session can interleave history and replies.
-  // Choose an explicit policy before enabling them: reject, queue, or abort-and-replace.
   async prompt(input: ISessionPromptInput): Promise<IBuliMessage | undefined> {
     const parts = (input.parts ?? []).filter(
       (part) => part.text.trim().length > 0,
     )
 
     if (parts.length === 0) return undefined
+    if (this.activePrompts.has(input.sessionId)) {
+      throw new Error(`A prompt is already running for session ${input.sessionId}`)
+    }
 
     const userMessage = this.createUserMessage(input.sessionId, parts)
-    this.store.publish(userMessage)
-
-    const interactionState = new BuliInteractionState({
-      sessionId: input.sessionId,
-      now: this.now,
-      publish: (message) => this.store.publish(message),
-    })
+    const controller = new AbortController()
+    this.activePrompts.set(input.sessionId, controller)
 
     try {
-      const interaction = this.driver.interaction({
-        sessionId: input.sessionId,
-        history: this.store.getHistory(input.sessionId),
-      })
+      this.store.publish(userMessage)
+      let latestAssistant: IBuliMessage | undefined
 
-      for await (const event of interaction) {
-        interactionState.apply(event)
-        if (interactionState.completed) break
+      for (
+        let iteration = 0;
+        iteration < MAX_PROVIDER_ITERATIONS;
+        iteration += 1
+      ) {
+        const iterationState = new BuliIterationState({
+          sessionId: input.sessionId,
+          now: this.now,
+          publish: (message: IBuliMessageWithParts) => this.store.publish(message),
+        })
+
+        try {
+          const interaction = this.driver.interaction({
+            sessionId: input.sessionId,
+            history: this.store.getHistory(input.sessionId),
+            signal: controller.signal,
+          })
+
+          for await (const event of interaction) {
+            iterationState.apply(event)
+            if (iterationState.completed) break
+          }
+
+          if (controller.signal.aborted && !iterationState.completed) {
+            iterationState.apply({
+              type: "abort",
+              reason: "Buli interaction was aborted",
+            })
+          }
+
+          const outcome = iterationState.complete()
+          latestAssistant = outcome.assistant
+
+          if (!outcome.shouldContinue) return latestAssistant
+        } catch (error) {
+          if (controller.signal.aborted) {
+            iterationState.apply({
+              type: "abort",
+              reason: "Buli interaction was aborted",
+            })
+            return iterationState.complete().assistant
+          }
+
+          return iterationState.fail(error).assistant
+        }
       }
 
-      return interactionState.complete()
-    } catch (error) {
-      return interactionState.fail(error)
+      return latestAssistant
+    } finally {
+      if (this.activePrompts.get(input.sessionId) === controller) {
+        this.activePrompts.delete(input.sessionId)
+      }
     }
+  }
+
+  abort(sessionId: string): void {
+    this.activePrompts.get(sessionId)?.abort("Buli interaction was aborted")
   }
 
   private createUserMessage(
@@ -89,7 +135,7 @@ export class SessionEngine {
         createdAt,
       },
       parts: parts.map(
-        (part): Part => ({
+        (part): TPart => ({
           id: generateRandomId(),
           messageId,
           sessionId,

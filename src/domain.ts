@@ -24,28 +24,60 @@ export interface IBuliMessage extends IMessageBase {
 
 export type TMessage = IUserMessage | IBuliMessage
 
-interface PartBase {
+interface IPartBase {
   readonly id: string
   readonly messageId: string
   readonly sessionId: string
   readonly createdAt: number
 }
 
-export interface TextPart extends PartBase {
+export interface ITextPart extends IPartBase {
   readonly type: "text"
   readonly text: string
 }
 
-export interface ReasoningPart extends PartBase {
+export interface IReasoningPart extends IPartBase {
   readonly type: "reasoning"
   readonly text: string
 }
 
-export type Part = TextPart | ReasoningPart
+export type TJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | TJsonValue[]
+  | TJsonObject
+
+export type TJsonObject = { [key: string]: TJsonValue }
+
+export type TToolStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "error"
+  | "cancelled"
+
+export type TToolExecutionLocation = "local" | "provider"
+
+export interface IToolPart extends IPartBase {
+  readonly type: "tool"
+  readonly callID: string
+  readonly tool: string
+  readonly status: TToolStatus
+  readonly input: TJsonObject
+  readonly output?: TJsonValue
+  readonly error?: string
+  readonly execution: TToolExecutionLocation
+  readonly startedAt?: number
+  readonly completedAt?: number
+}
+
+export type TPart = ITextPart | IReasoningPart | IToolPart
 
 export interface IBuliMessageWithParts {
   readonly info: TMessage
-  readonly parts: readonly Part[]
+  readonly parts: readonly TPart[]
 }
 
 export interface ISessionSnapshot {

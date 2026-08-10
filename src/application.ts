@@ -1,6 +1,11 @@
 import { SessionEngine } from "@/engine/session-engine"
 import type { ISessionSnapshot } from "@/domain"
-import { OpenAiUserBuliInteractionDriver } from "@/providers/openai"
+import {
+  defaultSessionFilePath,
+  JsonlSessionStore,
+} from "@/engine/jsonl-session-store"
+import type { ISessionStore } from "@/engine/session-store"
+import { OpenAiUserBuliInteractionDriver } from "@/providers/openai/openai-turn-driver"
 import { SessionView } from "@/runtime/session-view"
 
 // A store is an object or system that holds application data and lets
@@ -28,6 +33,7 @@ export interface IBuliPromptInput {
 /** The narrow application boundary available to React components. */
 export interface IBuliApplicationClient {
   readonly submitPrompt: (prompt: IBuliPromptInput) => Promise<void>
+  readonly abort: (sessionId: string) => void
   readonly view: (sessionId: string) => ISnapshotSource<ISessionSnapshot>
 }
 
@@ -78,10 +84,16 @@ export class BuliApplicationRuntime implements IBuliApplicationRuntime {
     for (const view of this.views.values()) view.dispose()
     this.views.clear()
   }
+
+  readonly abort = (sessionId: string): void => {
+    if (this.disposed) throw new Error("Buli runtime is disposed")
+    this.sessions.abort(sessionId)
+  }
 }
 
 interface IBuliApplicationOptions {
   signal: AbortSignal
+  store?: ISessionStore
 }
 
 /** Composes provider, engine, store, and application runtime in one place. */
@@ -90,9 +102,13 @@ export async function createBuliApplication(
 ): Promise<IBuliApplicationRuntime> {
   options.signal.throwIfAborted()
 
+  const store = options.store ?? new JsonlSessionStore({
+    filePath: defaultSessionFilePath(),
+  })
   const runtime = new BuliApplicationRuntime({
     sessions: new SessionEngine({
       driver: new OpenAiUserBuliInteractionDriver(),
+      store,
     }),
   })
 

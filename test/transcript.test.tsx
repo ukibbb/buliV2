@@ -27,6 +27,21 @@ test("renders user and assistant text while keeping reasoning hidden", async () 
     },
     {
       info: {
+        id: "failed-assistant-message",
+        sessionId: "default",
+        role: "assistant",
+        createdAt: 4,
+        completedAt: 5,
+        finish: "error",
+        error: {
+          name: "TypeError",
+          message: "Invalid OpenAI authentication",
+        },
+      },
+      parts: [],
+    },
+    {
+      info: {
         id: "assistant-message",
         sessionId: "default",
         role: "assistant",
@@ -42,6 +57,36 @@ test("renders user and assistant text while keeping reasoning hidden", async () 
           createdAt: 2,
           type: "reasoning",
           text: "Hidden reasoning",
+        },
+        {
+          id: "completed-tool-part",
+          messageId: "assistant-message",
+          sessionId: "default",
+          createdAt: 2,
+          type: "tool",
+          callID: "call-grep",
+          tool: "grep",
+          status: "completed",
+          input: { pattern: "SessionEngine" },
+          output: "src/engine/session-engine.ts:30",
+          execution: "local",
+          startedAt: 2,
+          completedAt: 3,
+        },
+        {
+          id: "failed-tool-part",
+          messageId: "assistant-message",
+          sessionId: "default",
+          createdAt: 2,
+          type: "tool",
+          callID: "call-read",
+          tool: "read_file",
+          status: "error",
+          input: { path: "missing.ts" },
+          error: "File not found",
+          execution: "local",
+          startedAt: 2,
+          completedAt: 3,
         },
         {
           id: "answer-part",
@@ -67,7 +112,13 @@ test("renders user and assistant text while keeping reasoning hidden", async () 
     const frame = setup.captureCharFrame()
     expect(frame).toContain("User prompt")
     expect(frame).toContain("Assistant answer")
+    expect(frame).toContain("[done] grep")
+    expect(frame).toContain("SessionEngine")
+    expect(frame).toContain("[error] read_file")
+    expect(frame).toContain("File not found")
+    expect(frame).toContain("TypeError: Invalid OpenAI authentication")
     expect(frame).not.toContain("Hidden reasoning")
+    expect(frame).not.toContain("src/engine/session-engine.ts:30")
   } finally {
     act(() => {
       setup.renderer.destroy()

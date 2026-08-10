@@ -44,6 +44,43 @@ test("exposes stable frozen snapshots until a session changes", () => {
   expect(Object.isFrozen(snapshot.messages[0]?.parts)).toBe(true)
 })
 
+test("freezes structured tool input and output", () => {
+  const store = new InMemorySessionStore()
+  store.publish({
+    info: {
+      id: "assistant-1",
+      sessionId: "session-1",
+      role: "assistant",
+      createdAt: 1,
+    },
+    parts: [{
+      id: "tool-1",
+      messageId: "assistant-1",
+      sessionId: "session-1",
+      createdAt: 1,
+      type: "tool",
+      callID: "call-1",
+      tool: "grep",
+      status: "completed",
+      input: { pattern: "SessionEngine" },
+      output: { matches: ["src/engine/session-engine.ts"] },
+      execution: "local",
+    }],
+  })
+
+  const part = store.getSnapshot("session-1").messages[0]?.parts[0]
+  if (part?.type !== "tool") throw new Error("Expected a tool part")
+
+  expect(Object.isFrozen(part.input)).toBe(true)
+  expect(Object.isFrozen(part.output)).toBe(true)
+  expect(
+    part.output !== null
+    && typeof part.output === "object"
+    && !Array.isArray(part.output)
+    && Object.isFrozen(part.output.matches),
+  ).toBe(true)
+})
+
 test("projects store updates through a stable session snapshot", () => {
   const store = new InMemorySessionStore()
   const view = new SessionView("session-1", store)

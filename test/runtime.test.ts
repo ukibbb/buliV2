@@ -69,3 +69,15 @@ test("application runtime returns one stable view per session", () => {
 
   runtime.dispose()
 })
+
+test("application runtime delegates abort and rejects it after disposal", () => {
+  const sessions = new SessionEngine({ driver })
+  const runtime = new BuliApplicationRuntime({ sessions })
+
+  expect(() => runtime.abort("session-1")).not.toThrow()
+
+  runtime.dispose()
+  expect(() => runtime.abort("session-1")).toThrow(
+    "Buli runtime is disposed",
+  )
+})

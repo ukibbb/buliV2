@@ -1,42 +1,91 @@
 import type { ReactNode } from "react"
-import type { IBuliMessageWithParts, Part } from "@/domain"
+import type {
+  IBuliMessage,
+  IBuliMessageWithParts,
+  ITextPart,
+  IToolPart,
+  TPart,
+  TToolStatus,
+} from "@/domain"
 import { theme } from "@/tui/theme"
+
+const TOOL_LINE_MAX_CHARACTERS = 160
+
+const toolStatusLabels: Record<TToolStatus, string> = {
+  pending: "pending",
+  running: "running",
+  completed: "done",
+  error: "error",
+  cancelled: "cancelled",
+}
 
 interface ITranscriptProps {
   messages: readonly IBuliMessageWithParts[]
 }
 
 interface IUserCardProps {
-  parts: readonly Part[]
+  parts: readonly TPart[]
 }
 
 function UserCard(props: IUserCardProps): ReactNode {
   const text = props.parts
-    // map callback Part to string result string[]
+    .filter((part): part is ITextPart => part.type === "text")
     .map((part) => part.text.trim())
-    // filter callback string->boolean result string[]
     .filter((partText) => partText.length > 0)
     .join("\n\n")
 
   return <text>{text}</text>
 }
 interface IBuliCardProps {
-  parts: readonly Part[]
+  parts: readonly TPart[]
+  error: IBuliMessage["error"]
 }
 
 function BuliCard(props: IBuliCardProps): ReactNode {
-  // Reasoning remains in the session snapshot but is intentionally not presented yet.
-  const text = props.parts
-    .filter((part) => part.type === "text")
-    .map((part) => part.text)
-    .join("\n\n")
+  return (
+    <box width="100%" flexDirection="column">
+      {props.parts.map((part) => {
+        if (part.type === "text") {
+          return <text key={part.id} fg={theme.text}>{part.text}</text>
+        }
 
-  return <text fg={theme.text}>{text}</text>
+        if (part.type === "tool") {
+          return <ToolLine key={part.id} part={part} />
+        }
+
+        // Reasoning remains in the session snapshot but is intentionally hidden.
+        return null
+      })}
+      {props.error
+        ? <text fg={theme.red}>{`${props.error.name}: ${props.error.message}`}</text>
+        : null}
+    </box>
+  )
+}
+
+function ToolLine(props: { part: IToolPart }): ReactNode {
+  const input = JSON.stringify(props.part.input)
+  const error = props.part.error ? `: ${props.part.error}` : ""
+  const line = compactText(
+    `[${toolStatusLabels[props.part.status]}] ${props.part.tool} ${input}${error}`,
+    TOOL_LINE_MAX_CHARACTERS,
+  )
+  const color = props.part.status === "error" || props.part.status === "cancelled"
+    ? theme.red
+    : props.part.status === "running" || props.part.status === "pending"
+      ? theme.amber
+      : theme.textMuted
+
+  return <text fg={color} wrapMode="word">{line}</text>
+}
+
+function compactText(value: string, maximumCharacters: number): string {
+  if (value.length <= maximumCharacters) return value
+  return `${value.slice(0, maximumCharacters - 3)}...`
 }
 
 export function Transcript(props: ITranscriptProps): ReactNode {
   console.count("Transcript")
-  // TODO: Accept the selected session snapshot and render its messages.
   if (props.messages.length === 0) {
     return <text fg={theme.textMuted}>Start converstation</text>
   }
@@ -48,7 +97,13 @@ export function Transcript(props: ITranscriptProps): ReactNode {
           return <UserCard key={message.info.id} parts={message.parts} />
         }
 
-        return <BuliCard key={message.info.id} parts={message.parts} />
+        return (
+          <BuliCard
+            key={message.info.id}
+            parts={message.parts}
+            error={message.info.error}
+          />
+        )
       })}
     </box>
   )

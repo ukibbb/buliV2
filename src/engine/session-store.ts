@@ -7,6 +7,7 @@ import type {
 export type TSessionStoreListener = () => void
 
 export interface ISessionStore {
+
   readonly getHistory: (
     sessionId: string,
   ) => readonly IBuliMessageWithParts[]
@@ -21,6 +22,8 @@ export interface ISessionStore {
     sessionId: string,
     listener: TSessionStoreListener,
   ) => () => void
+
+  readonly reset: () => void
 }
 
 const EMPTY_SESSION_SNAPSHOT: ISessionSnapshot = Object.freeze({
@@ -29,8 +32,8 @@ const EMPTY_SESSION_SNAPSHOT: ISessionSnapshot = Object.freeze({
 
 /** Stores session messages in memory and notifies listeners when they change. */
 export class InMemorySessionStore implements ISessionStore {
-  private readonly snapshots = new Map<string, ISessionSnapshot>()
 
+  private readonly snapshots = new Map<string, ISessionSnapshot>()
   private readonly listeners = new Map<string, Set<TSessionStoreListener>>()
 
   readonly getHistory = (
@@ -39,9 +42,6 @@ export class InMemorySessionStore implements ISessionStore {
     return structuredClone(this.getSnapshot(sessionId).messages)
   }
 
-  readonly getSnapshot = (sessionId: string): ISessionSnapshot => {
-    return this.snapshots.get(sessionId) ?? EMPTY_SESSION_SNAPSHOT
-  }
 
   readonly publish = (
     message: IBuliMessageWithParts,
@@ -76,6 +76,21 @@ export class InMemorySessionStore implements ISessionStore {
 
     const listeners = [...(this.listeners.get(sessionId) ?? [])]
     listeners.forEach((listener) => listener())
+  }
+
+  readonly reset = (): void => {
+    if (this.snapshots.size === 0) return
+
+    this.snapshots.clear()
+
+    for (const listeners of this.listeners.values()) {
+      // Copy because a listener can unsubscribe while callbacks are running.
+      for (const listener of [...listeners]) listener()
+    }
+  }
+
+  readonly getSnapshot = (sessionId: string): ISessionSnapshot => {
+    return this.snapshots.get(sessionId) ?? EMPTY_SESSION_SNAPSHOT
   }
 
   // this methods gets called from outside

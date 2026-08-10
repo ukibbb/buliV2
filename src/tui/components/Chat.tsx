@@ -29,44 +29,39 @@ export function Chat(props: IChatProps) {
       .catch((error: unknown) => {
         console.error("Failed to submit prompt", error)
       })
+    textAreaRef.current?.clear()
+
   }
 
-  const contentChange = () => {
-    console.log("contentChange", textAreaRef.current?.plainText)
-  }
+  // const contentChange = () => {
+  //   console.log("contentChange", textAreaRef.current?.plainText)
+  // }
 
-  const cursorChange = () => {
-    console.log("cursorChange", textAreaRef.current?.plainText)
-  }
+  // const cursorChange = () => {
+  //   console.log("cursorChange", textAreaRef.current?.plainText)
+  // }
 
   return (
-    <box style={{ borderStyle: "rounded" }}>
+    <box width="100%" flexShrink={0} flexDirection="column">
+      <text>{runtime.workspaceRoot}</text>
       <box
+        width="100%"
         style={{
           borderStyle: "rounded",
-          flexDirection: "row",
           minHeight: CHAT_MIN_ROW_COUNT,
           maxHeight: CHAT_MAX_ROW_COUNT,
         }}
       >
-        <box
+        <textarea
+          ref={textAreaRef}
+          onSubmit={sendPromptToBuli}
+          // onContentChange={contentChange}
+          // onCursorChange={cursorChange}
+          focused
           style={{
-            borderStyle: "rounded",
-            flexGrow: 1, // takes all horizontal space left
-            width: "100%",
+            keyBindings: chatTextAreaKeybindings,
           }}
-        >
-          <textarea
-            ref={textAreaRef}
-            onSubmit={sendPromptToBuli}
-            onContentChange={contentChange}
-            onCursorChange={cursorChange}
-            focused
-            style={{
-              keyBindings: chatTextAreaKeybindings,
-            }}
-          />
-        </box>
+        />
       </box>
     </box>
   )

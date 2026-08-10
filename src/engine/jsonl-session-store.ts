@@ -37,9 +37,6 @@ export class JsonlSessionStore implements ISessionStore {
     sessionId: string,
   ): readonly IBuliMessageWithParts[] => this.memory.getHistory(sessionId)
 
-  readonly getSnapshot = (sessionId: string): ISessionSnapshot => {
-    return this.memory.getSnapshot(sessionId)
-  }
 
   readonly publish = (message: IBuliMessageWithParts): void => {
     assertValidSessionMessage(message)
@@ -52,6 +49,20 @@ export class JsonlSessionStore implements ISessionStore {
     }
 
     this.memory.publish(message)
+  }
+
+
+  readonly getSnapshot = (sessionId: string): ISessionSnapshot => {
+    return this.memory.getSnapshot(sessionId)
+  }
+
+  readonly reset = (): void => {
+    writeFileSync(this.filePath, "", {
+      encoding: "utf8",
+      mode: 0o600
+    })
+
+    this.memory.reset()
   }
 
   readonly subscribe = (

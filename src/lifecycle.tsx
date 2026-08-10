@@ -378,18 +378,18 @@
 
 import { useEffect, useState, type ReactNode } from "react"
 
-import type { IBuliApplicationRuntime } from "@/application"
+import type { BuliApplicationRuntime } from "@/application"
 import { BuliRuntimeProvider } from "@/application-state"
 import { BuliTui } from "@/tui/Buli"
 
 type TBuliLifecycleState =
   | { type: "startup" }
-  | { type: "ready"; runtime: IBuliApplicationRuntime }
+  | { type: "ready"; runtime: BuliApplicationRuntime }
   | { type: "error" }
 
 // Decides which terminal screen to show while the application starts and run
 interface IBuliApplicationLifecycleProps {
-  runtimeTask: Promise<IBuliApplicationRuntime>
+  runtimeTask: Promise<BuliApplicationRuntime>
 }
 
 /** Presents startup state; bootstrap remains responsible for owned resources. */

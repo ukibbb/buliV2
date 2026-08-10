@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { realpathSync } from "node:fs"
 
 import type { IBuliMessageWithParts } from "@/domain"
 import { SessionEngine } from "@/engine/session-engine"
@@ -7,6 +8,8 @@ import type { IAuthStore, TAuthInfo } from "@/providers/auth-store"
 import { OpenAiAuth } from "@/providers/openai/openai-auth"
 import { OPENAI_CODEX_RESPONSES_URL } from "@/providers/openai/openai-constants"
 import { OpenAiUserBuliInteractionDriver } from "@/providers/openai/openai-turn-driver"
+
+const WORKSPACE_ROOT = realpathSync(process.cwd())
 
 test("runs an OAuth tool chain through engine-owned iterations", async () => {
   const capturedRequests: Request[] = []
@@ -37,6 +40,7 @@ test("runs an OAuth tool chain through engine-owned iterations", async () => {
   const driver = new OpenAiUserBuliInteractionDriver({
     auth,
     modelId: "gpt-5.6-sol",
+    workspaceRoot: WORKSPACE_ROOT,
   })
   const history: IBuliMessageWithParts[] = [
     message("user", [
@@ -71,6 +75,9 @@ test("runs an OAuth tool chain through engine-owned iterations", async () => {
   expect(body.store).toBe(false)
   expect(body.stream).toBe(true)
   expect(body.instructions).toContain("pair programming")
+  expect(body.instructions).toContain(
+    `Aktualny katalog roboczy i root workspace: ${WORKSPACE_ROOT}.`,
+  )
   expect(body.tools).toEqual(expect.arrayContaining([
     expect.objectContaining({ type: "function", name: "read_file" }),
     expect.objectContaining({ type: "function", name: "glob" }),
@@ -150,7 +157,10 @@ test("replays a local tool failure into the next OAuth iteration", async () => {
   })
   const store = new InMemorySessionStore()
   const engine = new SessionEngine({
-    driver: new OpenAiUserBuliInteractionDriver({ auth }),
+    driver: new OpenAiUserBuliInteractionDriver({
+      auth,
+      workspaceRoot: WORKSPACE_ROOT,
+    }),
     store,
   })
 
@@ -207,7 +217,10 @@ test("forwards cancellation to the OpenAI request", async () => {
     fetch: stalledFetch,
     now: () => 100,
   })
-  const driver = new OpenAiUserBuliInteractionDriver({ auth })
+  const driver = new OpenAiUserBuliInteractionDriver({
+    auth,
+    workspaceRoot: WORKSPACE_ROOT,
+  })
   const controller = new AbortController()
   const eventsPromise = (async () => {
     const events = []

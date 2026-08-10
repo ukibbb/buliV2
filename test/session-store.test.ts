@@ -107,6 +107,29 @@ test("projects store updates through a stable session snapshot", () => {
   expect(view.getSnapshot()).toBe(current)
 })
 
+test("resets snapshots without removing subscribers", () => {
+  const store = new InMemorySessionStore()
+  let notifications = 0
+  const unsubscribe = store.subscribe("session-1", () => {
+    notifications += 1
+  })
+
+  store.publish(userMessage("Before reset"))
+  store.reset()
+
+  expect(store.getHistory("session-1")).toEqual([])
+  expect(notifications).toBe(2)
+
+  store.publish(userMessage("After reset"))
+
+  expect(store.getHistory("session-1")[0]?.parts[0]).toMatchObject({
+    text: "After reset",
+  })
+  expect(notifications).toBe(3)
+
+  unsubscribe()
+})
+
 test("rejects parts linked to another message or session", () => {
   const store = new InMemorySessionStore()
 

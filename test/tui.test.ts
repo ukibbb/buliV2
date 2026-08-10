@@ -6,7 +6,7 @@ import { act, createElement } from "react"
 import {
   BuliApplicationRuntime,
   createBuliApplication,
-  type IBuliApplicationClient,
+  type IBuliApplication,
 } from "@/application"
 import { BuliRuntimeProvider } from "@/application-state"
 import type { ISessionSnapshot } from "@/domain"
@@ -14,6 +14,8 @@ import type { IUserBuliInteractionDriver } from "@/engine/interaction-driver"
 import { SessionEngine } from "@/engine/session-engine"
 import { InMemorySessionStore } from "@/engine/session-store"
 import { BuliTui } from "@/tui/Buli"
+
+const WORKSPACE_ROOT = "/workspace"
 
 test("provides the runtime above Buli", async () => {
   const runtime = await createBuliApplication({
@@ -51,7 +53,8 @@ test("Escape aborts the default session while chat input is focused", async () =
     subscribe: () => () => undefined,
     getSnapshot: () => snapshot,
   }
-  const runtime: IBuliApplicationClient = {
+  const runtime: IBuliApplication = {
+    workspaceRoot: WORKSPACE_ROOT,
     submitPrompt: async () => undefined,
     abort: (sessionId) => aborted.push(sessionId),
     view: () => view,
@@ -95,6 +98,7 @@ test("renders a submitted prompt and streamed response", async () => {
     },
   }
   const runtime = new BuliApplicationRuntime({
+    workspaceRoot: WORKSPACE_ROOT,
     sessions: new SessionEngine({ driver }),
   })
   const setup = await testRender(
@@ -111,6 +115,8 @@ test("renders a submitted prompt and streamed response", async () => {
       await runtime.submitPrompt({ sessionId: "default", text: "Rendered prompt" })
       await setup.renderOnce()
     })
+    await setup.waitForVisualIdle()
+    await Bun.sleep(50)
 
     const frame = setup.captureCharFrame()
     expect(frame).toContain("Rendered prompt")

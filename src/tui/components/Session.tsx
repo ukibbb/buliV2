@@ -15,7 +15,7 @@ export function SessionScreen(props: ISessionScreenProps): ReactNode {
   return (
     <box
       width="100%"
-      height="100%"
+      flexGrow={1}
       minHeight={0}
       flexDirection="column"
     >

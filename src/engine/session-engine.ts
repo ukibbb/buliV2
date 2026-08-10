@@ -120,6 +120,13 @@ export class SessionEngine {
     this.activePrompts.get(sessionId)?.abort("Buli interaction was aborted")
   }
 
+  reset(): void {
+    if (this.activePrompts.size > 0) {
+      throw new Error("Cannot reset while a prompt is running")
+    }
+    this.store.reset()
+  }
+
   private createUserMessage(
     sessionId: string,
     parts: readonly TPromptPartInput[],

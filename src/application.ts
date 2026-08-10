@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises"
 import { SessionEngine } from "@/engine/session-engine"
 import type { ISessionSnapshot } from "@/domain"
 import {
@@ -31,34 +32,37 @@ export interface IBuliPromptInput {
 }
 
 /** The narrow application boundary available to React components. */
-export interface IBuliApplicationClient {
+export interface IBuliApplication {
+  readonly workspaceRoot: string
   readonly submitPrompt: (prompt: IBuliPromptInput) => Promise<void>
   readonly abort: (sessionId: string) => void
   readonly view: (sessionId: string) => ISnapshotSource<ISessionSnapshot>
 }
 
-/** The bootstrap owner also receives disposal; UI components do not need it. */
-export interface IBuliApplicationRuntime extends IBuliApplicationClient {
-  readonly dispose: () => void
-}
-
 interface IBuliRuntimeOptions {
   sessions: SessionEngine
+  workspaceRoot: string
 }
 
 /** Connects the session services used by the UI. */
-export class BuliApplicationRuntime implements IBuliApplicationRuntime {
+export class BuliApplicationRuntime implements IBuliApplication {
+  readonly workspaceRoot: string
   private readonly sessions: SessionEngine
   /** Creates and reuses one UI view for each session. */
   private readonly views = new Map<string, SessionView>()
   private disposed = false
 
   constructor(options: IBuliRuntimeOptions) {
+    this.workspaceRoot = options.workspaceRoot
     this.sessions = options.sessions
   }
 
   /** Converts text entered in the UI into a session prompt. */
   readonly submitPrompt = async (prompt: IBuliPromptInput): Promise<void> => {
+    if (prompt.text.trim() === "/reset") {
+      this.sessions.reset()
+      return
+    }
     await this.sessions.prompt({
       sessionId: prompt.sessionId,
       parts: [{ type: "text", text: prompt.text }],
@@ -99,15 +103,25 @@ interface IBuliApplicationOptions {
 /** Composes provider, engine, store, and application runtime in one place. */
 export async function createBuliApplication(
   options: IBuliApplicationOptions,
-): Promise<IBuliApplicationRuntime> {
+): Promise<BuliApplicationRuntime> {
+  options.signal.throwIfAborted()
+  const workspaceRoot = await realpath(process.cwd())
   options.signal.throwIfAborted()
 
+
+  // In future InteractionDriver based on provider
+  // provider based on active auth setup?
+
+
+
+
   const store = options.store ?? new JsonlSessionStore({
-    filePath: defaultSessionFilePath(),
+    filePath: defaultSessionFilePath(workspaceRoot),
   })
   const runtime = new BuliApplicationRuntime({
+    workspaceRoot,
     sessions: new SessionEngine({
-      driver: new OpenAiUserBuliInteractionDriver(),
+      driver: new OpenAiUserBuliInteractionDriver({ workspaceRoot }),
       store,
     }),
   })

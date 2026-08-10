@@ -349,6 +349,10 @@ test("aborts partial output, rejects overlap, and releases the session", async (
   })
   await firstInteractionStarted.promise
 
+  expect(() => engine.reset()).toThrow(
+    "Cannot reset while a prompt is running",
+  )
+
   await expect(engine.prompt({
     sessionId: "session-1",
     parts: [{ type: "text", text: "Overlapping question" }],
@@ -382,12 +386,18 @@ test("aborts partial output, rejects overlap, and releases the session", async (
     error: "Buli interaction was aborted",
   })
 
+  engine.reset()
+  expect(store.getHistory("session-1")).toEqual([])
+
   const nextAssistant = await engine.prompt({
     sessionId: "session-1",
     parts: [{ type: "text", text: "Next question" }],
   })
   expect(nextAssistant).toMatchObject({ finish: "stop" })
   expect(requests[1]?.signal.aborted).toBe(false)
+  expect(
+    requests[1]?.history.map((message) => message.info.role),
+  ).toEqual(["user"])
   expect(() => engine.abort("idle-session")).not.toThrow()
 })
 

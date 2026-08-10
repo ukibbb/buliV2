@@ -5,17 +5,17 @@ import {
   type ReactNode,
 } from "react"
 import type {
-  IBuliApplicationClient,
+  IBuliApplication,
   ISnapshotSource,
 } from "@/application"
 import type { ISessionSnapshot } from "@/domain"
 
 export const BuliApplicationRuntimeContext =
-  createContext<IBuliApplicationClient | undefined>(undefined)
+  createContext<IBuliApplication | undefined>(undefined)
 
 interface IBuliRuntimeProviderProps {
   children: ReactNode
-  runtime: IBuliApplicationClient
+  runtime: IBuliApplication
 }
 
 export function BuliRuntimeProvider(props: IBuliRuntimeProviderProps) {
@@ -26,7 +26,7 @@ export function BuliRuntimeProvider(props: IBuliRuntimeProviderProps) {
   )
 }
 
-export function useBuliRuntime(): IBuliApplicationClient {
+export function useBuliRuntime(): IBuliApplication {
   const runtime = useContext(BuliApplicationRuntimeContext)
   if (!runtime) throw new Error("Buli runtime not available!")
   return runtime

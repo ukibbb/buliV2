@@ -7,7 +7,7 @@ import type {
   TPart,
   TToolStatus,
 } from "@/domain"
-import { theme } from "@/tui/theme"
+import { syntax, theme } from "@/tui/theme"
 
 const TOOL_LINE_MAX_CHARACTERS = 160
 
@@ -39,6 +39,7 @@ function UserCard(props: IUserCardProps): ReactNode {
 interface IBuliCardProps {
   parts: readonly TPart[]
   error: IBuliMessage["error"]
+  complete: boolean
 }
 
 function BuliCard(props: IBuliCardProps): ReactNode {
@@ -46,7 +47,14 @@ function BuliCard(props: IBuliCardProps): ReactNode {
     <box width="100%" flexDirection="column">
       {props.parts.map((part) => {
         if (part.type === "text") {
-          return <text key={part.id} fg={theme.text}>{part.text}</text>
+          return <markdown
+            key={part.id}
+            fg={theme.text}
+            content={part.text}
+            syntaxStyle={syntax}
+            streaming={!props.complete}
+            conceal
+          />
         }
 
         if (part.type === "tool") {
@@ -102,6 +110,7 @@ export function Transcript(props: ITranscriptProps): ReactNode {
             key={message.info.id}
             parts={message.parts}
             error={message.info.error}
+            complete={message.info.completedAt !== undefined}
           />
         )
       })}

@@ -108,6 +108,8 @@ test("renders user and assistant text while keeping reasoning hidden", async () 
     await act(async () => {
       await setup.renderOnce()
     })
+    await setup.waitForVisualIdle()
+    await Bun.sleep(50)
 
     const frame = setup.captureCharFrame()
     expect(frame).toContain("User prompt")

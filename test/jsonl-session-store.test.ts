@@ -90,6 +90,35 @@ test("reports JSONL corruption before the final record", async () => {
   }
 })
 
+test("reset removes the persisted conversation and remains usable", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-"))
+  const filePath = join(directory, "sessions.jsonl")
+
+  try {
+    const store = new JsonlSessionStore({ filePath })
+    store.publish(userMessage("Old question"))
+    store.publish(assistantMessage("Old answer", true))
+
+    store.reset()
+
+    expect(store.getHistory("session-1")).toEqual([])
+    expect(await records(filePath)).toEqual([])
+
+    const restored = new JsonlSessionStore({ filePath })
+    expect(restored.getHistory("session-1")).toEqual([])
+
+    restored.publish(userMessage("Fresh question"))
+
+    expect(
+      new JsonlSessionStore({ filePath })
+        .getHistory("session-1")[0]
+        ?.parts[0],
+    ).toMatchObject({ text: "Fresh question" })
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test("derives one stable global log path per canonical workspace", async () => {
   const first = await mkdtemp(join(tmpdir(), "buli-workspace-"))
   const second = await mkdtemp(join(tmpdir(), "buli-workspace-"))

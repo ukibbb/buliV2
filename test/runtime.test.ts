@@ -9,6 +9,8 @@ import type {
 } from "@/engine/interaction-driver"
 import { SessionEngine } from "@/engine/session-engine"
 
+const WORKSPACE_ROOT = "/workspace"
+
 const driver: IUserBuliInteractionDriver = {
   async *interaction() {},
 }
@@ -27,7 +29,10 @@ test("application runtime submits prompts into its session view", async () => {
       },
     },
   })
-  const runtime = new BuliApplicationRuntime({ sessions })
+  const runtime = new BuliApplicationRuntime({
+    sessions,
+    workspaceRoot: WORKSPACE_ROOT,
+  })
   const input: IBuliPromptInput = { sessionId: "session-1", text: "Hello" }
   const view = runtime.view("session-1")
   const initial = view.getSnapshot()
@@ -48,7 +53,10 @@ test("application runtime submits prompts into its session view", async () => {
 
 test("application runtime ignores blank prompts", async () => {
   const sessions = new SessionEngine({ driver })
-  const runtime = new BuliApplicationRuntime({ sessions })
+  const runtime = new BuliApplicationRuntime({
+    sessions,
+    workspaceRoot: WORKSPACE_ROOT,
+  })
 
   await runtime.submitPrompt({ sessionId: "session-1", text: "   " })
 
@@ -58,7 +66,10 @@ test("application runtime ignores blank prompts", async () => {
 
 test("application runtime returns one stable view per session", () => {
   const sessions = new SessionEngine({ driver })
-  const runtime = new BuliApplicationRuntime({ sessions })
+  const runtime = new BuliApplicationRuntime({
+    sessions,
+    workspaceRoot: WORKSPACE_ROOT,
+  })
 
   const first = runtime.view("session-1")
   const second = runtime.view("session-1")
@@ -72,7 +83,10 @@ test("application runtime returns one stable view per session", () => {
 
 test("application runtime delegates abort and rejects it after disposal", () => {
   const sessions = new SessionEngine({ driver })
-  const runtime = new BuliApplicationRuntime({ sessions })
+  const runtime = new BuliApplicationRuntime({
+    sessions,
+    workspaceRoot: WORKSPACE_ROOT,
+  })
 
   expect(() => runtime.abort("session-1")).not.toThrow()
 
@@ -80,4 +94,50 @@ test("application runtime delegates abort and rejects it after disposal", () => 
   expect(() => runtime.abort("session-1")).toThrow(
     "Buli runtime is disposed",
   )
+})
+
+test("handles only exact reset commands locally", async () => {
+  let interactionCount = 0
+  const sessions = new SessionEngine({
+    driver: {
+      async *interaction() {
+        interactionCount += 1
+        yield { type: "finish", reason: "stop" }
+      },
+    },
+  })
+  const runtime = new BuliApplicationRuntime({
+    sessions,
+    workspaceRoot: WORKSPACE_ROOT,
+  })
+  const view = runtime.view("session-1")
+
+  await runtime.submitPrompt({
+    sessionId: "session-1",
+    text: "Old question",
+  })
+
+  expect(interactionCount).toBe(1)
+  expect(view.getSnapshot().messages).toHaveLength(2)
+
+  await runtime.submitPrompt({
+    sessionId: "session-1",
+    text: "  /reset  ",
+  })
+
+  expect(interactionCount).toBe(1)
+  expect(view.getSnapshot().messages).toEqual([])
+
+  await runtime.submitPrompt({
+    sessionId: "session-1",
+    text: "/reset now",
+  })
+
+  expect(interactionCount).toBe(2)
+  expect(view.getSnapshot().messages.map((message) => message.info.role)).toEqual([
+    "user",
+    "assistant",
+  ])
+
+  runtime.dispose()
 })

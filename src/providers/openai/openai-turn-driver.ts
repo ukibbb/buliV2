@@ -1,5 +1,3 @@
-import { realpath } from "node:fs/promises"
-
 import { createOpenAI } from "@ai-sdk/openai"
 import {
   isStepCount,
@@ -36,6 +34,7 @@ import { createWorkspaceToolRegistry } from "@/tools/workspace-tools"
 export const DEFAULT_OPENAI_MODEL_ID = "gpt-5.6-sol"
 
 export interface OpenAiUserBuliInteractionDriverOptions {
+  readonly workspaceRoot: string
   readonly auth?: OpenAiAuth
   readonly modelId?: string
   readonly toolRegistry?: BuliToolRegistry
@@ -46,11 +45,13 @@ type AIStreamEvent = ReturnType<typeof streamText<ToolSet>>["stream"] extends
 
 /** Sends history to OpenAI and converts one provider step into Buli events. */
 export class OpenAiUserBuliInteractionDriver implements IUserBuliInteractionDriver {
+  private readonly workspaceRoot: string
   private readonly auth: OpenAiAuth
   private readonly modelId: string
   private readonly toolRegistry: BuliToolRegistry
 
-  constructor(options: OpenAiUserBuliInteractionDriverOptions = {}) {
+  constructor(options: OpenAiUserBuliInteractionDriverOptions) {
+    this.workspaceRoot = options.workspaceRoot
     this.auth = options.auth ?? new OpenAiAuth()
     this.modelId = options.modelId ?? DEFAULT_OPENAI_MODEL_ID
     this.toolRegistry = options.toolRegistry ?? createWorkspaceToolRegistry()
@@ -63,7 +64,6 @@ export class OpenAiUserBuliInteractionDriver implements IUserBuliInteractionDriv
 
     request.signal.throwIfAborted()
     await this.auth.requireCredential(request.signal)
-    const workspaceRoot = await realpath(process.cwd())
     request.signal.throwIfAborted()
     const provider = createOpenAI({
       apiKey: OPENAI_OAUTH_DUMMY_API_KEY,
@@ -73,14 +73,14 @@ export class OpenAiUserBuliInteractionDriver implements IUserBuliInteractionDriv
       model: provider.responses(this.modelId),
       messages,
       tools: toAiTools(this.toolRegistry, {
-        workspaceRoot,
+        workspaceRoot: this.workspaceRoot,
         signal: request.signal,
       }),
       abortSignal: request.signal,
       providerOptions: {
         openai: {
           store: false,
-          instructions: systemPrompt(),
+          instructions: systemPrompt(this.workspaceRoot),
         },
       },
       stopWhen: isStepCount(1),

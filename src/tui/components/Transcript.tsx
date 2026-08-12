@@ -34,7 +34,7 @@ function UserCard(props: IUserCardProps): ReactNode {
     .filter((partText) => partText.length > 0)
     .join("\n\n")
 
-  return <text>{text}</text>
+  return <text margin={1}>{text}</text>
 }
 interface IBuliCardProps {
   parts: readonly TPart[]

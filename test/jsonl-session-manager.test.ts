@@ -9,31 +9,31 @@ import {
 import { homedir, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
+import type { IAgentModelRequest } from "@/agent/agent-types"
 import type { IBuliMessageWithParts } from "@/domain"
+import { AgentSession } from "@/session/agent-session"
 import {
   defaultSessionFilePath,
-  JsonlSessionStore,
-} from "@/engine/jsonl-session-store"
-import type { IBuliUserInteractionRequest } from "@/engine/interaction-driver"
-import { SessionEngine } from "@/engine/session-engine"
+  JsonlSessionManager,
+} from "@/session/jsonl-session-manager"
 
-test("persists users and completed assistants without token snapshots", async () => {
+test("persists only durable messages in the existing JSONL shape", async () => {
   const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-"))
   const filePath = join(directory, "nested", "sessions.jsonl")
 
   try {
-    const store = new JsonlSessionStore({ filePath })
-    store.publish(userMessage("Question"))
-    store.publish(assistantMessage("Part"))
-
+    const manager = new JsonlSessionManager({ filePath })
+    manager.appendMessage(userMessage("Question"))
+    expect(() => manager.appendMessage(assistantMessage("Part"))).toThrow(
+      "Cannot persist an incomplete assistant message",
+    )
     expect(await records(filePath)).toHaveLength(1)
 
-    store.publish(assistantMessage("Complete answer", true))
-
+    manager.appendMessage(assistantMessage("Complete answer", true))
     expect(await records(filePath)).toHaveLength(2)
 
-    const restored = new JsonlSessionStore({ filePath })
-    const history = restored.getHistory("session-1")
+    const restored = new JsonlSessionManager({ filePath })
+    const history = restored.getMessages("session-1")
     expect(history.map((message) => message.info.role)).toEqual([
       "user",
       "assistant",
@@ -42,39 +42,39 @@ test("persists users and completed assistants without token snapshots", async ()
       type: "text",
       text: "Complete answer",
     })
-    expect(Object.isFrozen(restored.getSnapshot("session-1"))).toBe(true)
+    expect(JSON.parse((await records(filePath))[1] ?? "null")).toEqual(
+      assistantMessage("Complete answer", true),
+    )
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
 })
 
-test("keeps the latest message ID and ignores a truncated final append", async () => {
+test("keeps the latest message ID and repairs a truncated final append", async () => {
   const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-"))
   const filePath = join(directory, "sessions.jsonl")
 
   try {
-    const store = new JsonlSessionStore({ filePath })
-    store.publish(userMessage("First"))
-    store.publish(userMessage("Replacement"))
+    const manager = new JsonlSessionManager({ filePath })
+    manager.appendMessage(userMessage("First"))
+    manager.appendMessage(userMessage("Replacement"))
     await appendFile(filePath, '{"unfinished"', "utf8")
 
-    const restored = new JsonlSessionStore({ filePath })
-    const history = restored.getHistory("session-1")
-    expect(history).toHaveLength(1)
-    expect(history[0]?.parts[0]).toMatchObject({ text: "Replacement" })
-
-    restored.publish(assistantMessage("Recovered", true))
-    const reopened = new JsonlSessionStore({ filePath })
-    expect(reopened.getHistory("session-1")).toHaveLength(2)
-    expect(reopened.getHistory("session-1")[1]?.parts[0]).toMatchObject({
-      text: "Recovered",
+    const restored = new JsonlSessionManager({ filePath })
+    expect(restored.getMessages("session-1")).toHaveLength(1)
+    expect(restored.getMessages("session-1")[0]?.parts[0]).toMatchObject({
+      text: "Replacement",
     })
+
+    restored.appendMessage(assistantMessage("Recovered", true))
+    const reopened = new JsonlSessionManager({ filePath })
+    expect(reopened.getMessages("session-1")).toHaveLength(2)
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
 })
 
-test("reports JSONL corruption before the final record", async () => {
+test("reports corruption before the final record", async () => {
   const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-"))
   const filePath = join(directory, "sessions.jsonl")
 
@@ -82,7 +82,7 @@ test("reports JSONL corruption before the final record", async () => {
     const valid = JSON.stringify(userMessage("Question"))
     await writeFile(filePath, `${valid}\nnot-json\n${valid}\n`, "utf8")
 
-    expect(() => new JsonlSessionStore({ filePath })).toThrow(
+    expect(() => new JsonlSessionManager({ filePath })).toThrow(
       "Invalid session JSONL record on line 2",
     )
   } finally {
@@ -90,30 +90,24 @@ test("reports JSONL corruption before the final record", async () => {
   }
 })
 
-test("reset removes the persisted conversation and remains usable", async () => {
+test("reset rewrites only the selected session", async () => {
   const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-"))
   const filePath = join(directory, "sessions.jsonl")
 
   try {
-    const store = new JsonlSessionStore({ filePath })
-    store.publish(userMessage("Old question"))
-    store.publish(assistantMessage("Old answer", true))
+    const manager = new JsonlSessionManager({ filePath })
+    manager.appendMessage(userMessage("First", "session-1", "user-1"))
+    manager.appendMessage(userMessage("Second", "session-2", "user-2"))
 
-    store.reset()
+    manager.resetSession("session-1")
 
-    expect(store.getHistory("session-1")).toEqual([])
-    expect(await records(filePath)).toEqual([])
-
-    const restored = new JsonlSessionStore({ filePath })
-    expect(restored.getHistory("session-1")).toEqual([])
-
-    restored.publish(userMessage("Fresh question"))
-
-    expect(
-      new JsonlSessionStore({ filePath })
-        .getHistory("session-1")[0]
-        ?.parts[0],
-    ).toMatchObject({ text: "Fresh question" })
+    expect(manager.getMessages("session-1")).toEqual([])
+    expect(manager.getMessages("session-2")).toHaveLength(1)
+    const restored = new JsonlSessionManager({ filePath })
+    expect(restored.getMessages("session-1")).toEqual([])
+    expect(restored.getMessages("session-2")[0]?.parts[0]).toMatchObject({
+      text: "Second",
+    })
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
@@ -137,37 +131,40 @@ test("derives one stable global log path per canonical workspace", async () => {
   }
 })
 
-test("includes restored completed turns in the next provider request", async () => {
+test("restores completed turns into the next Agent model request", async () => {
   const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-"))
   const filePath = join(directory, "sessions.jsonl")
 
   try {
-    const stored = new JsonlSessionStore({ filePath })
-    stored.publish(userMessage("Earlier question"))
-    stored.publish(assistantMessage("Earlier answer", true))
+    const stored = new JsonlSessionManager({ filePath })
+    stored.appendMessage(userMessage("Earlier question"))
+    stored.appendMessage(assistantMessage("Earlier answer", true))
 
-    const requests: IBuliUserInteractionRequest[] = []
-    const engine = new SessionEngine({
-      store: new JsonlSessionStore({ filePath }),
-      driver: {
-        async *interaction(request) {
+    const requests: IAgentModelRequest[] = []
+    const session = new AgentSession({
+      sessionId: "session-1",
+      manager: new JsonlSessionManager({ filePath }),
+      systemPrompt: "System",
+      tools: [],
+      model: {
+        async *stream(request) {
           requests.push({
             ...request,
             history: structuredClone(request.history),
+            tools: structuredClone(request.tools),
           })
           yield { type: "finish", reason: "stop" }
         },
       },
     })
 
-    await engine.prompt({
-      sessionId: "session-1",
-      parts: [{ type: "text", text: "New question" }],
-    })
+    await session.prompt("New question")
 
-    expect(
-      requests[0]?.history.map((message) => message.info.role),
-    ).toEqual(["user", "assistant", "user"])
+    expect(requests[0]?.history.map((message) => message.info.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+    ])
     expect(requests[0]?.history[0]?.parts[0]).toMatchObject({
       text: "Earlier question",
     })
@@ -185,18 +182,17 @@ async function records(filePath: string): Promise<string[]> {
     .filter((line) => line.length > 0)
 }
 
-function userMessage(text: string): IBuliMessageWithParts {
+function userMessage(
+  text: string,
+  sessionId = "session-1",
+  messageId = "user-1",
+): IBuliMessageWithParts {
   return {
-    info: {
-      id: "user-1",
-      sessionId: "session-1",
-      role: "user",
-      createdAt: 1,
-    },
+    info: { id: messageId, sessionId, role: "user", createdAt: 1 },
     parts: [{
-      id: "user-part-1",
-      messageId: "user-1",
-      sessionId: "session-1",
+      id: `${messageId}-part`,
+      messageId,
+      sessionId,
       createdAt: 1,
       type: "text",
       text,

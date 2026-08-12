@@ -34,6 +34,7 @@ export function useBuliRuntime(): IBuliApplication {
 
 export function useSession(sessionId: string): ISessionSnapshot {
   const runtime = useBuliRuntime()
-  const view: ISnapshotSource<ISessionSnapshot> = runtime.view(sessionId)
-  return useSyncExternalStore(view.subscribe, view.getSnapshot)
+  const session: ISnapshotSource<ISessionSnapshot> =
+    runtime.getAgentSession(sessionId)
+  return useSyncExternalStore(session.subscribe, session.getSnapshot)
 }

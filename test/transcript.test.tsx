@@ -67,8 +67,8 @@ test("renders user and assistant text while keeping reasoning hidden", async () 
           callID: "call-grep",
           tool: "grep",
           status: "completed",
-          input: { pattern: "SessionEngine" },
-          output: "src/engine/session-engine.ts:30",
+          input: { pattern: "AgentSession" },
+          output: "src/session/agent-session.ts:28",
           execution: "local",
           startedAt: 2,
           completedAt: 3,
@@ -115,12 +115,12 @@ test("renders user and assistant text while keeping reasoning hidden", async () 
     expect(frame).toContain("User prompt")
     expect(frame).toContain("Assistant answer")
     expect(frame).toContain("[done] grep")
-    expect(frame).toContain("SessionEngine")
+    expect(frame).toContain("AgentSession")
     expect(frame).toContain("[error] read_file")
     expect(frame).toContain("File not found")
     expect(frame).toContain("TypeError: Invalid OpenAI authentication")
     expect(frame).not.toContain("Hidden reasoning")
-    expect(frame).not.toContain("src/engine/session-engine.ts:30")
+    expect(frame).not.toContain("src/session/agent-session.ts:28")
   } finally {
     act(() => {
       setup.renderer.destroy()

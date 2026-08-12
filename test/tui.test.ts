@@ -9,10 +9,9 @@ import {
   type IBuliApplication,
 } from "@/application"
 import { BuliRuntimeProvider } from "@/application-state"
+import type { IAgentModel } from "@/agent/agent-types"
 import type { ISessionSnapshot } from "@/domain"
-import type { IUserBuliInteractionDriver } from "@/engine/interaction-driver"
-import { SessionEngine } from "@/engine/session-engine"
-import { InMemorySessionStore } from "@/engine/session-store"
+import { InMemorySessionManager } from "@/session/session-manager"
 import { BuliTui } from "@/tui/Buli"
 
 const WORKSPACE_ROOT = "/workspace"
@@ -20,7 +19,9 @@ const WORKSPACE_ROOT = "/workspace"
 test("provides the runtime above Buli", async () => {
   const runtime = await createBuliApplication({
     signal: new AbortController().signal,
-    store: new InMemorySessionStore(),
+    manager: new InMemorySessionManager(),
+    model: { async *stream() {} },
+    tools: [],
   })
   const setup = await testRender(
     createElement(BuliRuntimeProvider, {
@@ -48,8 +49,12 @@ test("provides the runtime above Buli", async () => {
 
 test("Escape aborts the default session while chat input is focused", async () => {
   const aborted: string[] = []
-  const snapshot: ISessionSnapshot = { messages: [] }
-  const view = {
+  const snapshot: ISessionSnapshot = {
+    messages: [],
+    isRunning: false,
+    pendingToolCallIDs: [],
+  }
+  const session = {
     subscribe: () => () => undefined,
     getSnapshot: () => snapshot,
   }
@@ -57,7 +62,7 @@ test("Escape aborts the default session while chat input is focused", async () =
     workspaceRoot: WORKSPACE_ROOT,
     submitPrompt: async () => undefined,
     abort: (sessionId) => aborted.push(sessionId),
-    view: () => view,
+    getAgentSession: () => session,
   }
   const setup = await testRender(
     createElement(BuliRuntimeProvider, {
@@ -89,8 +94,8 @@ test("Escape aborts the default session while chat input is focused", async () =
 })
 
 test("renders a submitted prompt and streamed response", async () => {
-  const driver: IUserBuliInteractionDriver = {
-    async *interaction() {
+  const model: IAgentModel = {
+    async *stream() {
       yield { type: "text-start", id: "answer" }
       yield { type: "text-delta", id: "answer", delta: "Rendered response" }
       yield { type: "text-end", id: "answer" }
@@ -99,7 +104,10 @@ test("renders a submitted prompt and streamed response", async () => {
   }
   const runtime = new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,
-    sessions: new SessionEngine({ driver }),
+    manager: new InMemorySessionManager(),
+    model,
+    tools: [],
+    systemPrompt: "System",
   })
   const setup = await testRender(
     createElement(BuliRuntimeProvider, {

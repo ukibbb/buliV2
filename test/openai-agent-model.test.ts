@@ -1,17 +1,19 @@
 import { expect, test } from "bun:test"
 import { realpathSync } from "node:fs"
 
+import { systemPrompt } from "@/agent/agents-prompts"
 import type { IBuliMessageWithParts } from "@/domain"
-import { SessionEngine } from "@/engine/session-engine"
-import { InMemorySessionStore } from "@/engine/session-store"
 import type { IAuthStore, TAuthInfo } from "@/providers/auth-store"
 import { OpenAiAuth } from "@/providers/openai/openai-auth"
+import { OpenAiAgentModel } from "@/providers/openai/openai-agent-model"
 import { OPENAI_CODEX_RESPONSES_URL } from "@/providers/openai/openai-constants"
-import { OpenAiUserBuliInteractionDriver } from "@/providers/openai/openai-turn-driver"
+import { AgentSession } from "@/session/agent-session"
+import { InMemorySessionManager } from "@/session/session-manager"
+import { createWorkspaceTools } from "@/tools/workspace-tools"
 
 const WORKSPACE_ROOT = realpathSync(process.cwd())
 
-test("runs an OAuth tool chain through engine-owned iterations", async () => {
+test("runs an OAuth tool chain through Agent-owned iterations", async () => {
   const capturedRequests: Request[] = []
   const captureFetch = fetchImplementation(async (...args) => {
     capturedRequests.push(new Request(...args))
@@ -37,10 +39,9 @@ test("runs an OAuth tool chain through engine-owned iterations", async () => {
     fetch: captureFetch,
     now: () => 100,
   })
-  const driver = new OpenAiUserBuliInteractionDriver({
+  const model = new OpenAiAgentModel({
     auth,
     modelId: "gpt-5.6-sol",
-    workspaceRoot: WORKSPACE_ROOT,
   })
   const history: IBuliMessageWithParts[] = [
     message("user", [
@@ -50,14 +51,17 @@ test("runs an OAuth tool chain through engine-owned iterations", async () => {
     ]),
     message("assistant", [part("text", "Answer")]),
   ]
-  const store = new InMemorySessionStore()
-  history.forEach(store.publish)
-  const engine = new SessionEngine({ driver, store })
-
-  const assistant = await engine.prompt({
+  const manager = new InMemorySessionManager()
+  history.forEach(manager.appendMessage)
+  const session = new AgentSession({
     sessionId: "session-1",
-    parts: [{ type: "text", text: "Continue" }],
+    manager,
+    systemPrompt: systemPrompt(WORKSPACE_ROOT),
+    model,
+    tools: createWorkspaceTools(WORKSPACE_ROOT),
   })
+
+  await session.prompt("Continue")
 
   const [firstRequest, secondRequest, thirdRequest, fourthRequest] = capturedRequests
   if (!firstRequest || !secondRequest || !thirdRequest || !fourthRequest) {
@@ -101,7 +105,7 @@ test("runs an OAuth tool chain through engine-owned iterations", async () => {
   const readContinuation = (await fourthRequest.json()) as Record<string, unknown>
   expect(JSON.stringify(readContinuation.input)).toContain("scripts")
 
-  const stored = store.getHistory("session-1")
+  const stored = manager.getMessages("session-1")
   const tools = stored
     .flatMap((message) => message.parts)
     .filter((part) => part.type === "tool")
@@ -130,7 +134,10 @@ test("runs an OAuth tool chain through engine-owned iterations", async () => {
       execution: "local",
     }),
   ])
-  expect(assistant).toMatchObject({ role: "assistant", finish: "stop" })
+  expect(stored.at(-1)?.info).toMatchObject({
+    role: "assistant",
+    finish: "stop",
+  })
   expect(stored.at(-1)?.parts).toContainEqual(
     expect.objectContaining({ type: "text", text: "Hello" }),
   )
@@ -155,23 +162,22 @@ test("replays a local tool failure into the next OAuth iteration", async () => {
     fetch: captureFetch,
     now: () => 100,
   })
-  const store = new InMemorySessionStore()
-  const engine = new SessionEngine({
-    driver: new OpenAiUserBuliInteractionDriver({
+  const manager = new InMemorySessionManager()
+  const session = new AgentSession({
+    sessionId: "session-1",
+    manager,
+    systemPrompt: systemPrompt(WORKSPACE_ROOT),
+    model: new OpenAiAgentModel({
       auth,
-      workspaceRoot: WORKSPACE_ROOT,
     }),
-    store,
+    tools: createWorkspaceTools(WORKSPACE_ROOT),
   })
 
-  const assistant = await engine.prompt({
-    sessionId: "session-1",
-    parts: [{ type: "text", text: "Read the missing file" }],
-  })
+  await session.prompt("Read the missing file")
 
   expect(capturedRequests).toHaveLength(2)
-  const failedTool = store
-    .getHistory("session-1")
+  const failedTool = manager
+    .getMessages("session-1")
     .flatMap((message) => message.parts)
     .find((part) => part.type === "tool")
 
@@ -191,7 +197,10 @@ test("replays a local tool failure into the next OAuth iteration", async () => {
   const input = JSON.stringify(body.input)
   expect(input).toContain(missingPath)
   expect(input).toContain(failedTool.error)
-  expect(assistant).toMatchObject({ role: "assistant", finish: "stop" })
+  expect(manager.getMessages("session-1").at(-1)?.info).toMatchObject({
+    role: "assistant",
+    finish: "stop",
+  })
 })
 
 test("forwards cancellation to the OpenAI request", async () => {
@@ -217,16 +226,17 @@ test("forwards cancellation to the OpenAI request", async () => {
     fetch: stalledFetch,
     now: () => 100,
   })
-  const driver = new OpenAiUserBuliInteractionDriver({
+  const model = new OpenAiAgentModel({
     auth,
-    workspaceRoot: WORKSPACE_ROOT,
   })
   const controller = new AbortController()
   const eventsPromise = (async () => {
     const events = []
-    for await (const event of driver.interaction({
+    for await (const event of model.stream({
       sessionId: "session-1",
+      systemPrompt: systemPrompt(WORKSPACE_ROOT),
       history: [message("user", [part("text", "Wait")])],
+      tools: [],
       signal: controller.signal,
     })) {
       events.push(event)
@@ -380,6 +390,9 @@ function message(
       sessionId: "session-1",
       role,
       createdAt: 1,
+      ...(role === "assistant"
+        ? { completedAt: 2, finish: "stop" }
+        : {}),
     },
     parts: parts.map((item) => ({
       ...item,

@@ -3,38 +3,39 @@ import {
   BuliApplicationRuntime,
   type IBuliPromptInput,
 } from "@/application"
-import type {
-  IInteractionEvent,
-  IUserBuliInteractionDriver,
-} from "@/engine/interaction-driver"
-import { SessionEngine } from "@/engine/session-engine"
+import type { IAgentModel, IAgentModelEvent } from "@/agent/agent-types"
+import { InMemorySessionManager } from "@/session/session-manager"
 
 const WORKSPACE_ROOT = "/workspace"
 
-const driver: IUserBuliInteractionDriver = {
-  async *interaction() {},
+const model: IAgentModel = {
+  async *stream() {},
+}
+
+function runtimeWith(modelOverride: IAgentModel = model): BuliApplicationRuntime {
+  return new BuliApplicationRuntime({
+    manager: new InMemorySessionManager(),
+    model: modelOverride,
+    tools: [],
+    systemPrompt: "System",
+    workspaceRoot: WORKSPACE_ROOT,
+  })
 }
 
 test("application runtime submits prompts into its session view", async () => {
-  const events: IInteractionEvent[] = [
+  const events: IAgentModelEvent[] = [
     { type: "text-start", id: "answer" },
     { type: "text-delta", id: "answer", delta: "Hello from Buli" },
     { type: "text-end", id: "answer" },
     { type: "finish", reason: "stop" },
   ]
-  const sessions = new SessionEngine({
-    driver: {
-      async *interaction() {
+  const runtime = runtimeWith({
+      async *stream() {
         yield* events
       },
-    },
-  })
-  const runtime = new BuliApplicationRuntime({
-    sessions,
-    workspaceRoot: WORKSPACE_ROOT,
   })
   const input: IBuliPromptInput = { sessionId: "session-1", text: "Hello" }
-  const view = runtime.view("session-1")
+  const view = runtime.getAgentSession("session-1")
   const initial = view.getSnapshot()
 
   await runtime.submitPrompt(input)
@@ -52,28 +53,20 @@ test("application runtime submits prompts into its session view", async () => {
 })
 
 test("application runtime ignores blank prompts", async () => {
-  const sessions = new SessionEngine({ driver })
-  const runtime = new BuliApplicationRuntime({
-    sessions,
-    workspaceRoot: WORKSPACE_ROOT,
-  })
+  const runtime = runtimeWith()
 
   await runtime.submitPrompt({ sessionId: "session-1", text: "   " })
 
-  expect(runtime.view("session-1").getSnapshot().messages).toEqual([])
+  expect(runtime.getAgentSession("session-1").getSnapshot().messages).toEqual([])
   runtime.dispose()
 })
 
 test("application runtime returns one stable view per session", () => {
-  const sessions = new SessionEngine({ driver })
-  const runtime = new BuliApplicationRuntime({
-    sessions,
-    workspaceRoot: WORKSPACE_ROOT,
-  })
+  const runtime = runtimeWith()
 
-  const first = runtime.view("session-1")
-  const second = runtime.view("session-1")
-  const other = runtime.view("session-2")
+  const first = runtime.getAgentSession("session-1")
+  const second = runtime.getAgentSession("session-1")
+  const other = runtime.getAgentSession("session-2")
 
   expect(second).toBe(first)
   expect(other).not.toBe(first)
@@ -82,11 +75,7 @@ test("application runtime returns one stable view per session", () => {
 })
 
 test("application runtime delegates abort and rejects it after disposal", () => {
-  const sessions = new SessionEngine({ driver })
-  const runtime = new BuliApplicationRuntime({
-    sessions,
-    workspaceRoot: WORKSPACE_ROOT,
-  })
+  const runtime = runtimeWith()
 
   expect(() => runtime.abort("session-1")).not.toThrow()
 
@@ -98,19 +87,13 @@ test("application runtime delegates abort and rejects it after disposal", () => 
 
 test("handles only exact reset commands locally", async () => {
   let interactionCount = 0
-  const sessions = new SessionEngine({
-    driver: {
-      async *interaction() {
+  const runtime = runtimeWith({
+      async *stream() {
         interactionCount += 1
         yield { type: "finish", reason: "stop" }
       },
-    },
   })
-  const runtime = new BuliApplicationRuntime({
-    sessions,
-    workspaceRoot: WORKSPACE_ROOT,
-  })
-  const view = runtime.view("session-1")
+  const view = runtime.getAgentSession("session-1")
 
   await runtime.submitPrompt({
     sessionId: "session-1",

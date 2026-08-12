@@ -4,119 +4,61 @@ import type {
   TJsonValue,
 } from "@/domain"
 
-export type TSessionStoreListener = () => void
-
-export interface ISessionStore {
-
-  readonly getHistory: (
+export interface ISessionManager {
+  readonly getMessages: (
     sessionId: string,
   ) => readonly IBuliMessageWithParts[]
-
-  readonly getSnapshot: (sessionId: string) => ISessionSnapshot
-
-  readonly publish: (
-    message: IBuliMessageWithParts,
-  ) => void
-
-  readonly subscribe: (
-    sessionId: string,
-    listener: TSessionStoreListener,
-  ) => () => void
-
-  readonly reset: () => void
+  readonly appendMessage: (message: IBuliMessageWithParts) => void
+  readonly resetSession: (sessionId: string) => void
 }
 
-const EMPTY_SESSION_SNAPSHOT: ISessionSnapshot = Object.freeze({
-  messages: Object.freeze([]),
-})
+/** Keeps durable session messages separate from live Agent state. */
+export class InMemorySessionManager implements ISessionManager {
+  private readonly messagesBySession = new Map<
+    string,
+    readonly IBuliMessageWithParts[]
+  >()
 
-/** Stores session messages in memory and notifies listeners when they change. */
-export class InMemorySessionStore implements ISessionStore {
-
-  private readonly snapshots = new Map<string, ISessionSnapshot>()
-  private readonly listeners = new Map<string, Set<TSessionStoreListener>>()
-
-  readonly getHistory = (
+  readonly getMessages = (
     sessionId: string,
   ): readonly IBuliMessageWithParts[] => {
-    return structuredClone(this.getSnapshot(sessionId).messages)
+    return structuredClone(this.messagesBySession.get(sessionId) ?? [])
   }
 
-
-  readonly publish = (
-    message: IBuliMessageWithParts,
-  ): void => {
-    assertValidSessionMessage(message)
+  readonly appendMessage = (message: IBuliMessageWithParts): void => {
+    assertDurableSessionMessage(message)
 
     const sessionId = message.info.sessionId
-    const current = this.getSnapshot(sessionId).messages
-    const lastIndex = current.length - 1
-
-    const index =
-      current[lastIndex]?.info.id === message.info.id
-        ? lastIndex
-        : current.findIndex(
-          (item) => item.info.id === message.info.id,
-        )
-
-    // Clone and freeze once so engine state and UI consumers cannot mutate storage.
-    const stored = freezeMessage(message)
-    const messages = [...current]
-
-    if (index === -1) {
-      messages.push(stored)
-    } else {
-      messages[index] = stored
-    }
-
-    this.snapshots.set(
-      sessionId,
-      Object.freeze({ messages: Object.freeze(messages) }),
+    const current = this.messagesBySession.get(sessionId) ?? []
+    const existingIndex = current.findIndex(
+      (candidate) => candidate.info.id === message.info.id,
     )
+    const stored = freezeMessage(message)
+    const updated = [...current]
 
-    const listeners = [...(this.listeners.get(sessionId) ?? [])]
-    listeners.forEach((listener) => listener())
+    if (existingIndex === -1) updated.push(stored)
+    else updated[existingIndex] = stored
+
+    this.messagesBySession.set(sessionId, Object.freeze(updated))
   }
 
-  readonly reset = (): void => {
-    if (this.snapshots.size === 0) return
-
-    this.snapshots.clear()
-
-    for (const listeners of this.listeners.values()) {
-      // Copy because a listener can unsubscribe while callbacks are running.
-      for (const listener of [...listeners]) listener()
-    }
+  readonly resetSession = (sessionId: string): void => {
+    this.messagesBySession.delete(sessionId)
   }
 
-  readonly getSnapshot = (sessionId: string): ISessionSnapshot => {
-    return this.snapshots.get(sessionId) ?? EMPTY_SESSION_SNAPSHOT
+  getAllMessages(): readonly IBuliMessageWithParts[] {
+    return structuredClone([...this.messagesBySession.values()].flat())
   }
-
-  // this methods gets called from outside
-  readonly subscribe = (
-    sessionId: string,
-    listener: TSessionStoreListener,
-  ): (() => void) => {
-    const listeners = this.listeners.get(sessionId) ?? new Set()
-    listeners.add(listener)
-    this.listeners.set(sessionId, listeners)
-
-    return () => {
-      listeners.delete(listener)
-      if (listeners.size === 0) this.listeners.delete(sessionId)
-    }
-  }
-
 }
 
-const TOOL_STATUSES: ReadonlySet<string> = new Set([
-  "pending",
-  "running",
-  "completed",
-  "error",
-  "cancelled",
-])
+export function assertDurableSessionMessage(
+  value: unknown,
+): asserts value is IBuliMessageWithParts {
+  assertValidSessionMessage(value)
+  if (value.info.role === "assistant" && value.info.completedAt === undefined) {
+    throw new Error("Cannot persist an incomplete assistant message")
+  }
+}
 
 export function assertValidSessionMessage(
   value: unknown,
@@ -210,14 +152,35 @@ export function assertValidSessionMessage(
   }
 }
 
-function freezeMessage(message: IBuliMessageWithParts): IBuliMessageWithParts {
+export function freezeSessionSnapshot(
+  snapshot: ISessionSnapshot,
+): ISessionSnapshot {
+  const messages = snapshot.messages.map(freezeMessage)
+  return Object.freeze({
+    ...snapshot,
+    messages: Object.freeze(messages),
+    pendingToolCallIDs: Object.freeze([...snapshot.pendingToolCallIDs]),
+  })
+}
+
+const TOOL_STATUSES: ReadonlySet<string> = new Set([
+  "pending",
+  "running",
+  "completed",
+  "error",
+  "cancelled",
+])
+
+function freezeMessage(
+  message: IBuliMessageWithParts,
+): IBuliMessageWithParts {
   const clone = structuredClone(message)
 
   if (clone.info.role === "assistant" && clone.info.error) {
     Object.freeze(clone.info.error)
   }
-
   Object.freeze(clone.info)
+
   clone.parts.forEach((part) => {
     if (part.type === "tool") {
       freezeJsonValue(part.input)
@@ -235,7 +198,6 @@ function freezeJsonValue(value: TJsonValue): void {
     Object.freeze(value)
     return
   }
-
   if (value !== null && typeof value === "object") {
     Object.values(value).forEach(freezeJsonValue)
     Object.freeze(value)
@@ -259,7 +221,6 @@ function isJsonValue(value: unknown): value is TJsonValue {
   ) {
     return true
   }
-
   if (Array.isArray(value)) return value.every(isJsonValue)
   if (!isRecord(value)) return false
   return Object.values(value).every(isJsonValue)

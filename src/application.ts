@@ -1,106 +1,114 @@
 import { realpath } from "node:fs/promises"
-import { SessionEngine } from "@/engine/session-engine"
+
+import type {
+  IAgentModel,
+  IAgentTool,
+} from "@/agent/agent-types"
+import { systemPrompt } from "@/agent/agents-prompts"
 import type { ISessionSnapshot } from "@/domain"
+import { OpenAiAgentModel } from "@/providers/openai/openai-agent-model"
+import { AgentSession } from "@/session/agent-session"
 import {
   defaultSessionFilePath,
-  JsonlSessionStore,
-} from "@/engine/jsonl-session-store"
-import type { ISessionStore } from "@/engine/session-store"
-import { OpenAiUserBuliInteractionDriver } from "@/providers/openai/openai-turn-driver"
-import { SessionView } from "@/runtime/session-view"
+  JsonlSessionManager,
+} from "@/session/jsonl-session-manager"
+import type { ISessionManager } from "@/session/session-manager"
+import { createWorkspaceTools } from "@/tools/workspace-tools"
 
-// A store is an object or system that holds application data and lets
-// other parts of the program read or react to changes in that data.
-// Generic shape somthing react can observe
-//
 export interface ISnapshotSource<Snapshot> {
-  // tell me when Snapshot changes
-  // subscribe(listener) register callback and return unsubscribe
-  //
-  // React gives us listener function
-  // Store must call listener when its state changes
-  // Then react knows "I should rerender"
-  // Return value is another function: unsubscribe
   readonly subscribe: (listener: () => void) => () => void
-  // get current state
   readonly getSnapshot: () => Snapshot
 }
 
 export interface IBuliPromptInput {
-  sessionId: string
-  text: string
+  readonly sessionId: string
+  readonly text: string
 }
 
-/** The narrow application boundary available to React components. */
 export interface IBuliApplication {
   readonly workspaceRoot: string
   readonly submitPrompt: (prompt: IBuliPromptInput) => Promise<void>
   readonly abort: (sessionId: string) => void
-  readonly view: (sessionId: string) => ISnapshotSource<ISessionSnapshot>
+  readonly getAgentSession: (
+    sessionId: string,
+  ) => ISnapshotSource<ISessionSnapshot>
 }
 
 interface IBuliRuntimeOptions {
-  sessions: SessionEngine
-  workspaceRoot: string
+  readonly workspaceRoot: string
+  readonly manager: ISessionManager
+  readonly model: IAgentModel
+  readonly tools: readonly IAgentTool[]
+  readonly systemPrompt: string
 }
 
-/** Connects the session services used by the UI. */
+/** Owns and reuses one AgentSession for each requested session ID. */
 export class BuliApplicationRuntime implements IBuliApplication {
   readonly workspaceRoot: string
-  private readonly sessions: SessionEngine
-  /** Creates and reuses one UI view for each session. */
-  private readonly views = new Map<string, SessionView>()
+  private readonly options: IBuliRuntimeOptions
+  private readonly sessions = new Map<string, AgentSession>()
   private disposed = false
 
   constructor(options: IBuliRuntimeOptions) {
     this.workspaceRoot = options.workspaceRoot
-    this.sessions = options.sessions
+    this.options = options
   }
 
-  /** Converts text entered in the UI into a session prompt. */
   readonly submitPrompt = async (prompt: IBuliPromptInput): Promise<void> => {
+    if (this.disposed) throw new Error("Buli runtime is disposed")
+
+    const session = this.requireAgentSession(prompt.sessionId)
     if (prompt.text.trim() === "/reset") {
-      this.sessions.reset()
+      session.reset()
       return
     }
-    await this.sessions.prompt({
-      sessionId: prompt.sessionId,
-      parts: [{ type: "text", text: prompt.text }],
-    })
+    await session.prompt(prompt.text)
   }
 
-  readonly view = (sessionId: string): ISnapshotSource<ISessionSnapshot> => {
-    if (this.disposed) throw new Error("Application runtime is disposed")
+  readonly abort = (sessionId: string): void => {
+    if (this.disposed) throw new Error("Buli runtime is disposed")
+    this.sessions.get(sessionId)?.abort()
+  }
 
-    // One cached source per session keeps React subscriptions stable across renders.
-    const existing = this.views.get(sessionId)
-    if (existing) return existing
-
-    const view = new SessionView(sessionId, this.sessions.store)
-    this.views.set(sessionId, view)
-    return view
+  readonly getAgentSession = (
+    sessionId: string,
+  ): ISnapshotSource<ISessionSnapshot> => {
+    if (this.disposed) throw new Error("Buli runtime is disposed")
+    return this.requireAgentSession(sessionId)
   }
 
   readonly dispose = (): void => {
     if (this.disposed) return
     this.disposed = true
 
-    for (const view of this.views.values()) view.dispose()
-    this.views.clear()
+    for (const session of this.sessions.values()) session.dispose()
+    this.sessions.clear()
   }
 
-  readonly abort = (sessionId: string): void => {
-    if (this.disposed) throw new Error("Buli runtime is disposed")
-    this.sessions.abort(sessionId)
+  private requireAgentSession(sessionId: string): AgentSession {
+    const existing = this.sessions.get(sessionId)
+    if (existing) return existing
+
+    const session = new AgentSession({
+      sessionId,
+      manager: this.options.manager,
+      systemPrompt: this.options.systemPrompt,
+      model: this.options.model,
+      tools: this.options.tools,
+    })
+    this.sessions.set(sessionId, session)
+    return session
   }
 }
 
 interface IBuliApplicationOptions {
-  signal: AbortSignal
-  store?: ISessionStore
+  readonly signal: AbortSignal
+  readonly manager?: ISessionManager
+  readonly model?: IAgentModel
+  readonly tools?: readonly IAgentTool[]
 }
 
-/** Composes provider, engine, store, and application runtime in one place. */
+/** Composes provider, tools, persistence, sessions, and the UI boundary. */
 export async function createBuliApplication(
   options: IBuliApplicationOptions,
 ): Promise<BuliApplicationRuntime> {
@@ -108,22 +116,14 @@ export async function createBuliApplication(
   const workspaceRoot = await realpath(process.cwd())
   options.signal.throwIfAborted()
 
-
-  // In future InteractionDriver based on provider
-  // provider based on active auth setup?
-
-
-
-
-  const store = options.store ?? new JsonlSessionStore({
-    filePath: defaultSessionFilePath(workspaceRoot),
-  })
   const runtime = new BuliApplicationRuntime({
     workspaceRoot,
-    sessions: new SessionEngine({
-      driver: new OpenAiUserBuliInteractionDriver({ workspaceRoot }),
-      store,
+    manager: options.manager ?? new JsonlSessionManager({
+      filePath: defaultSessionFilePath(workspaceRoot),
     }),
+    model: options.model ?? new OpenAiAgentModel(),
+    tools: options.tools ?? createWorkspaceTools(workspaceRoot),
+    systemPrompt: systemPrompt(workspaceRoot),
   })
 
   options.signal.addEventListener("abort", runtime.dispose, { once: true })

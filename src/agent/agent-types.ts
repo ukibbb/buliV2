@@ -1,33 +1,32 @@
 import type {
-  IBuliMessageWithParts,
+  IAssistantMessage,
+  IToolResultMessage,
+  TAgentMessage,
   TAgentRunEndReason,
-  TJsonObject,
-  TJsonValue,
-  TToolExecutionLocation,
 } from "@/domain"
 
 export interface IAgentToolDescriptor {
   readonly name: string
   readonly description: string
-  readonly inputSchema: TJsonObject
+  readonly inputSchema: Record<string, unknown>
 }
 
 export interface IAgentToolExecutionContext {
-  readonly toolCallID: string
+  readonly toolCallId: string
   readonly signal: AbortSignal
 }
 
 export interface IAgentTool extends IAgentToolDescriptor {
   readonly execute: (
-    input: TJsonObject,
+    input: Record<string, unknown>,
     context: IAgentToolExecutionContext,
-  ) => Promise<TJsonValue>
+  ) => Promise<string>
 }
 
 export interface IAgentModelRequest {
   readonly sessionId: string
   readonly systemPrompt: string
-  readonly history: readonly IBuliMessageWithParts[]
+  readonly messages: readonly TAgentMessage[]
   readonly tools: readonly IAgentToolDescriptor[]
   readonly signal: AbortSignal
 }
@@ -45,26 +44,9 @@ export type IAgentModelEvent =
   | { readonly type: "reasoning-end"; readonly id: string }
   | {
       readonly type: "tool-call"
-      readonly callID: string
-      readonly tool: string
-      readonly input: TJsonObject
-      readonly execution: TToolExecutionLocation
-    }
-  | {
-      readonly type: "tool-result"
-      readonly callID: string
-      readonly tool: string
-      readonly input: TJsonObject
-      readonly output: TJsonValue
-      readonly execution: TToolExecutionLocation
-    }
-  | {
-      readonly type: "tool-error"
-      readonly callID: string
-      readonly tool: string
-      readonly input: TJsonObject
-      readonly error: string
-      readonly execution: TToolExecutionLocation
+      readonly toolCallId: string
+      readonly toolName: string
+      readonly input: Record<string, unknown>
     }
   | { readonly type: "finish"; readonly reason: string }
   | { readonly type: "abort"; readonly reason?: string }
@@ -78,60 +60,50 @@ export interface IAgentModel {
 
 export type { TAgentRunEndReason } from "@/domain"
 
-export type TToolExecutionOutcome =
-  | { readonly status: "completed"; readonly output: TJsonValue }
-  | { readonly status: "error"; readonly error: string }
-  | { readonly status: "cancelled"; readonly error: string }
-
 export type IAgentEvent =
   | { readonly type: "agent_start" }
   | {
       readonly type: "agent_end"
       readonly reason: TAgentRunEndReason
-      readonly messages: readonly IBuliMessageWithParts[]
+      readonly messages: readonly TAgentMessage[]
     }
   | { readonly type: "turn_start"; readonly index: number }
   | {
       readonly type: "turn_end"
       readonly index: number
-      readonly message: IBuliMessageWithParts
+      readonly message: IAssistantMessage
+      readonly toolResults: readonly IToolResultMessage[]
       readonly willContinue: boolean
     }
-  | {
-      readonly type: "message_start"
-      readonly message: IBuliMessageWithParts
-    }
+  | { readonly type: "message_start"; readonly message: TAgentMessage }
   | {
       readonly type: "message_update"
-      readonly message: IBuliMessageWithParts
+      readonly message: IAssistantMessage
+      readonly modelEvent: IAgentModelEvent
     }
-  | {
-      readonly type: "message_end"
-      readonly message: IBuliMessageWithParts
-    }
+  | { readonly type: "message_end"; readonly message: TAgentMessage }
   | {
       readonly type: "tool_execution_start"
-      readonly toolCallID: string
+      readonly toolCallId: string
       readonly toolName: string
-      readonly input: TJsonObject
+      readonly input: Record<string, unknown>
     }
   | {
       readonly type: "tool_execution_end"
-      readonly toolCallID: string
+      readonly toolCallId: string
       readonly toolName: string
-      readonly input: TJsonObject
-      readonly outcome: TToolExecutionOutcome
+      readonly result: IToolResultMessage
     }
 
 export interface IAgentState {
   readonly sessionId: string
   readonly systemPrompt: string
   readonly tools: readonly IAgentTool[]
-  readonly messages: readonly IBuliMessageWithParts[]
+  readonly messages: readonly TAgentMessage[]
   readonly isRunning: boolean
-  readonly streamingMessage: IBuliMessageWithParts | undefined
-  readonly pendingToolCallIDs: ReadonlySet<string>
-  readonly error: { readonly name: string; readonly message: string } | undefined
+  readonly streamingMessage: IAssistantMessage | undefined
+  readonly pendingToolCallIds: ReadonlySet<string>
+  readonly errorMessage: string | undefined
   readonly lastRunReason: TAgentRunEndReason | undefined
 }
 
@@ -142,5 +114,5 @@ export type TAgentEventListener = (
 
 export interface IAgentLoopResult {
   readonly reason: TAgentRunEndReason
-  readonly messages: readonly IBuliMessageWithParts[]
+  readonly messages: readonly TAgentMessage[]
 }

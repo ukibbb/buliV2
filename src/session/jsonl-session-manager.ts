@@ -10,7 +10,7 @@ import {
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 
-import type { IBuliMessageWithParts } from "@/domain"
+import type { TAgentMessage } from "@/domain"
 import {
   assertDurableSessionMessage,
   InMemorySessionManager,
@@ -21,7 +21,7 @@ interface IJsonlSessionManagerOptions {
   readonly filePath: string
 }
 
-/** Persists completed messages using Buli's existing JSONL wire format. */
+/** Persists direct Agent messages as one JSON object per line. */
 export class JsonlSessionManager implements ISessionManager {
   private readonly memory = new InMemorySessionManager()
   private readonly filePath: string
@@ -34,9 +34,9 @@ export class JsonlSessionManager implements ISessionManager {
 
   readonly getMessages = (
     sessionId: string,
-  ): readonly IBuliMessageWithParts[] => this.memory.getMessages(sessionId)
+  ): readonly TAgentMessage[] => this.memory.getMessages(sessionId)
 
-  readonly appendMessage = (message: IBuliMessageWithParts): void => {
+  readonly appendMessage = (message: TAgentMessage): void => {
     assertDurableSessionMessage(message)
     appendFileSync(this.filePath, `${JSON.stringify(message)}\n`, {
       encoding: "utf8",
@@ -48,7 +48,7 @@ export class JsonlSessionManager implements ISessionManager {
   readonly resetSession = (sessionId: string): void => {
     const retainedMessages = this.memory
       .getAllMessages()
-      .filter((message) => message.info.sessionId !== sessionId)
+      .filter((message) => message.sessionId !== sessionId)
     const contents = retainedMessages.length === 0
       ? ""
       : `${retainedMessages.map((message) => JSON.stringify(message)).join("\n")}\n`

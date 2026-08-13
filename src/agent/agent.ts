@@ -1,5 +1,5 @@
 import { generateRandomId } from "@/common"
-import type { IBuliMessageWithParts } from "@/domain"
+import type { TAgentMessage } from "@/domain"
 import { runAgentLoop } from "@/agent/agent-loop"
 import type {
   IAgentEvent,
@@ -14,7 +14,7 @@ interface IAgentOptions {
   readonly systemPrompt: string
   readonly model: IAgentModel
   readonly tools: readonly IAgentTool[]
-  readonly initialMessages?: readonly IBuliMessageWithParts[]
+  readonly initialMessages?: readonly TAgentMessage[]
   readonly maxProviderIterations?: number
   readonly now?: () => number
   readonly generateId?: () => string
@@ -48,8 +48,8 @@ export class Agent {
       messages: structuredClone(options.initialMessages ?? []),
       isRunning: false,
       streamingMessage: undefined,
-      pendingToolCallIDs: new Set(),
-      error: undefined,
+      pendingToolCallIds: new Set(),
+      errorMessage: undefined,
       lastRunReason: undefined,
     }
   }
@@ -81,8 +81,8 @@ export class Agent {
       ...this.stateValue,
       isRunning: true,
       streamingMessage: undefined,
-      pendingToolCallIDs: new Set(),
-      error: undefined,
+      pendingToolCallIds: new Set(),
+      errorMessage: undefined,
       lastRunReason: undefined,
     }
 
@@ -90,7 +90,7 @@ export class Agent {
       await runAgentLoop({
         sessionId: this.stateValue.sessionId,
         systemPrompt: this.stateValue.systemPrompt,
-        history: this.stateValue.messages,
+        messages: this.stateValue.messages,
         prompt: this.createUserMessage(text),
         model: this.model,
         tools: this.stateValue.tools,
@@ -108,7 +108,7 @@ export class Agent {
           ...this.stateValue,
           isRunning: false,
           streamingMessage: undefined,
-          pendingToolCallIDs: new Set(),
+          pendingToolCallIds: new Set(),
         }
         this.activeRun = undefined
         activeRun.resolveSettled()
@@ -131,8 +131,8 @@ export class Agent {
       messages: [],
       isRunning: false,
       streamingMessage: undefined,
-      pendingToolCallIDs: new Set(),
-      error: undefined,
+      pendingToolCallIds: new Set(),
+      errorMessage: undefined,
       lastRunReason: undefined,
     }
   }
@@ -151,6 +151,12 @@ export class Agent {
         this.stateValue = { ...this.stateValue, isRunning: true }
         return
       case "message_start":
+        if (event.message.role !== "assistant") return
+        this.stateValue = {
+          ...this.stateValue,
+          streamingMessage: structuredClone(event.message),
+        }
+        return
       case "message_update":
         this.stateValue = {
           ...this.stateValue,
@@ -161,27 +167,27 @@ export class Agent {
         this.stateValue = {
           ...this.stateValue,
           messages: [...this.stateValue.messages, structuredClone(event.message)],
-          streamingMessage: undefined,
+          streamingMessage: event.message.role === "assistant"
+            ? undefined
+            : this.stateValue.streamingMessage,
         }
         return
       case "tool_execution_start": {
-        const pendingToolCallIDs = new Set(this.stateValue.pendingToolCallIDs)
-        pendingToolCallIDs.add(event.toolCallID)
-        this.stateValue = { ...this.stateValue, pendingToolCallIDs }
+        const pendingToolCallIds = new Set(this.stateValue.pendingToolCallIds)
+        pendingToolCallIds.add(event.toolCallId)
+        this.stateValue = { ...this.stateValue, pendingToolCallIds }
         return
       }
       case "tool_execution_end": {
-        const pendingToolCallIDs = new Set(this.stateValue.pendingToolCallIDs)
-        pendingToolCallIDs.delete(event.toolCallID)
-        this.stateValue = { ...this.stateValue, pendingToolCallIDs }
+        const pendingToolCallIds = new Set(this.stateValue.pendingToolCallIds)
+        pendingToolCallIds.delete(event.toolCallId)
+        this.stateValue = { ...this.stateValue, pendingToolCallIds }
         return
       }
       case "turn_end":
         this.stateValue = {
           ...this.stateValue,
-          error: event.message.info.role === "assistant"
-            ? event.message.info.error
-            : undefined,
+          errorMessage: event.message.errorMessage,
         }
         return
       case "agent_end":
@@ -197,24 +203,13 @@ export class Agent {
     }
   }
 
-  private createUserMessage(text: string): IBuliMessageWithParts {
-    const messageId = this.generateId()
-    const createdAt = this.now()
+  private createUserMessage(text: string): TAgentMessage {
     return {
-      info: {
-        id: messageId,
-        sessionId: this.stateValue.sessionId,
-        role: "user",
-        createdAt,
-      },
-      parts: [{
-        id: this.generateId(),
-        messageId,
-        sessionId: this.stateValue.sessionId,
-        createdAt,
-        type: "text",
-        text,
-      }],
+      id: this.generateId(),
+      sessionId: this.stateValue.sessionId,
+      role: "user",
+      content: text,
+      createdAt: this.now(),
     }
   }
 }

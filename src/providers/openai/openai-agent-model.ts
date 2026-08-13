@@ -17,12 +17,7 @@ import type {
   IAgentModelRequest,
   IAgentToolDescriptor,
 } from "@/agent/agent-types"
-import type {
-  IBuliMessageWithParts,
-  IToolPart,
-  TJsonObject,
-  TJsonValue,
-} from "@/domain"
+import type { TAgentMessage } from "@/domain"
 import { OpenAiAuth } from "@/providers/openai/openai-auth"
 import { OPENAI_OAUTH_DUMMY_API_KEY } from "@/providers/openai/openai-constants"
 
@@ -35,9 +30,7 @@ export interface IOpenAiAgentModelOptions {
 
 type AIStreamEvent = ReturnType<typeof streamText<ToolSet>>["stream"] extends
   AsyncIterable<infer Event> ? Event : never
-type AIAssistantParts = Exclude<AssistantContent, string>
-type AIToolResult = Extract<ToolContent[number], { type: "tool-result" }>
-type AIToolResultOutput = AIToolResult["output"]
+type AIAssistantPart = Exclude<AssistantContent, string>[number]
 
 /** Translates one Buli model turn to and from the OpenAI AI SDK protocol. */
 export class OpenAiAgentModel implements IAgentModel {
@@ -62,13 +55,17 @@ export class OpenAiAgentModel implements IAgentModel {
     })
     const result = streamText({
       model: provider.responses(this.modelId),
-      messages: historyToModelMessages(request.history),
+      messages: toModelMessages(request.messages),
       tools: toAiTools(request.tools),
       abortSignal: request.signal,
       providerOptions: {
         openai: {
           store: false,
           instructions: request.systemPrompt,
+          // TODO: Verify with a live gpt-5.6-sol request that one response can
+          // contain multiple local calls. Buli intentionally executes that
+          // returned batch sequentially; benchmark before adding concurrency.
+          parallelToolCalls: true,
         },
       },
       stopWhen: isStepCount(1),
@@ -89,81 +86,56 @@ function toAiTools(
     descriptor.name,
     tool({
       description: descriptor.description,
-      inputSchema: jsonSchema<TJsonObject>(
+      inputSchema: jsonSchema<Record<string, unknown>>(
         descriptor.inputSchema as JSONSchema7,
       ),
-      outputSchema: jsonSchema<TJsonValue>({} as JSONSchema7),
+      outputSchema: jsonSchema<string>({ type: "string" }),
     }),
   ])) as ToolSet
 }
 
-function historyToModelMessages(
-  history: readonly IBuliMessageWithParts[],
-): ModelMessage[] {
-  const messages: ModelMessage[] = []
+function toModelMessages(messages: readonly TAgentMessage[]): ModelMessage[] {
+  return messages.flatMap((message): ModelMessage[] => {
+    switch (message.role) {
+      case "user":
+        return [{ role: "user", content: message.content }]
+      case "assistant": {
+        if (message.stopReason === "error" || message.stopReason === "aborted") {
+          return []
+        }
 
-  for (const message of history) {
-    if (message.info.role === "user") {
-      const content = message.parts
-        .filter((part) => part.type === "text")
-        .map((part) => part.text)
-        .join("\n\n")
-        .trim()
-
-      if (content) messages.push({ role: "user", content })
-      continue
-    }
-
-    const assistant: AIAssistantParts = []
-    const tools: ToolContent = []
-
-    for (const part of message.parts) {
-      if (part.type === "text") {
-        if (part.text) assistant.push({ type: "text", text: part.text })
-        continue
+        const content: Exclude<AssistantContent, string> = message.content.flatMap(
+          (item): AIAssistantPart[] => {
+            switch (item.type) {
+              case "text":
+                return [{ type: "text", text: item.text }]
+              case "reasoning":
+                return []
+              case "toolCall":
+                return [{
+                  type: "tool-call" as const,
+                  toolCallId: item.toolCallId,
+                  toolName: item.toolName,
+                  input: structuredClone(item.input),
+                }]
+            }
+          },
+        )
+        return content.length > 0 ? [{ role: "assistant", content }] : []
       }
-      if (part.type !== "tool") continue
-
-      assistant.push({
-        type: "tool-call",
-        toolCallId: part.callID,
-        toolName: part.tool,
-        input: structuredClone(part.input),
-        ...(part.execution === "provider" ? { providerExecuted: true } : {}),
-      })
-
-      const result: AIToolResult = {
-        type: "tool-result",
-        toolCallId: part.callID,
-        toolName: part.tool,
-        output: toolResultOutput(part),
+      case "toolResult": {
+        const content: ToolContent = [{
+          type: "tool-result",
+          toolCallId: message.toolCallId,
+          toolName: message.toolName,
+          output: message.isError
+            ? { type: "error-text", value: message.content }
+            : { type: "text", value: message.content },
+        }]
+        return [{ role: "tool", content }]
       }
-      if (part.execution === "provider") assistant.push(result)
-      else tools.push(result)
     }
-
-    if (assistant.length > 0) messages.push({ role: "assistant", content: assistant })
-    if (tools.length > 0) messages.push({ role: "tool", content: tools })
-  }
-
-  return messages
-}
-
-function toolResultOutput(part: IToolPart): AIToolResultOutput {
-  if (part.status === "completed") {
-    const output = structuredClone(part.output ?? null)
-    return typeof output === "string"
-      ? { type: "text", value: output }
-      : { type: "json", value: output }
-  }
-
-  const fallback = part.status === "cancelled"
-    ? "Tool execution was cancelled."
-    : part.status === "error"
-      ? "Tool execution failed."
-      : "Tool execution was interrupted before completion."
-
-  return { type: "error-text", value: part.error ?? fallback }
+  })
 }
 
 function toAgentModelEvent(
@@ -185,28 +157,9 @@ function toAgentModelEvent(
     case "tool-call":
       return {
         type: "tool-call",
-        callID: event.toolCallId,
-        tool: event.toolName,
-        input: toJsonObject(event.input),
-        execution: event.providerExecuted === true ? "provider" : "local",
-      }
-    case "tool-result":
-      return {
-        type: "tool-result",
-        callID: event.toolCallId,
-        tool: event.toolName,
-        input: toJsonObject(event.input),
-        output: toJsonValue(event.output),
-        execution: event.providerExecuted === true ? "provider" : "local",
-      }
-    case "tool-error":
-      return {
-        type: "tool-error",
-        callID: event.toolCallId,
-        tool: event.toolName,
-        input: toJsonObject(event.input),
-        error: errorMessage(event.error),
-        execution: event.providerExecuted === true ? "provider" : "local",
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        input: toRecord(event.input),
       }
     case "finish":
       return {
@@ -225,24 +178,9 @@ function toAgentModelEvent(
   }
 }
 
-function toJsonValue(value: unknown): TJsonValue {
-  const serialized = JSON.stringify(value)
-  if (serialized === undefined) return null
-  return JSON.parse(serialized) as TJsonValue
-}
-
-function toJsonObject(value: unknown): TJsonObject {
-  const normalized = toJsonValue(value)
-  if (
-    normalized === null
-    || Array.isArray(normalized)
-    || typeof normalized !== "object"
-  ) {
-    throw new TypeError("Tool input must be a JSON object")
+function toRecord(value: unknown): Record<string, unknown> {
+  if (value === null || Array.isArray(value) || typeof value !== "object") {
+    throw new TypeError("Tool input must be an object")
   }
-  return normalized
-}
-
-function errorMessage(value: unknown): string {
-  return value instanceof Error ? value.message : String(value)
+  return structuredClone(value as Record<string, unknown>)
 }

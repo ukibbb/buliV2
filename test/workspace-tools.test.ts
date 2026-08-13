@@ -39,7 +39,7 @@ test("keeps read_file inside the canonical workspace", async () => {
     const readFile = tools.find((tool) => tool.name === "read_file")
     if (!readFile) throw new Error("Expected read_file tool")
     const context = {
-      toolCallID: "call-read",
+      toolCallId: "call-read",
       signal: new AbortController().signal,
     }
 
@@ -73,7 +73,7 @@ test("stops tool execution when its signal is already aborted", async () => {
   await expect(glob.execute(
     { pattern: "**/*" },
     {
-      toolCallID: "call-glob",
+      toolCallId: "call-glob",
       signal: controller.signal,
     },
   )).rejects.toMatchObject({ name: "AbortError", message: "Stopped by test" })

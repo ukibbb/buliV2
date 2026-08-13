@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 
 import type { IAgentModel } from "@/agent/agent-types"
+import type { IUserMessage } from "@/domain"
 import { AgentSession } from "@/session/agent-session"
 import { InMemorySessionManager } from "@/session/session-manager"
 
@@ -36,7 +37,7 @@ test("AgentSession restores history, persists completion barriers, and publishes
   expect(manager.getMessages("session-1")).toHaveLength(3)
   expect(session.getSnapshot()).not.toBe(initial)
   expect(session.getSnapshot()).toBe(session.getSnapshot())
-  expect(session.getSnapshot().messages.map((message) => message.info.role)).toEqual([
+  expect(session.getSnapshot().messages.map((message) => message.role)).toEqual([
     "user",
     "user",
     "assistant",
@@ -70,24 +71,15 @@ test("AgentSession reset removes one durable session without detaching subscribe
 })
 
 function userMessage(
-  text: string,
+  content: string,
   sessionId = "session-1",
-  messageId = "restored-user",
-) {
+  id = "restored-user",
+): IUserMessage {
   return {
-    info: {
-      id: messageId,
-      sessionId,
-      role: "user" as const,
-      createdAt: 1,
-    },
-    parts: [{
-      id: `${messageId}-part`,
-      messageId,
-      sessionId,
-      createdAt: 1,
-      type: "text" as const,
-      text,
-    }],
+    id,
+    sessionId,
+    role: "user",
+    content,
+    createdAt: 1,
   }
 }

@@ -41,11 +41,11 @@ test("application runtime submits prompts into its session view", async () => {
   await runtime.submitPrompt(input)
 
   expect(view.getSnapshot()).not.toBe(initial)
-  expect(view.getSnapshot().messages.map((message) => message.info.role)).toEqual([
+  expect(view.getSnapshot().messages.map((message) => message.role)).toEqual([
     "user",
     "assistant",
   ])
-  expect(view.getSnapshot().messages[1]?.parts).toContainEqual(
+  expect(view.getSnapshot().messages[1]?.content).toContainEqual(
     expect.objectContaining({ type: "text", text: "Hello from Buli" }),
   )
 
@@ -117,7 +117,7 @@ test("handles only exact reset commands locally", async () => {
   })
 
   expect(interactionCount).toBe(2)
-  expect(view.getSnapshot().messages.map((message) => message.info.role)).toEqual([
+  expect(view.getSnapshot().messages.map((message) => message.role)).toEqual([
     "user",
     "assistant",
   ])

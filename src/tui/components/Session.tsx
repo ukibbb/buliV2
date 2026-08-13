@@ -26,7 +26,13 @@ export function SessionScreen(props: ISessionScreenProps): ReactNode {
         stickyScroll
         stickyStart="bottom"
       >
-        <Transcript messages={session.messages} />
+        <Transcript
+          messages={session.messages}
+          {...(session.streamingMessage
+            ? { streamingMessage: session.streamingMessage }
+            : {})}
+          pendingToolCallIds={session.pendingToolCallIds}
+        />
       </scrollbox>
 
       <Chat sessionId={props.sessionId} />

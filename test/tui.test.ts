@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { parseKeypress } from "@opentui/core"
+import { CodeRenderable, parseKeypress, type Renderable } from "@opentui/core"
 import { testRender } from "@opentui/react/test-utils"
 import { act, createElement } from "react"
 
@@ -15,6 +15,13 @@ import { InMemorySessionManager } from "@/session/session-manager"
 import { BuliTui } from "@/tui/Buli"
 
 const WORKSPACE_ROOT = "/workspace"
+
+function codeRenderables(root: Renderable): CodeRenderable[] {
+  return root.getChildren().flatMap((child) => [
+    ...(child instanceof CodeRenderable ? [child] : []),
+    ...codeRenderables(child),
+  ])
+}
 
 test("provides the runtime above Buli", async () => {
   const runtime = await createBuliApplication({
@@ -52,7 +59,7 @@ test("Escape aborts the default session while chat input is focused", async () =
   const snapshot: ISessionSnapshot = {
     messages: [],
     isRunning: false,
-    pendingToolCallIDs: [],
+    pendingToolCallIds: [],
   }
   const session = {
     subscribe: () => () => undefined,
@@ -122,9 +129,13 @@ test("renders a submitted prompt and streamed response", async () => {
       await setup.renderOnce()
       await runtime.submitPrompt({ sessionId: "default", text: "Rendered prompt" })
       await setup.renderOnce()
+      await Promise.all(
+        codeRenderables(setup.renderer.root).map((renderable) =>
+          renderable.highlightingDone
+        ),
+      )
+      await setup.renderOnce()
     })
-    await setup.waitForVisualIdle()
-    await Bun.sleep(50)
 
     const frame = setup.captureCharFrame()
     expect(frame).toContain("Rendered prompt")

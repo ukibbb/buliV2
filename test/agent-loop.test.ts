@@ -22,7 +22,7 @@ class ScriptedModel implements IAgentModel {
     const iteration = this.requests.length
     this.requests.push({
       ...request,
-      history: structuredClone(request.history),
+      messages: structuredClone(request.messages),
       tools: structuredClone(request.tools),
     })
 
@@ -46,7 +46,7 @@ test("emits an explicit lifecycle for a text response", async () => {
   const result = await runAgentLoop({
     sessionId: "session-1",
     systemPrompt: "System",
-    history: [],
+    messages: [],
     prompt: userMessage("Question"),
     model,
     tools: [],
@@ -72,23 +72,33 @@ test("emits an explicit lifecycle for a text response", async () => {
     "agent_end",
   ])
   expect(result.reason).toBe("completed")
-  expect(result.messages.at(-1)?.parts).toContainEqual(
-    expect.objectContaining({ type: "text", text: "Hello" }),
-  )
-  expect(model.requests[0]?.history.map((message) => message.info.role)).toEqual([
+  expect(result.messages.at(-1)).toEqual({
+    id: "generated-1",
+    sessionId: "session-1",
+    role: "assistant",
+    content: [{ type: "text", text: "Hello" }],
+    stopReason: "stop",
+    createdAt: 11,
+  })
+  expect(model.requests[0]?.messages.map((message) => message.role)).toEqual([
     "user",
   ])
 })
 
-test("executes local tools in the loop and continues with their results", async () => {
+test("executes multiple tools sequentially and emits each result lifecycle", async () => {
   const model = new ScriptedModel((iteration) => iteration === 0
     ? [
         {
           type: "tool-call",
-          callID: "call-read",
-          tool: "read_file",
+          toolCallId: "call-readme",
+          toolName: "read_file",
           input: { path: "README.md" },
-          execution: "local",
+        },
+        {
+          type: "tool-call",
+          toolCallId: "call-package",
+          toolName: "read_file",
+          input: { path: "package.json" },
         },
         { type: "finish", reason: "tool-calls" },
       ]
@@ -98,14 +108,21 @@ test("executes local tools in the loop and continues with their results", async 
         { type: "text-end", id: "answer" },
         { type: "finish", reason: "stop" },
       ])
-  const toolCalls: string[] = []
-  const tool: IAgentTool = {
+  const executionOrder: string[] = []
+  let activeToolCalls = 0
+  let maximumActiveToolCalls = 0
+  const readFileTool: IAgentTool = {
     name: "read_file",
     description: "Read a file",
     inputSchema: { type: "object" },
     async execute(input, context) {
-      toolCalls.push(`${context.toolCallID}:${String(input.path)}`)
-      return "contents"
+      activeToolCalls += 1
+      maximumActiveToolCalls = Math.max(maximumActiveToolCalls, activeToolCalls)
+      executionOrder.push(`start:${context.toolCallId}`)
+      await Promise.resolve()
+      executionOrder.push(`end:${context.toolCallId}`)
+      activeToolCalls -= 1
+      return `contents:${String(input.path)}`
     },
   }
   const events: IAgentEvent[] = []
@@ -113,10 +130,10 @@ test("executes local tools in the loop and continues with their results", async 
   const result = await runAgentLoop({
     sessionId: "session-1",
     systemPrompt: "System",
-    history: [],
+    messages: [],
     prompt: userMessage("Read"),
     model,
-    tools: [tool],
+    tools: [readFileTool],
     signal: new AbortController().signal,
     emit: (event) => {
       events.push(structuredClone(event))
@@ -125,20 +142,104 @@ test("executes local tools in the loop and continues with their results", async 
     generateId: idGenerator(),
   })
 
-  expect(toolCalls).toEqual(["call-read:README.md"])
+  const readmeResult = {
+    id: "generated-2",
+    sessionId: "session-1",
+    role: "toolResult" as const,
+    toolCallId: "call-readme",
+    toolName: "read_file",
+    content: "contents:README.md",
+    isError: false,
+    createdAt: 12,
+  }
+  const packageResult = {
+    id: "generated-3",
+    sessionId: "session-1",
+    role: "toolResult" as const,
+    toolCallId: "call-package",
+    toolName: "read_file",
+    content: "contents:package.json",
+    isError: false,
+    createdAt: 13,
+  }
+
+  expect(executionOrder).toEqual([
+    "start:call-readme",
+    "end:call-readme",
+    "start:call-package",
+    "end:call-package",
+  ])
+  expect(maximumActiveToolCalls).toBe(1)
   expect(model.requests).toHaveLength(2)
-  expect(model.requests[1]?.history).toHaveLength(2)
-  expect(model.requests[1]?.history[1]?.parts).toContainEqual(
-    expect.objectContaining({
-      type: "tool",
-      callID: "call-read",
-      status: "completed",
-      output: "contents",
-    }),
-  )
-  expect(events.map((event) => event.type)).toContain("tool_execution_start")
-  expect(events.map((event) => event.type)).toContain("tool_execution_end")
+  expect(model.requests[1]?.messages).toEqual([
+    userMessage("Read"),
+    {
+      id: "generated-1",
+      sessionId: "session-1",
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          toolCallId: "call-readme",
+          toolName: "read_file",
+          input: { path: "README.md" },
+        },
+        {
+          type: "toolCall",
+          toolCallId: "call-package",
+          toolName: "read_file",
+          input: { path: "package.json" },
+        },
+      ],
+      stopReason: "tool-calls",
+      createdAt: 11,
+    },
+    readmeResult,
+    packageResult,
+  ])
+  expect(events.filter((event) =>
+    event.type === "tool_execution_start"
+    || event.type === "tool_execution_end"
+    || (
+      (event.type === "message_start" || event.type === "message_end")
+      && event.message.role === "toolResult"
+    )
+  )).toEqual([
+    {
+      type: "tool_execution_start",
+      toolCallId: "call-readme",
+      toolName: "read_file",
+      input: { path: "README.md" },
+    },
+    {
+      type: "tool_execution_end",
+      toolCallId: "call-readme",
+      toolName: "read_file",
+      result: readmeResult,
+    },
+    { type: "message_start", message: readmeResult },
+    { type: "message_end", message: readmeResult },
+    {
+      type: "tool_execution_start",
+      toolCallId: "call-package",
+      toolName: "read_file",
+      input: { path: "package.json" },
+    },
+    {
+      type: "tool_execution_end",
+      toolCallId: "call-package",
+      toolName: "read_file",
+      result: packageResult,
+    },
+    { type: "message_start", message: packageResult },
+    { type: "message_end", message: packageResult },
+  ])
   expect(result.reason).toBe("completed")
+  expect(result.messages.at(-1)).toMatchObject({
+    role: "assistant",
+    content: [{ type: "text", text: "Finished" }],
+    stopReason: "stop",
+  })
 })
 
 test("turns an unknown local tool into a model-visible error", async () => {
@@ -146,10 +247,9 @@ test("turns an unknown local tool into a model-visible error", async () => {
     ? [
         {
           type: "tool-call",
-          callID: "call-missing",
-          tool: "missing",
+          toolCallId: "call-missing",
+          toolName: "missing",
           input: {},
-          execution: "local",
         },
         { type: "finish", reason: "tool-calls" },
       ]
@@ -158,7 +258,7 @@ test("turns an unknown local tool into a model-visible error", async () => {
   await runAgentLoop({
     sessionId: "session-1",
     systemPrompt: "System",
-    history: [],
+    messages: [],
     prompt: userMessage("Run"),
     model,
     tools: [],
@@ -168,37 +268,39 @@ test("turns an unknown local tool into a model-visible error", async () => {
     generateId: idGenerator(),
   })
 
-  expect(model.requests[1]?.history[1]?.parts).toContainEqual(
-    expect.objectContaining({
-      type: "tool",
-      callID: "call-missing",
-      status: "error",
-      error: "Unknown tool: missing",
-    }),
-  )
+  expect(model.requests[1]?.messages.at(-1)).toEqual({
+    id: "generated-2",
+    sessionId: "session-1",
+    role: "toolResult",
+    toolCallId: "call-missing",
+    toolName: "missing",
+    content: "Unknown tool: missing",
+    isError: true,
+    createdAt: 12,
+  })
 })
 
-test("preserves partial output and cancels open tools on abort", async () => {
+test("gives abort precedence over a racing provider finish", async () => {
   const controller = new AbortController()
   const model: IAgentModel = {
     async *stream() {
       yield {
         type: "tool-call",
-        callID: "call-read",
-        tool: "read_file",
+        toolCallId: "call-read",
+        toolName: "read_file",
         input: { path: "README.md" },
-        execution: "local",
       }
       yield { type: "text-start", id: "answer" }
       yield { type: "text-delta", id: "answer", delta: "Partial" }
       controller.abort("Stopped by test")
+      yield { type: "finish", reason: "stop" }
     },
   }
 
   const result = await runAgentLoop({
     sessionId: "session-1",
     systemPrompt: "System",
-    history: [],
+    messages: [],
     prompt: userMessage("Question"),
     model,
     tools: [],
@@ -210,39 +312,32 @@ test("preserves partial output and cancels open tools on abort", async () => {
 
   const assistant = result.messages.at(-1)
   expect(result.reason).toBe("aborted")
-  expect(assistant?.info).toMatchObject({
+  expect(assistant).toEqual({
+    id: "generated-1",
+    sessionId: "session-1",
     role: "assistant",
-    finish: "abort",
-    error: { name: "AbortError", message: "Stopped by test" },
+    content: [
+      {
+        type: "toolCall",
+        toolCallId: "call-read",
+        toolName: "read_file",
+        input: { path: "README.md" },
+      },
+      { type: "text", text: "Partial" },
+    ],
+    stopReason: "aborted",
+    errorMessage: "Stopped by test",
+    createdAt: 11,
   })
-  expect(assistant?.parts).toContainEqual(
-    expect.objectContaining({ type: "text", text: "Partial" }),
-  )
-  expect(assistant?.parts).toContainEqual(
-    expect.objectContaining({
-      type: "tool",
-      callID: "call-read",
-      status: "cancelled",
-    }),
-  )
 })
 
 function userMessage(text: string) {
   return {
-    info: {
-      id: "user-message",
-      sessionId: "session-1",
-      role: "user" as const,
-      createdAt: 1,
-    },
-    parts: [{
-      id: "user-part",
-      messageId: "user-message",
-      sessionId: "session-1",
-      createdAt: 1,
-      type: "text" as const,
-      text,
-    }],
+    id: "user-message",
+    sessionId: "session-1",
+    role: "user" as const,
+    content: text,
+    createdAt: 1,
   }
 }
 

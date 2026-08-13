@@ -124,8 +124,8 @@ export class Agent {
     return this.activeRun?.settled ?? Promise.resolve()
   }
 
-  reset(): void {
-    if (this.activeRun) throw new Error("Cannot reset while Agent is running")
+  clear(): void {
+    if (this.activeRun) throw new Error("Cannot clear while Agent is running")
     this.stateValue = {
       ...this.stateValue,
       messages: [],

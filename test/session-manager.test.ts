@@ -87,12 +87,12 @@ test("rejects incomplete assistants and invalid direct messages", () => {
   } as unknown as TAgentMessage)).toThrow("Invalid tool result message")
 })
 
-test("resets only the selected session", () => {
+test("clears only the selected session", () => {
   const manager = new InMemorySessionManager()
   manager.appendMessage(userMessage("First", "session-1", "user-1"))
   manager.appendMessage(userMessage("Second", "session-2", "user-2"))
 
-  manager.resetSession("session-1")
+  manager.clearSession("session-1")
 
   expect(manager.getMessages("session-1")).toEqual([])
   expect(manager.getMessages("session-2")).toHaveLength(1)

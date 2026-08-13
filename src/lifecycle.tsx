@@ -381,10 +381,18 @@ import { useEffect, useState, type ReactNode } from "react"
 import type { BuliApplicationRuntime } from "@/application"
 import { BuliRuntimeProvider } from "@/application-state"
 import { BuliTui } from "@/tui/Buli"
+import { BuliUiControllerProvider } from "@/tui/ui-controller-state"
+import { BuliUiController } from "@/tui/ui-controller"
+
+const DEFAULT_SESSION_ID = "default"
 
 type TBuliLifecycleState =
   | { type: "startup" }
-  | { type: "ready"; runtime: BuliApplicationRuntime }
+  | {
+      type: "ready"
+      runtime: BuliApplicationRuntime
+      uiController: BuliUiController
+    }
   | { type: "error" }
 
 // Decides which terminal screen to show while the application starts and run
@@ -403,7 +411,15 @@ export function BuliApplicationLifecycle(
 
     void props.runtimeTask.then(
       (runtime) => {
-        if (mounted) setState({ type: "ready", runtime })
+        if (!mounted) return
+        setState({
+          type: "ready",
+          runtime,
+          uiController: new BuliUiController({
+            application: runtime,
+            sessionId: DEFAULT_SESSION_ID,
+          }),
+        })
       },
       () => {
         if (mounted) setState({ type: "error" })
@@ -419,7 +435,9 @@ export function BuliApplicationLifecycle(
 
   return (
     <BuliRuntimeProvider runtime={state.runtime}>
-      <BuliTui />
+      <BuliUiControllerProvider controller={state.uiController}>
+        <BuliTui />
+      </BuliUiControllerProvider>
     </BuliRuntimeProvider>
   )
 }

@@ -1,34 +1,31 @@
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 
-import { useBuliRuntime } from "@/application-state"
 import { Layout } from "@/tui/components/Layout"
 import { SessionScreen } from "@/tui/components/Session"
-
-const DEFAULT_SESSION_ID = "default"
+import { buliKeyboardController } from "@/tui/keyboard-controller"
+import { useBuliUiController } from "@/tui/ui-controller-state"
 
 export function BuliTui() {
-  const runtime = useBuliRuntime()
-  const renderer = useRenderer()
-  const { width, height } = useTerminalDimensions()
+    const controller = useBuliUiController()
+    const renderer = useRenderer()
+    const { width, height } = useTerminalDimensions()
 
-  // render welcome screen if not session
-  // else choose session
+    useKeyboard((key) => {
+        const action = buliKeyboardController.resolve("global", key)
 
-  // useKeyboard
-  useKeyboard((key) => {
-    if (key.name === "escape") {
-      key.preventDefault()
-      runtime.abort(DEFAULT_SESSION_ID)
-      return
-    }
+        if (action === "cancel") {
+            key.preventDefault()
+            key.stopPropagation()
+            controller.escape()
+            return
+        }
 
-    if (key.ctrl && key.name === "d") renderer.console.toggle()
-  })
+        if (action === "console.toggle") renderer.console.toggle()
+    })
 
-  console.count("buli")
-  return (
-    <Layout width={width} height={height}>
-      <SessionScreen sessionId={DEFAULT_SESSION_ID} />
-    </Layout>
-  )
+    return (
+        <Layout width={width} height={height}>
+            <SessionScreen sessionId={controller.sessionId} />
+        </Layout>
+    )
 }

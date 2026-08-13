@@ -35,7 +35,7 @@ export function SessionScreen(props: ISessionScreenProps): ReactNode {
         />
       </scrollbox>
 
-      <Chat sessionId={props.sessionId} />
+      <Chat />
     </box>
   )
 }

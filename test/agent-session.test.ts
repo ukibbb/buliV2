@@ -46,7 +46,7 @@ test("AgentSession restores history, persists completion barriers, and publishes
   expect(notifications).toBeGreaterThan(0)
 })
 
-test("AgentSession reset removes one durable session without detaching subscribers", async () => {
+test("AgentSession clear removes one durable session without detaching subscribers", async () => {
   const manager = new InMemorySessionManager()
   manager.appendMessage(userMessage("First", "session-1", "user-1"))
   manager.appendMessage(userMessage("Other", "session-2", "user-2"))
@@ -62,7 +62,7 @@ test("AgentSession reset removes one durable session without detaching subscribe
     notifications += 1
   })
 
-  session.reset()
+  session.clear()
 
   expect(manager.getMessages("session-1")).toEqual([])
   expect(manager.getMessages("session-2")).toHaveLength(1)

@@ -85,7 +85,7 @@ test("application runtime delegates abort and rejects it after disposal", () => 
   )
 })
 
-test("handles only exact reset commands locally", async () => {
+test("clears sessions explicitly and treats slash input as prompts", async () => {
   let interactionCount = 0
   const runtime = runtimeWith({
       async *stream() {
@@ -103,17 +103,14 @@ test("handles only exact reset commands locally", async () => {
   expect(interactionCount).toBe(1)
   expect(view.getSnapshot().messages).toHaveLength(2)
 
-  await runtime.submitPrompt({
-    sessionId: "session-1",
-    text: "  /reset  ",
-  })
+  runtime.clearSession("session-1")
 
   expect(interactionCount).toBe(1)
   expect(view.getSnapshot().messages).toEqual([])
 
   await runtime.submitPrompt({
     sessionId: "session-1",
-    text: "/reset now",
+    text: "/clear",
   })
 
   expect(interactionCount).toBe(2)

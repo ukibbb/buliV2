@@ -45,7 +45,7 @@ test("Agent owns live state and awaits event listeners", async () => {
   ])
 })
 
-test("Agent rejects overlap, aborts the active run, and can reset when idle", async () => {
+test("Agent rejects overlap, aborts the active run, and can clear when idle", async () => {
   const started = Promise.withResolvers<void>()
   const model: IAgentModel = {
     async *stream(request) {
@@ -69,11 +69,11 @@ test("Agent rejects overlap, aborts the active run, and can reset when idle", as
   await expect(agent.prompt("Second")).rejects.toThrow(
     "Agent is already processing a prompt",
   )
-  expect(() => agent.reset()).toThrow("Cannot reset while Agent is running")
+  expect(() => agent.clear()).toThrow("Cannot clear while Agent is running")
 
   agent.abort()
   await first
-  agent.reset()
+  agent.clear()
 
   expect(agent.state.messages).toEqual([])
   expect(() => agent.abort()).not.toThrow()

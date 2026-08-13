@@ -83,14 +83,14 @@ export class AgentSession {
     return this.agent.waitForIdle()
   }
 
-  reset(): void {
+  clear(): void {
     if (this.disposed) throw new Error("AgentSession is disposed")
     if (this.agent.state.isRunning) {
-      throw new Error("Cannot reset while AgentSession is running")
+      throw new Error("Cannot clear while AgentSession is running")
     }
 
-    this.manager.resetSession(this.id)
-    this.agent.reset()
+    this.manager.clearSession(this.id)
+    this.agent.clear()
     this.publishSnapshot()
   }
 

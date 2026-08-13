@@ -28,6 +28,7 @@ export interface IBuliPromptInput {
 export interface IBuliApplication {
   readonly workspaceRoot: string
   readonly submitPrompt: (prompt: IBuliPromptInput) => Promise<void>
+  readonly clearSession: (sessionId: string) => void
   readonly abort: (sessionId: string) => void
   readonly getAgentSession: (
     sessionId: string,
@@ -57,12 +58,12 @@ export class BuliApplicationRuntime implements IBuliApplication {
   readonly submitPrompt = async (prompt: IBuliPromptInput): Promise<void> => {
     if (this.disposed) throw new Error("Buli runtime is disposed")
 
-    const session = this.requireAgentSession(prompt.sessionId)
-    if (prompt.text.trim() === "/reset") {
-      session.reset()
-      return
-    }
-    await session.prompt(prompt.text)
+    await this.requireAgentSession(prompt.sessionId).prompt(prompt.text)
+  }
+
+  readonly clearSession = (sessionId: string): void => {
+    if (this.disposed) throw new Error("Buli runtime is disposed")
+    this.requireAgentSession(sessionId).clear()
   }
 
   readonly abort = (sessionId: string): void => {

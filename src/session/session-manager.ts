@@ -7,7 +7,7 @@ import type {
 export interface ISessionManager {
   readonly getMessages: (sessionId: string) => readonly TAgentMessage[]
   readonly appendMessage: (message: TAgentMessage) => void
-  readonly resetSession: (sessionId: string) => void
+  readonly clearSession: (sessionId: string) => void
 }
 
 /** Keeps durable messages separate from live Agent state. */
@@ -36,7 +36,7 @@ export class InMemorySessionManager implements ISessionManager {
     this.messagesBySession.set(message.sessionId, updated)
   }
 
-  readonly resetSession = (sessionId: string): void => {
+  readonly clearSession = (sessionId: string): void => {
     this.messagesBySession.delete(sessionId)
   }
 

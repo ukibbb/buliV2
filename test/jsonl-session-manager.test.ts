@@ -91,7 +91,7 @@ test("reports corruption before the final record", async () => {
   }
 })
 
-test("reset rewrites only the selected session", async () => {
+test("clear rewrites only the selected session", async () => {
   const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-"))
   const filePath = join(directory, "sessions.jsonl")
 
@@ -100,7 +100,7 @@ test("reset rewrites only the selected session", async () => {
     manager.appendMessage(userMessage("First", "session-1", "user-1"))
     manager.appendMessage(userMessage("Second", "session-2", "user-2"))
 
-    manager.resetSession("session-1")
+    manager.clearSession("session-1")
 
     expect(manager.getMessages("session-1")).toEqual([])
     expect(manager.getMessages("session-2")).toHaveLength(1)

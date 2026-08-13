@@ -45,7 +45,7 @@ export class JsonlSessionManager implements ISessionManager {
     this.memory.appendMessage(message)
   }
 
-  readonly resetSession = (sessionId: string): void => {
+  readonly clearSession = (sessionId: string): void => {
     const retainedMessages = this.memory
       .getAllMessages()
       .filter((message) => message.sessionId !== sessionId)
@@ -57,7 +57,7 @@ export class JsonlSessionManager implements ISessionManager {
       encoding: "utf8",
       mode: 0o600,
     })
-    this.memory.resetSession(sessionId)
+    this.memory.clearSession(sessionId)
   }
 
   private load(): void {

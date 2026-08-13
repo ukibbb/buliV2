@@ -1,13 +1,9 @@
 import type {
-  IBuliMessage,
-  IBuliMessageWithParts,
-  IReasoningPart,
-  ITextPart,
-  IToolPart,
-  TJsonObject,
-  TJsonValue,
-  TPart,
-  TToolExecutionLocation,
+  IAssistantMessage,
+  IReasoningContent,
+  ITextContent,
+  IToolCallContent,
+  TAssistantContent,
 } from "@/domain"
 import type { IAgentModelEvent } from "@/agent/agent-types"
 
@@ -19,298 +15,146 @@ interface IAssistantMessageBuilderOptions {
 
 /** Reduces one provider stream into one assistant message. */
 export class AssistantMessageBuilder {
-  private message: IBuliMessage
-  private readonly parts: TPart[] = []
-  private readonly textParts = new Map<string, ITextPart>()
-  private readonly reasoningParts = new Map<string, IReasoningPart>()
-  private readonly toolParts = new Map<string, IToolPart>()
-  private providerFinishReason = "stop"
-  private finished = false
+  private readonly messageId: string
+  private readonly createdAt: number
+  private readonly content: TAssistantContent[] = []
+  private readonly textContent = new Map<string, ITextContent>()
+  private readonly reasoningContent = new Map<string, IReasoningContent>()
+  private stopReason = "pending"
+  private errorMessage: string | undefined
 
   constructor(private readonly options: IAssistantMessageBuilderOptions) {
-    this.message = {
-      id: options.generateId(),
-      sessionId: options.sessionId,
-      role: "assistant",
-      createdAt: options.now(),
-    }
+    this.messageId = options.generateId()
+    this.createdAt = options.now()
   }
 
   get completed(): boolean {
-    return this.finished
+    return this.stopReason !== "pending"
   }
 
-  applyModelEvent(event: IAgentModelEvent): boolean {
-    if (this.finished) return false
+  apply(event: IAgentModelEvent): void {
+    if (this.completed) return
 
     switch (event.type) {
       case "text-start":
         this.startText(event.id)
-        return true
+        return
       case "text-delta":
         this.appendText(event.id, event.delta)
-        return true
+        return
       case "text-end":
-        this.textParts.delete(event.id)
-        return true
+        this.textContent.delete(event.id)
+        return
       case "reasoning-start":
         this.startReasoning(event.id)
-        return true
+        return
       case "reasoning-delta":
         this.appendReasoning(event.id, event.delta)
-        return true
+        return
       case "reasoning-end":
-        this.reasoningParts.delete(event.id)
-        return true
+        this.reasoningContent.delete(event.id)
+        return
       case "tool-call":
-        this.startTool(
-          event.callID,
-          event.tool,
-          event.input,
-          event.execution,
-        )
-        return true
-      case "tool-result":
-        this.completeTool(event.callID, event.input, event.output)
-        return true
-      case "tool-error":
-        this.failTool(event.callID, event.input, event.error)
-        return true
+        this.addToolCall(event)
+        return
       case "finish":
-        this.providerFinishReason = event.reason
-        return false
+        this.finish(event.reason)
+        return
       case "abort":
-        this.completeAborted(event.reason ?? "Buli interaction was aborted")
-        return false
+        this.abort(event.reason ?? "Buli interaction was aborted")
+        return
       case "error":
-        this.completeFailed(event.error)
-        return false
+        this.finish("error", errorMessage(event.error))
     }
   }
 
-  pendingLocalTools(): readonly IToolPart[] {
-    return this.parts
-      .filter(
-        (part): part is IToolPart => part.type === "tool"
-          && part.execution === "local"
-          && (part.status === "pending" || part.status === "running"),
+  finish(reason = "stop", error?: string): void {
+    if (this.completed) return
+    this.stopReason = reason
+    this.errorMessage = error
+    this.textContent.clear()
+    this.reasoningContent.clear()
+  }
+
+  abort(reason: string): void {
+    this.stopReason = "aborted"
+    this.errorMessage = reason
+    this.textContent.clear()
+    this.reasoningContent.clear()
+  }
+
+  snapshot(): IAssistantMessage {
+    return structuredClone({
+      id: this.messageId,
+      sessionId: this.options.sessionId,
+      role: "assistant" as const,
+      content: this.content,
+      stopReason: this.stopReason,
+      ...(this.errorMessage ? { errorMessage: this.errorMessage } : {}),
+      createdAt: this.createdAt,
+    })
+  }
+
+  private startText(id: string): void {
+    if (this.textContent.has(id)) return
+    const content: ITextContent = { type: "text", text: "" }
+    this.textContent.set(id, content)
+    this.content.push(content)
+  }
+
+  private appendText(id: string, delta: string): void {
+    const current = this.textContent.get(id)
+    if (!current) return
+    const updated: ITextContent = { ...current, text: current.text + delta }
+    this.textContent.set(id, updated)
+    this.replaceContent(current, updated)
+  }
+
+  private startReasoning(id: string): void {
+    if (this.reasoningContent.has(id)) return
+    const content: IReasoningContent = { type: "reasoning", text: "" }
+    this.reasoningContent.set(id, content)
+    this.content.push(content)
+  }
+
+  private appendReasoning(id: string, delta: string): void {
+    const current = this.reasoningContent.get(id)
+    if (!current) return
+    const updated: IReasoningContent = { ...current, text: current.text + delta }
+    this.reasoningContent.set(id, updated)
+    this.replaceContent(current, updated)
+  }
+
+  private addToolCall(
+    event: Extract<IAgentModelEvent, { type: "tool-call" }>,
+  ): void {
+    if (
+      this.content.some(
+        (content) => content.type === "toolCall"
+          && content.toolCallId === event.toolCallId,
       )
-      .map((part) => structuredClone(part))
-  }
-
-  markToolRunning(callID: string): void {
-    const current = this.toolParts.get(callID)
-    if (!current || current.status !== "pending") return
-
-    const running: IToolPart = {
-      ...current,
-      status: "running",
-      startedAt: this.options.now(),
+    ) {
+      return
     }
-    this.toolParts.set(callID, running)
-    this.replacePart(running)
+
+    const content: IToolCallContent = {
+      type: "toolCall",
+      toolCallId: event.toolCallId,
+      toolName: event.toolName,
+      input: structuredClone(event.input),
+    }
+    this.content.push(content)
   }
 
-  completeTool(
-    callID: string,
-    input: TJsonObject,
-    output: TJsonValue,
+  private replaceContent(
+    current: TAssistantContent,
+    replacement: TAssistantContent,
   ): void {
-    const current = this.toolParts.get(callID)
-    if (!current) return
-
-    const completed: IToolPart = {
-      ...current,
-      status: "completed",
-      input: structuredClone(input),
-      output: structuredClone(output),
-      startedAt: current.startedAt ?? this.options.now(),
-      completedAt: this.options.now(),
-    }
-    this.toolParts.delete(callID)
-    this.replacePart(completed)
-  }
-
-  failTool(callID: string, input: TJsonObject, error: string): void {
-    this.settleTool(callID, "error", input, error)
-  }
-
-  cancelTool(callID: string, input: TJsonObject, error: string): void {
-    this.settleTool(callID, "cancelled", input, error)
-  }
-
-  completeNormally(): IBuliMessageWithParts {
-    if (!this.finished) {
-      this.finishOpenTools(
-        "error",
-        "Tool did not finish before the interaction completed",
-      )
-      this.finish(this.providerFinishReason)
-    }
-    return this.snapshot()
-  }
-
-  completeAborted(reason: string): IBuliMessageWithParts {
-    if (!this.finished) {
-      this.finishOpenTools("cancelled", reason)
-      this.finish("abort", { name: "AbortError", message: reason })
-    }
-    return this.snapshot()
-  }
-
-  completeFailed(error: unknown): IBuliMessageWithParts {
-    if (!this.finished) {
-      const normalized = normalizeError(error)
-      this.finishOpenTools("error", normalized.message)
-      this.finish("error", normalized)
-    }
-    return this.snapshot()
-  }
-
-  snapshot(): IBuliMessageWithParts {
-    return structuredClone({ info: this.message, parts: this.parts })
-  }
-
-  private startText(driverId: string): void {
-    if (this.textParts.has(driverId)) return
-
-    const part: ITextPart = {
-      id: this.options.generateId(),
-      messageId: this.message.id,
-      sessionId: this.message.sessionId,
-      createdAt: this.options.now(),
-      type: "text",
-      text: "",
-    }
-    this.textParts.set(driverId, part)
-    this.parts.push(part)
-  }
-
-  private appendText(driverId: string, delta: string): void {
-    const current = this.textParts.get(driverId)
-    if (!current) return
-
-    const updated: ITextPart = { ...current, text: current.text + delta }
-    this.textParts.set(driverId, updated)
-    this.replacePart(updated)
-  }
-
-  private startReasoning(driverId: string): void {
-    if (this.reasoningParts.has(driverId)) return
-
-    const part: IReasoningPart = {
-      id: this.options.generateId(),
-      messageId: this.message.id,
-      sessionId: this.message.sessionId,
-      createdAt: this.options.now(),
-      type: "reasoning",
-      text: "",
-    }
-    this.reasoningParts.set(driverId, part)
-    this.parts.push(part)
-  }
-
-  private appendReasoning(driverId: string, delta: string): void {
-    const current = this.reasoningParts.get(driverId)
-    if (!current) return
-
-    const updated: IReasoningPart = { ...current, text: current.text + delta }
-    this.reasoningParts.set(driverId, updated)
-    this.replacePart(updated)
-  }
-
-  private startTool(
-    callID: string,
-    tool: string,
-    input: TJsonObject,
-    execution: TToolExecutionLocation,
-  ): void {
-    if (this.toolParts.has(callID)) return
-
-    const part: IToolPart = {
-      id: this.options.generateId(),
-      messageId: this.message.id,
-      sessionId: this.message.sessionId,
-      createdAt: this.options.now(),
-      type: "tool",
-      callID,
-      tool,
-      status: "pending",
-      input: structuredClone(input),
-      execution,
-    }
-    this.toolParts.set(callID, part)
-    this.parts.push(part)
-  }
-
-  private settleTool(
-    callID: string,
-    status: "error" | "cancelled",
-    input: TJsonObject,
-    error: string,
-  ): void {
-    const current = this.toolParts.get(callID)
-    if (!current) return
-
-    const settled: IToolPart = {
-      ...current,
-      status,
-      input: structuredClone(input),
-      error,
-      startedAt: current.startedAt ?? this.options.now(),
-      completedAt: this.options.now(),
-    }
-    this.toolParts.delete(callID)
-    this.replacePart(settled)
-  }
-
-  private finishOpenTools(
-    status: "error" | "cancelled",
-    error: string,
-  ): void {
-    for (const [callID, current] of this.toolParts) {
-      const settled: IToolPart = {
-        ...current,
-        status,
-        error,
-        startedAt: current.startedAt ?? this.options.now(),
-        completedAt: this.options.now(),
-      }
-      this.replacePart(settled)
-      this.toolParts.delete(callID)
-    }
-  }
-
-  private finish(
-    reason: string,
-    error?: { readonly name: string; readonly message: string },
-  ): void {
-    this.finished = true
-    this.textParts.clear()
-    this.reasoningParts.clear()
-    this.toolParts.clear()
-    this.message = {
-      ...this.message,
-      completedAt: this.options.now(),
-      finish: reason,
-      ...(error ? { error } : {}),
-    }
-  }
-
-  private replacePart(part: TPart): void {
-    const index = this.parts.findIndex((candidate) => candidate.id === part.id)
-    if (index !== -1) this.parts[index] = part
+    const index = this.content.indexOf(current)
+    if (index !== -1) this.content[index] = replacement
   }
 }
 
-function normalizeError(
-  value: unknown,
-): { readonly name: string; readonly message: string } {
-  if (value instanceof Error) {
-    return {
-      name: value.name || "Error",
-      message: value.message,
-    }
-  }
-  return { name: "Error", message: String(value) }
+function errorMessage(value: unknown): string {
+  return value instanceof Error ? value.message : String(value)
 }

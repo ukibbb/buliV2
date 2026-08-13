@@ -116,14 +116,14 @@ export class AgentSession {
 
   private createSnapshot(): ISessionSnapshot {
     const state = this.agent.state
-    const messages = state.streamingMessage
-      ? [...state.messages, state.streamingMessage]
-      : state.messages
 
     return freezeSessionSnapshot({
-      messages,
+      messages: state.messages,
+      ...(state.streamingMessage
+        ? { streamingMessage: state.streamingMessage }
+        : {}),
       isRunning: state.isRunning,
-      pendingToolCallIDs: [...state.pendingToolCallIDs],
+      pendingToolCallIds: [...state.pendingToolCallIds],
       ...(state.lastRunReason ? { lastRunReason: state.lastRunReason } : {}),
     })
   }

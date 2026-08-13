@@ -2,7 +2,8 @@ import { expect, test } from "bun:test"
 import { realpathSync } from "node:fs"
 
 import { systemPrompt } from "@/agent/agents-prompts"
-import type { IBuliMessageWithParts } from "@/domain"
+import type { IAgentModelEvent, IAgentToolDescriptor } from "@/agent/agent-types"
+import type { TAgentMessage } from "@/domain"
 import type { IAuthStore, TAuthInfo } from "@/providers/auth-store"
 import { OpenAiAuth } from "@/providers/openai/openai-auth"
 import { OpenAiAgentModel } from "@/providers/openai/openai-agent-model"
@@ -43,16 +44,28 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
     auth,
     modelId: "gpt-5.6-sol",
   })
-  const history: IBuliMessageWithParts[] = [
-    message("user", [
-      part("text", " First "),
-      part("reasoning", "Do not send this"),
-      part("text", "Second"),
-    ]),
-    message("assistant", [part("text", "Answer")]),
+  const messages: TAgentMessage[] = [
+    {
+      id: "previous-user",
+      sessionId: "session-1",
+      role: "user",
+      content: "First\n\nSecond",
+      createdAt: 1,
+    },
+    {
+      id: "previous-assistant",
+      sessionId: "session-1",
+      role: "assistant",
+      content: [
+        { type: "text", text: "Answer" },
+        { type: "reasoning", text: "Do not send this" },
+      ],
+      stopReason: "stop",
+      createdAt: 2,
+    },
   ]
   const manager = new InMemorySessionManager()
-  history.forEach(manager.appendMessage)
+  messages.forEach(manager.appendMessage)
   const session = new AgentSession({
     sessionId: "session-1",
     manager,
@@ -90,14 +103,36 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
   expect(JSON.stringify(body.tools)).not.toContain("write_file")
   expect(JSON.stringify(body.tools)).not.toContain("apply_patch")
 
-  const input = JSON.stringify(body.input)
-  expect(input).toContain("First \\n\\nSecond")
-  expect(input).toContain("Answer")
-  expect(input).toContain("Continue")
-  expect(input).not.toContain("Do not send this")
+  expect(body.input).toEqual([
+    {
+      role: "user",
+      content: [{ type: "input_text", text: "First\n\nSecond" }],
+    },
+    {
+      role: "assistant",
+      content: [{ type: "output_text", text: "Answer" }],
+    },
+    {
+      role: "user",
+      content: [{ type: "input_text", text: "Continue" }],
+    },
+  ])
+  expect(JSON.stringify(body.input)).not.toContain("Do not send this")
 
   const globContinuation = (await secondRequest.json()) as Record<string, unknown>
-  expect(JSON.stringify(globContinuation.input)).toContain("package.json")
+  expect(globContinuation.input).toEqual(expect.arrayContaining([
+    {
+      type: "function_call",
+      call_id: "call-glob",
+      name: "glob",
+      arguments: JSON.stringify({ pattern: "package.json" }),
+    },
+    {
+      type: "function_call_output",
+      call_id: "call-glob",
+      output: "package.json",
+    },
+  ]))
 
   const grepContinuation = (await thirdRequest.json()) as Record<string, unknown>
   expect(JSON.stringify(grepContinuation.input)).toContain("bun@1.3.12")
@@ -106,41 +141,63 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
   expect(JSON.stringify(readContinuation.input)).toContain("scripts")
 
   const stored = manager.getMessages("session-1")
-  const tools = stored
-    .flatMap((message) => message.parts)
-    .filter((part) => part.type === "tool")
+  const toolCalls = stored.flatMap((message) => message.role === "assistant"
+    ? message.content.filter((content) => content.type === "toolCall")
+    : [])
+  const toolResults = stored.filter((message) => message.role === "toolResult")
 
-  expect(tools).toEqual([
-    expect.objectContaining({
-      callID: "call-glob",
-      tool: "glob",
-      status: "completed",
+  expect(toolCalls).toEqual([
+    {
+      type: "toolCall",
+      toolCallId: "call-glob",
+      toolName: "glob",
       input: { pattern: "package.json" },
-      output: "package.json",
-      execution: "local",
+    },
+    {
+      type: "toolCall",
+      toolCallId: "call-grep",
+      toolName: "grep",
+      input: { pattern: "packageManager" },
+    },
+    {
+      type: "toolCall",
+      toolCallId: "call-read_file",
+      toolName: "read_file",
+      input: { path: "package.json" },
+    },
+  ])
+  expect(toolResults).toEqual([
+    expect.objectContaining({
+      role: "toolResult",
+      toolCallId: "call-glob",
+      toolName: "glob",
+      content: "package.json",
+      isError: false,
     }),
     expect.objectContaining({
-      callID: "call-grep",
-      tool: "grep",
-      status: "completed",
-      output: expect.stringContaining("bun@1.3.12"),
-      execution: "local",
+      role: "toolResult",
+      toolCallId: "call-grep",
+      toolName: "grep",
+      content: expect.stringContaining("bun@1.3.12"),
+      isError: false,
     }),
     expect.objectContaining({
-      callID: "call-read_file",
-      tool: "read_file",
-      status: "completed",
-      output: expect.stringContaining('"scripts"'),
-      execution: "local",
+      role: "toolResult",
+      toolCallId: "call-read_file",
+      toolName: "read_file",
+      content: expect.stringContaining('"scripts"'),
+      isError: false,
     }),
   ])
-  expect(stored.at(-1)?.info).toMatchObject({
+  const finalMessage = stored.at(-1)
+  expect(finalMessage).toMatchObject({
     role: "assistant",
-    finish: "stop",
+    stopReason: "stop",
   })
-  expect(stored.at(-1)?.parts).toContainEqual(
-    expect.objectContaining({ type: "text", text: "Hello" }),
-  )
+  if (finalMessage?.role !== "assistant") {
+    throw new Error("Expected a final assistant message")
+  }
+  expect(finalMessage.content).toContainEqual({ type: "text", text: "Hello" })
 })
 
 test("replays a local tool failure into the next OAuth iteration", async () => {
@@ -178,29 +235,140 @@ test("replays a local tool failure into the next OAuth iteration", async () => {
   expect(capturedRequests).toHaveLength(2)
   const failedTool = manager
     .getMessages("session-1")
-    .flatMap((message) => message.parts)
-    .find((part) => part.type === "tool")
+    .find((message) => message.role === "toolResult")
 
-  if (failedTool?.type !== "tool" || !failedTool.error) {
+  if (failedTool?.role !== "toolResult") {
     throw new Error("Expected a failed read_file tool")
   }
 
   expect(failedTool).toMatchObject({
-    tool: "read_file",
-    status: "error",
-    input: { path: missingPath },
+    toolCallId: "call-read_file",
+    toolName: "read_file",
+    isError: true,
   })
 
   const continuation = capturedRequests[1]
   if (!continuation) throw new Error("Expected a continuation request")
   const body = (await continuation.json()) as Record<string, unknown>
-  const input = JSON.stringify(body.input)
-  expect(input).toContain(missingPath)
-  expect(input).toContain(failedTool.error)
-  expect(manager.getMessages("session-1").at(-1)?.info).toMatchObject({
+  expect(body.input).toEqual(expect.arrayContaining([
+    {
+      type: "function_call",
+      call_id: "call-read_file",
+      name: "read_file",
+      arguments: JSON.stringify({ path: missingPath }),
+    },
+    {
+      type: "function_call_output",
+      call_id: "call-read_file",
+      output: failedTool.content,
+    },
+  ]))
+  expect(manager.getMessages("session-1").at(-1)).toMatchObject({
     role: "assistant",
-    finish: "stop",
+    stopReason: "stop",
   })
+})
+
+test("lowers direct assistant and text-only toolResult messages", async () => {
+  const capturedRequests: Request[] = []
+  const model = createModel(async (...args) => {
+    capturedRequests.push(new Request(...args))
+    return streamResponse()
+  })
+
+  const events = await collectEvents(model, [
+    userMessage("Question"),
+    {
+      id: "assistant-message",
+      sessionId: "session-1",
+      role: "assistant",
+      content: [
+        { type: "text", text: "I will inspect it." },
+        {
+          type: "toolCall",
+          toolCallId: "call-read",
+          toolName: "read_file",
+          input: { path: "README.md" },
+        },
+      ],
+      stopReason: "tool-calls",
+      createdAt: 2,
+    },
+    {
+      id: "tool-result-message",
+      sessionId: "session-1",
+      role: "toolResult",
+      toolCallId: "call-read",
+      toolName: "read_file",
+      content: "README contents",
+      isError: false,
+      createdAt: 3,
+    },
+  ], [toolDescriptor("read_file")])
+
+  expect(events).toContainEqual({ type: "finish", reason: "stop" })
+  expect(capturedRequests).toHaveLength(1)
+  const request = capturedRequests[0]
+  if (!request) throw new Error("Expected an OpenAI request")
+  const body = (await request.json()) as Record<string, unknown>
+  expect(body.input).toEqual([
+    {
+      role: "user",
+      content: [{ type: "input_text", text: "Question" }],
+    },
+    {
+      role: "assistant",
+      content: [{ type: "output_text", text: "I will inspect it." }],
+    },
+    {
+      type: "function_call",
+      call_id: "call-read",
+      name: "read_file",
+      arguments: JSON.stringify({ path: "README.md" }),
+    },
+    {
+      type: "function_call_output",
+      call_id: "call-read",
+      output: "README contents",
+    },
+  ])
+})
+
+test("emits every tool call from one provider response for the host loop", async () => {
+  const model = createModel(async () => multiToolCallResponse([
+    {
+      toolCallId: "call-glob",
+      toolName: "glob",
+      input: { pattern: "*.ts" },
+    },
+    {
+      toolCallId: "call-grep",
+      toolName: "grep",
+      input: { pattern: "toolCallId" },
+    },
+  ]))
+
+  const events = await collectEvents(
+    model,
+    [userMessage("Inspect the workspace")],
+    [toolDescriptor("glob"), toolDescriptor("grep")],
+  )
+
+  expect(events.filter((event) => event.type === "tool-call")).toEqual([
+    {
+      type: "tool-call",
+      toolCallId: "call-glob",
+      toolName: "glob",
+      input: { pattern: "*.ts" },
+    },
+    {
+      type: "tool-call",
+      toolCallId: "call-grep",
+      toolName: "grep",
+      input: { pattern: "toolCallId" },
+    },
+  ])
+  expect(events.at(-1)).toEqual({ type: "finish", reason: "tool-calls" })
 })
 
 test("forwards cancellation to the OpenAI request", async () => {
@@ -235,7 +403,7 @@ test("forwards cancellation to the OpenAI request", async () => {
     for await (const event of model.stream({
       sessionId: "session-1",
       systemPrompt: systemPrompt(WORKSPACE_ROOT),
-      history: [message("user", [part("text", "Wait")])],
+      messages: [userMessage("Wait")],
       tools: [],
       signal: controller.signal,
     })) {
@@ -319,39 +487,53 @@ function toolCallResponse(
   toolName: string,
   input: Record<string, unknown>,
 ): Response {
-  return eventStream([
-    {
-      type: "response.created",
-      response: {
-        id: `response-${toolName}`,
-        created_at: 1,
-        model: "gpt-5.6-sol",
-        service_tier: null,
-      },
-    },
+  return multiToolCallResponse([{ toolCallId: `call-${toolName}`, toolName, input }])
+}
+
+function multiToolCallResponse(
+  calls: readonly {
+    toolCallId: string
+    toolName: string
+    input: Record<string, unknown>
+  }[],
+): Response {
+  const toolCallItems = calls.flatMap((call, outputIndex) => [
     {
       type: "response.output_item.added",
-      output_index: 0,
+      output_index: outputIndex,
       item: {
         type: "function_call",
-        id: `function-${toolName}`,
-        call_id: `call-${toolName}`,
-        name: toolName,
+        id: `function-${call.toolCallId}`,
+        call_id: call.toolCallId,
+        name: call.toolName,
         arguments: "",
       },
     },
     {
       type: "response.output_item.done",
-      output_index: 0,
+      output_index: outputIndex,
       item: {
         type: "function_call",
-        id: `function-${toolName}`,
-        call_id: `call-${toolName}`,
-        name: toolName,
-        arguments: JSON.stringify(input),
+        id: `function-${call.toolCallId}`,
+        call_id: call.toolCallId,
+        name: call.toolName,
+        arguments: JSON.stringify(call.input),
         status: "completed",
       },
     },
+  ])
+
+  return eventStream([
+    {
+      type: "response.created",
+      response: {
+        id: "response-tools",
+        created_at: 1,
+        model: "gpt-5.6-sol",
+        service_tier: null,
+      },
+    },
+    ...toolCallItems,
     {
       type: "response.completed",
       response: {
@@ -378,40 +560,54 @@ function eventStream(chunks: readonly Record<string, unknown>[]): Response {
   })
 }
 
-function message(
-  role: "user" | "assistant",
-  parts: IBuliMessageWithParts["parts"],
-): IBuliMessageWithParts {
-  const id = `${role}-message`
+function createModel(
+  run: (...args: Parameters<typeof globalThis.fetch>) => Promise<Response>,
+): OpenAiAgentModel {
+  const auth = new OpenAiAuth({
+    store: authStore({
+      type: "oauth",
+      access: "test-access-token",
+      refresh: "test-refresh-token",
+      expires: 200,
+    }),
+    fetch: fetchImplementation(run),
+    now: () => 100,
+  })
+  return new OpenAiAgentModel({ auth })
+}
 
+async function collectEvents(
+  model: OpenAiAgentModel,
+  messages: readonly TAgentMessage[],
+  tools: readonly IAgentToolDescriptor[],
+): Promise<IAgentModelEvent[]> {
+  const events: IAgentModelEvent[] = []
+  for await (const event of model.stream({
+    sessionId: "session-1",
+    systemPrompt: "System",
+    messages,
+    tools,
+    signal: new AbortController().signal,
+  })) {
+    events.push(event)
+  }
+  return events
+}
+
+function userMessage(content: string): TAgentMessage {
   return {
-    info: {
-      id,
-      sessionId: "session-1",
-      role,
-      createdAt: 1,
-      ...(role === "assistant"
-        ? { completedAt: 2, finish: "stop" }
-        : {}),
-    },
-    parts: parts.map((item) => ({
-      ...item,
-      messageId: id,
-      sessionId: "session-1",
-    })),
+    id: "user-message",
+    sessionId: "session-1",
+    role: "user",
+    content,
+    createdAt: 1,
   }
 }
 
-function part(
-  type: "text" | "reasoning",
-  text: string,
-): IBuliMessageWithParts["parts"][number] {
+function toolDescriptor(name: string): IAgentToolDescriptor {
   return {
-    id: `${type}-${text}`,
-    messageId: "message",
-    sessionId: "session-1",
-    createdAt: 1,
-    type,
-    text,
+    name,
+    description: `Run ${name}`,
+    inputSchema: { type: "object" },
   }
 }

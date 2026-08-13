@@ -1,227 +1,142 @@
 import type {
-  IBuliMessageWithParts,
+  IAssistantMessage,
   ISessionSnapshot,
-  TJsonValue,
+  TAgentMessage,
 } from "@/domain"
 
 export interface ISessionManager {
-  readonly getMessages: (
-    sessionId: string,
-  ) => readonly IBuliMessageWithParts[]
-  readonly appendMessage: (message: IBuliMessageWithParts) => void
+  readonly getMessages: (sessionId: string) => readonly TAgentMessage[]
+  readonly appendMessage: (message: TAgentMessage) => void
   readonly resetSession: (sessionId: string) => void
 }
 
-/** Keeps durable session messages separate from live Agent state. */
+/** Keeps durable messages separate from live Agent state. */
 export class InMemorySessionManager implements ISessionManager {
   private readonly messagesBySession = new Map<
     string,
-    readonly IBuliMessageWithParts[]
+    readonly TAgentMessage[]
   >()
 
-  readonly getMessages = (
-    sessionId: string,
-  ): readonly IBuliMessageWithParts[] => {
+  readonly getMessages = (sessionId: string): readonly TAgentMessage[] => {
     return structuredClone(this.messagesBySession.get(sessionId) ?? [])
   }
 
-  readonly appendMessage = (message: IBuliMessageWithParts): void => {
+  readonly appendMessage = (message: TAgentMessage): void => {
     assertDurableSessionMessage(message)
 
-    const sessionId = message.info.sessionId
-    const current = this.messagesBySession.get(sessionId) ?? []
+    const current = this.messagesBySession.get(message.sessionId) ?? []
     const existingIndex = current.findIndex(
-      (candidate) => candidate.info.id === message.info.id,
+      (candidate) => candidate.id === message.id,
     )
-    const stored = freezeMessage(message)
     const updated = [...current]
 
-    if (existingIndex === -1) updated.push(stored)
-    else updated[existingIndex] = stored
+    if (existingIndex === -1) updated.push(structuredClone(message))
+    else updated[existingIndex] = structuredClone(message)
 
-    this.messagesBySession.set(sessionId, Object.freeze(updated))
+    this.messagesBySession.set(message.sessionId, updated)
   }
 
   readonly resetSession = (sessionId: string): void => {
     this.messagesBySession.delete(sessionId)
   }
 
-  getAllMessages(): readonly IBuliMessageWithParts[] {
+  getAllMessages(): readonly TAgentMessage[] {
     return structuredClone([...this.messagesBySession.values()].flat())
   }
 }
 
 export function assertDurableSessionMessage(
   value: unknown,
-): asserts value is IBuliMessageWithParts {
-  assertValidSessionMessage(value)
-  if (value.info.role === "assistant" && value.info.completedAt === undefined) {
-    throw new Error("Cannot persist an incomplete assistant message")
-  }
-}
+): asserts value is TAgentMessage {
+  if (!isMessageBase(value)) throw new Error("Invalid session message")
 
-export function assertValidSessionMessage(
-  value: unknown,
-): asserts value is IBuliMessageWithParts {
-  if (!isRecord(value) || !isRecord(value.info) || !Array.isArray(value.parts)) {
-    throw new Error("Invalid session message structure")
-  }
-
-  const info = value.info
-  if (
-    typeof info.id !== "string"
-    || typeof info.sessionId !== "string"
-    || (info.role !== "user" && info.role !== "assistant")
-    || !isFiniteNumber(info.createdAt)
-  ) {
-    throw new Error("Invalid session message info")
-  }
-
-  if (info.role === "assistant") {
-    if (info.completedAt !== undefined && !isFiniteNumber(info.completedAt)) {
-      throw new Error("Invalid assistant completion time")
-    }
-    if (info.finish !== undefined && typeof info.finish !== "string") {
-      throw new Error("Invalid assistant finish reason")
-    }
-    if (info.error !== undefined) {
+  switch (value.role) {
+    case "user":
+      if (typeof value.content !== "string") {
+        throw new Error("Invalid user message")
+      }
+      return
+    case "assistant":
+      assertAssistantMessage(value)
+      if (value.stopReason === "pending") {
+        throw new Error("Cannot persist an incomplete assistant message")
+      }
+      return
+    case "toolResult":
       if (
-        !isRecord(info.error)
-        || typeof info.error.name !== "string"
-        || typeof info.error.message !== "string"
+        typeof value.toolCallId !== "string"
+        || typeof value.toolName !== "string"
+        || typeof value.content !== "string"
+        || typeof value.isError !== "boolean"
       ) {
-        throw new Error("Invalid assistant error")
+        throw new Error("Invalid tool result message")
       }
-    }
-  }
-
-  for (const candidate of value.parts) {
-    if (
-      !isRecord(candidate)
-      || typeof candidate.id !== "string"
-      || typeof candidate.messageId !== "string"
-      || typeof candidate.sessionId !== "string"
-      || !isFiniteNumber(candidate.createdAt)
-    ) {
-      throw new Error("Invalid session message part")
-    }
-
-    if (candidate.sessionId !== info.sessionId) {
-      throw new Error(`Part ${candidate.id} belongs to another session`)
-    }
-    if (candidate.messageId !== info.id) {
-      throw new Error(`Part ${candidate.id} belongs to another message`)
-    }
-
-    if (candidate.type === "text" || candidate.type === "reasoning") {
-      if (typeof candidate.text !== "string") {
-        throw new Error(`Part ${candidate.id} has invalid text`)
-      }
-      continue
-    }
-
-    if (candidate.type !== "tool") {
-      throw new Error(`Part ${candidate.id} has an unknown type`)
-    }
-    if (
-      typeof candidate.callID !== "string"
-      || typeof candidate.tool !== "string"
-      || typeof candidate.status !== "string"
-      || !TOOL_STATUSES.has(candidate.status)
-      || !isRecord(candidate.input)
-      || !isJsonValue(candidate.input)
-      || (candidate.execution !== "local" && candidate.execution !== "provider")
-    ) {
-      throw new Error(`Part ${candidate.id} has invalid tool data`)
-    }
-    if (candidate.output !== undefined && !isJsonValue(candidate.output)) {
-      throw new Error(`Part ${candidate.id} has invalid tool output`)
-    }
-    if (candidate.error !== undefined && typeof candidate.error !== "string") {
-      throw new Error(`Part ${candidate.id} has invalid tool error`)
-    }
-    if (candidate.startedAt !== undefined && !isFiniteNumber(candidate.startedAt)) {
-      throw new Error(`Part ${candidate.id} has invalid tool start time`)
-    }
-    if (
-      candidate.completedAt !== undefined
-      && !isFiniteNumber(candidate.completedAt)
-    ) {
-      throw new Error(`Part ${candidate.id} has invalid tool completion time`)
-    }
+      return
+    default:
+      throw new Error("Unknown session message role")
   }
 }
 
 export function freezeSessionSnapshot(
   snapshot: ISessionSnapshot,
 ): ISessionSnapshot {
-  const messages = snapshot.messages.map(freezeMessage)
-  return Object.freeze({
-    ...snapshot,
-    messages: Object.freeze(messages),
-    pendingToolCallIDs: Object.freeze([...snapshot.pendingToolCallIDs]),
-  })
+  const clone = structuredClone(snapshot)
+  deepFreeze(clone)
+  return clone
 }
 
-const TOOL_STATUSES: ReadonlySet<string> = new Set([
-  "pending",
-  "running",
-  "completed",
-  "error",
-  "cancelled",
-])
-
-function freezeMessage(
-  message: IBuliMessageWithParts,
-): IBuliMessageWithParts {
-  const clone = structuredClone(message)
-
-  if (clone.info.role === "assistant" && clone.info.error) {
-    Object.freeze(clone.info.error)
+function assertAssistantMessage(
+  message: Record<string, unknown>,
+): asserts message is Record<string, unknown> & IAssistantMessage {
+  if (!Array.isArray(message.content) || typeof message.stopReason !== "string") {
+    throw new Error("Invalid assistant message")
   }
-  Object.freeze(clone.info)
+  if (
+    message.errorMessage !== undefined
+    && typeof message.errorMessage !== "string"
+  ) {
+    throw new Error("Invalid assistant error")
+  }
 
-  clone.parts.forEach((part) => {
-    if (part.type === "tool") {
-      freezeJsonValue(part.input)
-      if (part.output !== undefined) freezeJsonValue(part.output)
+  for (const content of message.content) {
+    if (!isRecord(content)) throw new Error("Invalid assistant content")
+    if (content.type === "text" || content.type === "reasoning") {
+      if (typeof content.text !== "string") {
+        throw new Error("Invalid assistant text content")
+      }
+      continue
     }
-    Object.freeze(part)
-  })
-  Object.freeze(clone.parts)
-  return Object.freeze(clone)
+    if (
+      content.type !== "toolCall"
+      || typeof content.toolCallId !== "string"
+      || typeof content.toolName !== "string"
+      || !isRecord(content.input)
+    ) {
+      throw new Error("Invalid assistant tool call")
+    }
+  }
 }
 
-function freezeJsonValue(value: TJsonValue): void {
-  if (Array.isArray(value)) {
-    value.forEach(freezeJsonValue)
-    Object.freeze(value)
-    return
-  }
-  if (value !== null && typeof value === "object") {
-    Object.values(value).forEach(freezeJsonValue)
-    Object.freeze(value)
-  }
+function isMessageBase(value: unknown): value is Record<string, unknown> & {
+  readonly id: string
+  readonly sessionId: string
+  readonly role: string
+  readonly createdAt: number
+} {
+  return isRecord(value)
+    && typeof value.id === "string"
+    && typeof value.sessionId === "string"
+    && typeof value.role === "string"
+    && typeof value.createdAt === "number"
+    && Number.isFinite(value.createdAt)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
 }
 
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value)
-}
-
-function isJsonValue(value: unknown): value is TJsonValue {
-  if (
-    value === null
-    || typeof value === "string"
-    || typeof value === "boolean"
-    || isFiniteNumber(value)
-  ) {
-    return true
-  }
-  if (Array.isArray(value)) return value.every(isJsonValue)
-  if (!isRecord(value)) return false
-  return Object.values(value).every(isJsonValue)
+function deepFreeze(value: unknown): void {
+  if (value === null || typeof value !== "object") return
+  for (const child of Object.values(value)) deepFreeze(child)
+  Object.freeze(value)
 }

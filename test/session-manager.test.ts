@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test"
 
-import type { IBuliMessageWithParts } from "@/domain"
+import type {
+  IAssistantMessage,
+  IToolResultMessage,
+  IUserMessage,
+  TAgentMessage,
+} from "@/domain"
 import { InMemorySessionManager } from "@/session/session-manager"
 
 test("stores independent copies and replaces durable messages by ID", () => {
@@ -8,86 +13,78 @@ test("stores independent copies and replaces durable messages by ID", () => {
   const original = userMessage("First")
 
   manager.appendMessage(original)
-  const originalPart = original.parts[0]
-  if (originalPart?.type === "text") {
-    ;(originalPart as { text: string }).text = "Mutated outside manager"
-  }
+  const mutableOriginal = original as { content: string }
+  mutableOriginal.content = "Mutated outside manager"
 
-  expect(manager.getMessages("session-1")[0]?.parts[0]).toMatchObject({
-    text: "First",
+  expect(manager.getMessages("session-1")[0]).toMatchObject({
+    content: "First",
   })
 
   manager.appendMessage(userMessage("Replacement"))
   const returned = manager.getMessages("session-1")
-  const returnedPart = returned[0]?.parts[0]
-  if (returnedPart?.type === "text") {
-    ;(returnedPart as { text: string }).text = "Mutated returned copy"
+  const returnedMessage = returned[0]
+  if (returnedMessage?.role === "user") {
+    const mutableReturned = returnedMessage as { content: string }
+    mutableReturned.content = "Mutated returned copy"
   }
 
   expect(manager.getMessages("session-1")).toHaveLength(1)
-  expect(manager.getMessages("session-1")[0]?.parts[0]).toMatchObject({
-    text: "Replacement",
+  expect(manager.getMessages("session-1")[0]).toMatchObject({
+    content: "Replacement",
   })
 })
 
-test("keeps structured tool input and output independent", () => {
+test("keeps structured tool input and tool results independent", () => {
   const manager = new InMemorySessionManager()
   manager.appendMessage(completedAssistant([{
-    id: "tool-1",
-    messageId: "assistant-1",
-    sessionId: "session-1",
-    createdAt: 1,
-    type: "tool",
-    callID: "call-1",
-    tool: "grep",
-    status: "completed",
+    type: "toolCall",
+    toolCallId: "call-1",
+    toolName: "grep",
     input: { pattern: "Agent" },
-    output: { matches: ["src/agent/agent.ts"] },
-    execution: "local",
   }]))
+  manager.appendMessage(toolResultMessage("src/agent/agent.ts"))
 
-  const first = manager.getMessages("session-1")[0]?.parts[0]
-  if (
-    first?.type !== "tool"
-    || !first.output
-    || Array.isArray(first.output)
-    || typeof first.output !== "object"
-  ) {
-    throw new Error("Expected structured tool output")
+  const returned = manager.getMessages("session-1")
+  const assistant = returned[0]
+  if (assistant?.role !== "assistant") {
+    throw new Error("Expected assistant message")
   }
-  ;(first.input as { pattern: string }).pattern = "mutated"
-  ;(first.output.matches as string[]).push("mutated")
+  const toolCall = assistant.content[0]
+  if (toolCall?.type !== "toolCall") {
+    throw new Error("Expected tool call")
+  }
+  const toolResult = returned[1]
+  if (toolResult?.role !== "toolResult") {
+    throw new Error("Expected tool result")
+  }
+  const mutableInput = toolCall.input as { pattern: string }
+  mutableInput.pattern = "mutated"
+  const mutableToolResult = toolResult as { content: string }
+  mutableToolResult.content = "mutated"
 
-  expect(manager.getMessages("session-1")[0]?.parts[0]).toMatchObject({
-    input: { pattern: "Agent" },
-    output: { matches: ["src/agent/agent.ts"] },
-  })
+  expect(manager.getMessages("session-1")).toEqual([
+    completedAssistant([{
+      type: "toolCall",
+      toolCallId: "call-1",
+      toolName: "grep",
+      input: { pattern: "Agent" },
+    }]),
+    toolResultMessage("src/agent/agent.ts"),
+  ])
 })
 
-test("rejects incomplete assistants and invalid part ownership", () => {
+test("rejects incomplete assistants and invalid direct messages", () => {
   const manager = new InMemorySessionManager()
 
   expect(() => manager.appendMessage({
     ...completedAssistant([]),
-    info: {
-      id: "assistant-1",
-      sessionId: "session-1",
-      role: "assistant",
-      createdAt: 1,
-    },
+    stopReason: "pending",
   })).toThrow("Cannot persist an incomplete assistant message")
 
   expect(() => manager.appendMessage({
-    ...userMessage("Invalid"),
-    parts: [{
-      id: "part-1",
-      messageId: "other-message",
-      sessionId: "session-1",
-      createdAt: 1,
-      type: "text",
-      text: "Invalid",
-    }],
-  })).toThrow("belongs to another message")
+    ...toolResultMessage("Result"),
+    isError: "false",
+  } as unknown as TAgentMessage)).toThrow("Invalid tool result message")
 })
 
 test("resets only the selected session", () => {
@@ -102,40 +99,41 @@ test("resets only the selected session", () => {
 })
 
 function userMessage(
-  text: string,
+  content: string,
   sessionId = "session-1",
-  messageId = "message-1",
-): IBuliMessageWithParts {
+  id = "message-1",
+): IUserMessage {
   return {
-    info: {
-      id: messageId,
-      sessionId,
-      role: "user",
-      createdAt: 1,
-    },
-    parts: [{
-      id: `${messageId}-part`,
-      messageId,
-      sessionId,
-      createdAt: 1,
-      type: "text",
-      text,
-    }],
+    id,
+    sessionId,
+    role: "user",
+    content,
+    createdAt: 1,
   }
 }
 
 function completedAssistant(
-  parts: IBuliMessageWithParts["parts"],
-): IBuliMessageWithParts {
+  content: IAssistantMessage["content"],
+): IAssistantMessage {
   return {
-    info: {
-      id: "assistant-1",
-      sessionId: "session-1",
-      role: "assistant",
-      createdAt: 1,
-      completedAt: 2,
-      finish: "stop",
-    },
-    parts,
+    id: "assistant-1",
+    sessionId: "session-1",
+    role: "assistant",
+    content,
+    stopReason: "stop",
+    createdAt: 1,
+  }
+}
+
+function toolResultMessage(content: string): IToolResultMessage {
+  return {
+    id: "tool-result-1",
+    sessionId: "session-1",
+    role: "toolResult",
+    toolCallId: "call-1",
+    toolName: "grep",
+    content,
+    isError: false,
+    createdAt: 2,
   }
 }

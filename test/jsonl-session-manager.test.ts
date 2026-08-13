@@ -10,7 +10,7 @@ import { homedir, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
 import type { IAgentModelRequest } from "@/agent/agent-types"
-import type { IBuliMessageWithParts } from "@/domain"
+import type { IAssistantMessage, IUserMessage } from "@/domain"
 import { AgentSession } from "@/session/agent-session"
 import {
   defaultSessionFilePath,
@@ -34,13 +34,13 @@ test("persists only durable messages in the existing JSONL shape", async () => {
 
     const restored = new JsonlSessionManager({ filePath })
     const history = restored.getMessages("session-1")
-    expect(history.map((message) => message.info.role)).toEqual([
+    expect(history.map((message) => message.role)).toEqual([
       "user",
       "assistant",
     ])
-    expect(history[1]?.parts[0]).toMatchObject({
-      type: "text",
-      text: "Complete answer",
+    expect(history[1]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Complete answer" }],
     })
     expect(JSON.parse((await records(filePath))[1] ?? "null")).toEqual(
       assistantMessage("Complete answer", true),
@@ -62,8 +62,9 @@ test("keeps the latest message ID and repairs a truncated final append", async (
 
     const restored = new JsonlSessionManager({ filePath })
     expect(restored.getMessages("session-1")).toHaveLength(1)
-    expect(restored.getMessages("session-1")[0]?.parts[0]).toMatchObject({
-      text: "Replacement",
+    expect(restored.getMessages("session-1")[0]).toMatchObject({
+      role: "user",
+      content: "Replacement",
     })
 
     restored.appendMessage(assistantMessage("Recovered", true))
@@ -105,8 +106,9 @@ test("reset rewrites only the selected session", async () => {
     expect(manager.getMessages("session-2")).toHaveLength(1)
     const restored = new JsonlSessionManager({ filePath })
     expect(restored.getMessages("session-1")).toEqual([])
-    expect(restored.getMessages("session-2")[0]?.parts[0]).toMatchObject({
-      text: "Second",
+    expect(restored.getMessages("session-2")[0]).toMatchObject({
+      role: "user",
+      content: "Second",
     })
   } finally {
     await rm(directory, { recursive: true, force: true })
@@ -123,6 +125,7 @@ test("derives one stable global log path per canonical workspace", async () => {
     expect(firstPath).not.toBe(defaultSessionFilePath(second))
     expect(dirname(firstPath)).toBe(join(homedir(), ".buli", "sessions"))
     expect(firstPath).toMatch(/[a-f0-9]{64}\.jsonl$/)
+    expect(firstPath).not.toContain(".v2")
   } finally {
     await Promise.all([
       rm(first, { recursive: true, force: true }),
@@ -150,7 +153,7 @@ test("restores completed turns into the next Agent model request", async () => {
         async *stream(request) {
           requests.push({
             ...request,
-            history: structuredClone(request.history),
+            messages: structuredClone(request.messages),
             tools: structuredClone(request.tools),
           })
           yield { type: "finish", reason: "stop" }
@@ -160,16 +163,18 @@ test("restores completed turns into the next Agent model request", async () => {
 
     await session.prompt("New question")
 
-    expect(requests[0]?.history.map((message) => message.info.role)).toEqual([
+    expect(requests[0]?.messages.map((message) => message.role)).toEqual([
       "user",
       "assistant",
       "user",
     ])
-    expect(requests[0]?.history[0]?.parts[0]).toMatchObject({
-      text: "Earlier question",
+    expect(requests[0]?.messages[0]).toMatchObject({
+      role: "user",
+      content: "Earlier question",
     })
-    expect(requests[0]?.history[1]?.parts[0]).toMatchObject({
-      text: "Earlier answer",
+    expect(requests[0]?.messages[1]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Earlier answer" }],
     })
   } finally {
     await rm(directory, { recursive: true, force: true })
@@ -186,39 +191,26 @@ function userMessage(
   text: string,
   sessionId = "session-1",
   messageId = "user-1",
-): IBuliMessageWithParts {
+): IUserMessage {
   return {
-    info: { id: messageId, sessionId, role: "user", createdAt: 1 },
-    parts: [{
-      id: `${messageId}-part`,
-      messageId,
-      sessionId,
-      createdAt: 1,
-      type: "text",
-      text,
-    }],
+    id: messageId,
+    sessionId,
+    role: "user",
+    content: text,
+    createdAt: 1,
   }
 }
 
 function assistantMessage(
   text: string,
   completed = false,
-): IBuliMessageWithParts {
+): IAssistantMessage {
   return {
-    info: {
-      id: "assistant-1",
-      sessionId: "session-1",
-      role: "assistant",
-      createdAt: 2,
-      ...(completed ? { completedAt: 3, finish: "stop" } : {}),
-    },
-    parts: [{
-      id: "assistant-part-1",
-      messageId: "assistant-1",
-      sessionId: "session-1",
-      createdAt: 2,
-      type: "text",
-      text,
-    }],
+    id: "assistant-1",
+    sessionId: "session-1",
+    role: "assistant",
+    content: [{ type: "text", text }],
+    stopReason: completed ? "stop" : "pending",
+    createdAt: 2,
   }
 }

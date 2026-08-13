@@ -1,90 +1,77 @@
 import type { ReactNode } from "react"
+
 import type {
-  IBuliMessage,
-  IBuliMessageWithParts,
-  ITextPart,
-  IToolPart,
-  TPart,
-  TToolStatus,
+  IAssistantMessage,
+  IToolCallContent,
+  IToolResultMessage,
+  TAgentMessage,
 } from "@/domain"
 import { syntax, theme } from "@/tui/theme"
 
 const TOOL_LINE_MAX_CHARACTERS = 160
 
-const toolStatusLabels: Record<TToolStatus, string> = {
-  pending: "pending",
-  running: "running",
-  completed: "done",
-  error: "error",
-  cancelled: "cancelled",
-}
-
 interface ITranscriptProps {
-  messages: readonly IBuliMessageWithParts[]
+  readonly messages: readonly TAgentMessage[]
+  readonly streamingMessage?: IAssistantMessage
+  readonly pendingToolCallIds?: readonly string[]
 }
 
-interface IUserCardProps {
-  parts: readonly TPart[]
-}
-
-function UserCard(props: IUserCardProps): ReactNode {
-  const text = props.parts
-    .filter((part): part is ITextPart => part.type === "text")
-    .map((part) => part.text.trim())
-    .filter((partText) => partText.length > 0)
-    .join("\n\n")
-
-  return <text margin={1}>{text}</text>
-}
-interface IBuliCardProps {
-  parts: readonly TPart[]
-  error: IBuliMessage["error"]
-  complete: boolean
-}
-
-function BuliCard(props: IBuliCardProps): ReactNode {
+function AssistantCard(props: {
+  readonly message: IAssistantMessage
+  readonly streaming: boolean
+  readonly pendingToolCallIds: ReadonlySet<string>
+}): ReactNode {
   return (
     <box width="100%" flexDirection="column">
-      {props.parts.map((part) => {
-        if (part.type === "text") {
+      {props.message.content.map((content, index) => {
+        if (content.type === "text") {
           return <markdown
-            key={part.id}
+            key={`${props.message.id}-text-${index}`}
             fg={theme.text}
-            content={part.text}
+            content={content.text}
             syntaxStyle={syntax}
-            streaming={!props.complete}
+            streaming={props.streaming}
             conceal
           />
         }
 
-        if (part.type === "tool") {
-          return <ToolLine key={part.id} part={part} />
+        if (content.type === "toolCall") {
+          return <ToolCallLine
+            key={content.toolCallId}
+            call={content}
+            running={props.pendingToolCallIds.has(content.toolCallId)}
+          />
         }
 
-        // Reasoning remains in the session snapshot but is intentionally hidden.
         return null
       })}
-      {props.error
-        ? <text fg={theme.red}>{`${props.error.name}: ${props.error.message}`}</text>
+      {props.message.errorMessage
+        ? <text fg={theme.red}>{props.message.errorMessage}</text>
         : null}
     </box>
   )
 }
 
-function ToolLine(props: { part: IToolPart }): ReactNode {
-  const input = JSON.stringify(props.part.input)
-  const error = props.part.error ? `: ${props.part.error}` : ""
+function ToolCallLine(props: {
+  readonly call: IToolCallContent
+  readonly running: boolean
+}): ReactNode {
+  const status = props.running ? "running" : "call"
   const line = compactText(
-    `[${toolStatusLabels[props.part.status]}] ${props.part.tool} ${input}${error}`,
+    `[${status}] ${props.call.toolName} ${JSON.stringify(props.call.input)}`,
     TOOL_LINE_MAX_CHARACTERS,
   )
-  const color = props.part.status === "error" || props.part.status === "cancelled"
-    ? theme.red
-    : props.part.status === "running" || props.part.status === "pending"
-      ? theme.amber
-      : theme.textMuted
+  return <text fg={props.running ? theme.amber : theme.textMuted}>{line}</text>
+}
 
-  return <text fg={color} wrapMode="word">{line}</text>
+function ToolResultLine(props: { readonly message: IToolResultMessage }): ReactNode {
+  const status = props.message.isError ? "error" : "done"
+  const detail = props.message.isError ? `: ${props.message.content}` : ""
+  const line = compactText(
+    `[${status}] ${props.message.toolName}${detail}`,
+    TOOL_LINE_MAX_CHARACTERS,
+  )
+  return <text fg={props.message.isError ? theme.red : theme.textMuted}>{line}</text>
 }
 
 function compactText(value: string, maximumCharacters: number): string {
@@ -93,27 +80,35 @@ function compactText(value: string, maximumCharacters: number): string {
 }
 
 export function Transcript(props: ITranscriptProps): ReactNode {
-  console.count("Transcript")
-  if (props.messages.length === 0) {
-    return <text fg={theme.textMuted}>Start converstation</text>
+  if (props.messages.length === 0 && !props.streamingMessage) {
+    return <text fg={theme.textMuted}>Start conversation</text>
   }
 
+  const pendingToolCallIds = new Set(props.pendingToolCallIds ?? [])
   return (
     <box width="100%" flexDirection="column">
       {props.messages.map((message) => {
-        if (message.info.role === "user") {
-          return <UserCard key={message.info.id} parts={message.parts} />
+        switch (message.role) {
+          case "user":
+            return <text key={message.id} margin={1}>{message.content.trim()}</text>
+          case "assistant":
+            return <AssistantCard
+              key={message.id}
+              message={message}
+              streaming={false}
+              pendingToolCallIds={pendingToolCallIds}
+            />
+          case "toolResult":
+            return <ToolResultLine key={message.id} message={message} />
         }
-
-        return (
-          <BuliCard
-            key={message.info.id}
-            parts={message.parts}
-            error={message.info.error}
-            complete={message.info.completedAt !== undefined}
-          />
-        )
       })}
+      {props.streamingMessage
+        ? <AssistantCard
+            message={props.streamingMessage}
+            streaming
+            pendingToolCallIds={pendingToolCallIds}
+          />
+        : null}
     </box>
   )
 }

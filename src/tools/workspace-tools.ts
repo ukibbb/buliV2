@@ -2,7 +2,6 @@ import { realpath } from "node:fs/promises"
 import { isAbsolute, resolve, sep } from "node:path"
 
 import type { IAgentTool } from "@/agent/agent-types"
-import type { TJsonObject } from "@/domain"
 
 const MAX_TOOL_OUTPUT_CHARACTERS = 100_000
 
@@ -25,6 +24,8 @@ export function createWorkspaceTools(
         },
         execute: async (input, context) => {
             const path = requireString(input, "path")
+            // ?? How abort singal works overall and how in this contexT?
+            //
             context.signal.throwIfAborted()
             const file = await realpath(resolve(workspaceRoot, path))
 
@@ -32,6 +33,7 @@ export function createWorkspaceTools(
                 throw new Error("Path is outside the current workspace")
             }
 
+            // overall I can't return more than 100_000 chars
             const contents = await Bun.file(file).text()
             context.signal.throwIfAborted()
             return limitToolOutput(contents)
@@ -56,12 +58,14 @@ export function createWorkspaceTools(
             const pattern = requireString(input, "pattern")
             context.signal.throwIfAborted()
 
+            // ?? How this if statment works
             if (isAbsolute(pattern) || pattern.split(/[\\/]/).includes("..")) {
                 throw new Error("Glob pattern must stay inside the workspace")
             }
 
             const files: string[] = []
 
+            // how this works line by line ?
             for await (const file of new Bun.Glob(pattern).scan({
                 cwd: workspaceRoot,
                 onlyFiles: true,
@@ -83,6 +87,7 @@ export function createWorkspaceTools(
         },
     }
 
+    // ?? how this works line by line
     const grep: IAgentTool = {
         name: "grep",
         description: "Search workspace file contents using a regular expression.",
@@ -152,7 +157,7 @@ export function createWorkspaceTools(
     return [readFile, glob, grep]
 }
 
-function requireString(input: TJsonObject, key: string): string {
+function requireString(input: Record<string, unknown>, key: string): string {
     const value = input[key]
     if (typeof value !== "string") {
         throw new TypeError(`Tool input ${key} must be a string`)

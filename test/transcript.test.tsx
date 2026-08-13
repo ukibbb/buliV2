@@ -1,125 +1,134 @@
 import { expect, test } from "bun:test"
+import { CodeRenderable, type Renderable } from "@opentui/core"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
 
-import type { IBuliMessageWithParts } from "@/domain"
+import type { IAssistantMessage, TAgentMessage } from "@/domain"
 import { Transcript } from "@/tui/components/Transcript"
 
-test("renders user and assistant text while keeping reasoning hidden", async () => {
-  const messages: IBuliMessageWithParts[] = [
+function codeRenderables(root: Renderable): CodeRenderable[] {
+  return root.getChildren().flatMap((child) => [
+    ...(child instanceof CodeRenderable ? [child] : []),
+    ...codeRenderables(child),
+  ])
+}
+
+test("renders direct, streaming, and tool messages", async () => {
+  const messages: TAgentMessage[] = [
     {
-      info: {
-        id: "user-message",
-        sessionId: "default",
-        role: "user",
-        createdAt: 1,
-      },
-      parts: [
-        {
-          id: "user-part",
-          messageId: "user-message",
-          sessionId: "default",
-          createdAt: 1,
-          type: "text",
-          text: "  User prompt  ",
-        },
-      ],
+      id: "user-message",
+      sessionId: "default",
+      role: "user",
+      createdAt: 1,
+      content: "  User prompt  ",
     },
     {
-      info: {
-        id: "failed-assistant-message",
-        sessionId: "default",
-        role: "assistant",
-        createdAt: 4,
-        completedAt: 5,
-        finish: "error",
-        error: {
-          name: "TypeError",
-          message: "Invalid OpenAI authentication",
-        },
-      },
-      parts: [],
-    },
-    {
-      info: {
-        id: "assistant-message",
-        sessionId: "default",
-        role: "assistant",
-        createdAt: 2,
-        completedAt: 3,
-        finish: "stop",
-      },
-      parts: [
+      id: "assistant-message",
+      sessionId: "default",
+      role: "assistant",
+      createdAt: 2,
+      stopReason: "tool-use",
+      content: [
         {
-          id: "reasoning-part",
-          messageId: "assistant-message",
-          sessionId: "default",
-          createdAt: 2,
           type: "reasoning",
           text: "Hidden reasoning",
         },
         {
-          id: "completed-tool-part",
-          messageId: "assistant-message",
-          sessionId: "default",
-          createdAt: 2,
-          type: "tool",
-          callID: "call-grep",
-          tool: "grep",
-          status: "completed",
+          type: "toolCall",
+          toolCallId: "call-grep",
+          toolName: "grep",
           input: { pattern: "AgentSession" },
-          output: "src/session/agent-session.ts:28",
-          execution: "local",
-          startedAt: 2,
-          completedAt: 3,
         },
         {
-          id: "failed-tool-part",
-          messageId: "assistant-message",
-          sessionId: "default",
-          createdAt: 2,
-          type: "tool",
-          callID: "call-read",
-          tool: "read_file",
-          status: "error",
+          type: "toolCall",
+          toolCallId: "call-read",
+          toolName: "read_file",
           input: { path: "missing.ts" },
-          error: "File not found",
-          execution: "local",
-          startedAt: 2,
-          completedAt: 3,
         },
         {
-          id: "answer-part",
-          messageId: "assistant-message",
-          sessionId: "default",
-          createdAt: 2,
           type: "text",
           text: "Assistant answer",
         },
       ],
     },
+    {
+      id: "grep-result",
+      sessionId: "default",
+      role: "toolResult",
+      createdAt: 3,
+      toolCallId: "call-grep",
+      toolName: "grep",
+      content: "src/session/agent-session.ts:28",
+      isError: false,
+    },
+    {
+      id: "read-result",
+      sessionId: "default",
+      role: "toolResult",
+      createdAt: 4,
+      toolCallId: "call-read",
+      toolName: "read_file",
+      content: "File not found",
+      isError: true,
+    },
+    {
+      id: "failed-assistant-message",
+      sessionId: "default",
+      role: "assistant",
+      createdAt: 5,
+      content: [],
+      stopReason: "error",
+      errorMessage: "TypeError: Invalid OpenAI authentication",
+    },
   ]
-  const setup = await testRender(<Transcript messages={messages} />, {
-    width: 60,
-    height: 10,
+  const streamingMessage: IAssistantMessage = {
+    id: "streaming-assistant-message",
+    sessionId: "default",
+    role: "assistant",
+    createdAt: 6,
+    stopReason: "pending",
+    content: [
+      { type: "reasoning", text: "Streaming hidden reasoning" },
+      { type: "text", text: "Streaming answer" },
+      {
+        type: "toolCall",
+        toolCallId: "call-glob",
+        toolName: "glob",
+        input: { pattern: "**/*.ts" },
+      },
+    ],
+  }
+  const setup = await testRender(<Transcript
+    messages={messages}
+    streamingMessage={streamingMessage}
+    pendingToolCallIds={["call-glob"]}
+  />, {
+    width: 80,
+    height: 20,
   })
 
   try {
     await act(async () => {
       await setup.renderOnce()
+      await Promise.all(
+        codeRenderables(setup.renderer.root).map((renderable) =>
+          renderable.highlightingDone
+        ),
+      )
+      await setup.renderOnce()
     })
-    await setup.waitForVisualIdle()
-    await Bun.sleep(50)
-
     const frame = setup.captureCharFrame()
     expect(frame).toContain("User prompt")
     expect(frame).toContain("Assistant answer")
+    expect(frame).toContain("[call] grep")
     expect(frame).toContain("[done] grep")
-    expect(frame).toContain("AgentSession")
     expect(frame).toContain("[error] read_file")
     expect(frame).toContain("File not found")
+    expect(frame).toContain("Streaming answer")
+    expect(frame).toContain("[running] glob")
     expect(frame).toContain("TypeError: Invalid OpenAI authentication")
     expect(frame).not.toContain("Hidden reasoning")
+    expect(frame).not.toContain("Streaming hidden reasoning")
     expect(frame).not.toContain("src/session/agent-session.ts:28")
   } finally {
     act(() => {

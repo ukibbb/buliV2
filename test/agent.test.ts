@@ -21,11 +21,11 @@ test("Agent owns live state and awaits event listeners", async () => {
   })
   let stateObservedDuringMessageEnd = false
   agent.subscribe(async (event) => {
-    if (event.type !== "message_end" || event.message.info.role !== "assistant") {
+    if (event.type !== "message_end" || event.message.role !== "assistant") {
       return
     }
-    stateObservedDuringMessageEnd = agent.state.messages.at(-1)?.info.id
-      === event.message.info.id
+    stateObservedDuringMessageEnd = agent.state.messages.at(-1)?.id
+      === event.message.id
     await listenerReleased.promise
   })
 
@@ -39,7 +39,7 @@ test("Agent owns live state and awaits event listeners", async () => {
   await prompt
 
   expect(agent.state.isRunning).toBe(false)
-  expect(agent.state.messages.map((message) => message.info.role)).toEqual([
+  expect(agent.state.messages.map((message) => message.role)).toEqual([
     "user",
     "assistant",
   ])

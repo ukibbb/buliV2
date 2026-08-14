@@ -5,6 +5,7 @@ import {
 } from "@opentui/core"
 import { useRef } from "react"
 
+import { useBuliApplicationSnapshot } from "@/application-state"
 import {
     useBuliUiController,
     useBuliUiSnapshot,
@@ -22,6 +23,15 @@ const chatTextAreaKeybindings: KeyBinding[] = [
 export function Chat() {
     const controller = useBuliUiController()
     const ui = useBuliUiSnapshot()
+    const applicationSnapshot = useBuliApplicationSnapshot()
+    // Pobierz reaktywny globalny snapshot aplikacji.
+    const selectedModel = applicationSnapshot.models.find(
+        (model) => model.id === applicationSnapshot.selection.modelId,
+    )
+    // Znajdź informacje o wybranym modelu.
+    const selectedModelName = selectedModel?.name
+        ?? applicationSnapshot.selection.modelId
+    // Użyj nazwy modelu albo jego ID jako fallbacku.
     const textAreaRef = useRef<TextareaRenderable | null>(null)
 
     const clearInput = (): void => {
@@ -89,6 +99,33 @@ export function Chat() {
                         keyBindings: chatTextAreaKeybindings,
                     }}
                 />
+            </box>
+            <box
+                width="100%"
+                flexShrink={0}
+                flexDirection="column"
+                paddingLeft={1}
+                paddingBottom={1}
+            >
+                {/* Pokaż aktualny model jako stały wiersz statusu. */}
+                <text>
+                    <span fg={theme.textMuted}>
+                        {"model".padEnd(20)}
+                    </span>
+                    <span fg={theme.green}>
+                        {selectedModelName}
+                    </span>
+                </text>
+
+                {/* Pokaż effort używany przez następny prompt. */}
+                <text>
+                    <span fg={theme.textMuted}>
+                        {"reasoning".padEnd(20)}
+                    </span>
+                    <span fg={theme.amber}>
+                        {applicationSnapshot.selection.reasoningEffort}
+                    </span>
+                </text>
             </box>
             {menu ? (
                 <box

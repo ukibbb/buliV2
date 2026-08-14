@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test"
 
-import type { IBuliApplication, IBuliPromptInput } from "@/application"
+import type {
+  IBuliApplication,
+  IBuliApplicationSnapshot,
+  IBuliPromptInput,
+} from "@/application"
 import type { ISessionSnapshot } from "@/domain"
 import { BuliUiController } from "@/tui/ui-controller"
 
@@ -10,13 +14,34 @@ const SESSION_SNAPSHOT: ISessionSnapshot = {
   pendingToolCallIds: [],
 }
 
+const APPLICATION_SNAPSHOT: IBuliApplicationSnapshot = {
+  models: [{
+    id: "test",
+    name: "Test",
+    reasoningEfforts: ["medium"],
+  }],
+  selection: {
+    modelId: "test",
+    reasoningEffort: "medium",
+  },
+}
+
 function applicationSpy() {
   const prompts: IBuliPromptInput[] = []
   const cleared: string[] = []
   const aborted: string[] = []
+  const session = {
+    subscribe: () => () => undefined,
+    getSnapshot: () => SESSION_SNAPSHOT,
+  }
 
   const application: IBuliApplication = {
     workspaceRoot: "/workspace",
+    subscribe: () => () => undefined,
+    getSnapshot: () => APPLICATION_SNAPSHOT,
+    selectModel: () => undefined,
+    selectReasoningEffort: () => undefined,
+    createAgentSession: () => session,
     submitPrompt: async (prompt) => {
       prompts.push(prompt)
     },
@@ -26,10 +51,7 @@ function applicationSpy() {
     abort: (sessionId) => {
       aborted.push(sessionId)
     },
-    getAgentSession: () => ({
-      subscribe: () => () => undefined,
-      getSnapshot: () => SESSION_SNAPSHOT,
-    }),
+    getAgentSession: () => session,
   }
 
   return { application, prompts, cleared, aborted }

@@ -1,118 +1,156 @@
 import type {
-  IAssistantMessage,
-  IToolResultMessage,
-  TAgentMessage,
-  TAgentRunEndReason,
+    IAssistantMessage,
+    IToolResultMessage,
+    TAgentMessage,
+    TAgentRunEndReason,
 } from "@/domain"
 
+
+
+export type TReasoningEffort =
+    | "none"
+    | "minimal"
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh"
+    | "max"
+
+// ?? Co to jest tool descriptor moze byc IAgentToolDefinition?
+// To pozbawiony kodu wykonawczego opis narzędzia przekazywany modelowi: jego nazwa,
+// przeznaczenie i JSON Schema wejścia. `IAgentTool` rozszerza ten descriptor o
+// lokalną funkcję `execute`, której model nie dostaje. Nazwa `IAgentToolDefinition`
+// też byłaby poprawna, jeśli oznaczałaby w projekcie specyfikację dla modelu;
+// `Descriptor` wyraźniej podkreśla, że ten obiekt tylko opisuje implementację.
 export interface IAgentToolDescriptor {
-  readonly name: string
-  readonly description: string
-  readonly inputSchema: Record<string, unknown>
+    readonly name: string
+    readonly description: string
+    readonly inputSchema: Record<string, unknown>
 }
 
+// ?? co to jest ?
+// To dane pomocnicze dotyczące jednego wykonania narzędzia, przekazywane osobno od
+// `input` wygenerowanego przez model. `toolCallId` łączy wykonanie i jego wynik z
+// konkretnym tool callem, a `signal` pozwala narzędziu reagować na anulowanie całego
+// bieżącego runu. Pętla agenta tworzy ten obiekt tuż przed wywołaniem `execute`.
 export interface IAgentToolExecutionContext {
-  readonly toolCallId: string
-  readonly signal: AbortSignal
+    readonly toolCallId: string
+    readonly signal: AbortSignal
 }
 
 export interface IAgentTool extends IAgentToolDescriptor {
-  readonly execute: (
-    input: Record<string, unknown>,
-    context: IAgentToolExecutionContext,
-  ) => Promise<string>
+    readonly execute: (
+        input: Record<string, unknown>,
+        context: IAgentToolExecutionContext,
+    ) => Promise<string>
 }
 
+// ?? co to jest?
+// To niezależny od providera komplet danych dla jednego wywołania `model.stream`.
+// Jeden prompt może utworzyć kilka takich requestów, gdy model wywołuje narzędzia.
+// `sessionId` identyfikuje sesję, `systemPrompt` zawiera instrukcje, a `messages`
+// jest snapshotem pełnego kontekstu tej iteracji. `tools` zawiera tylko opisy
+// dostępnych narzędzi, `signal` służy do anulowania, a `reasoningEffort` wybiera
+// poziom rozumowania. `readonly` blokuje przypisanie w TypeScript, ale nie zamraża
+// obiektu w runtime ani nie zatrzymuje zmiany stanu `AbortSignal`.
 export interface IAgentModelRequest {
-  readonly sessionId: string
-  readonly systemPrompt: string
-  readonly messages: readonly TAgentMessage[]
-  readonly tools: readonly IAgentToolDescriptor[]
-  readonly signal: AbortSignal
+    readonly sessionId: string
+    readonly systemPrompt: string
+    readonly messages: readonly TAgentMessage[]
+    readonly tools: readonly IAgentToolDescriptor[]
+    readonly signal: AbortSignal
+    readonly reasoningEffort: TReasoningEffort
 }
 
 export type IAgentModelEvent =
-  | { readonly type: "text-start"; readonly id: string }
-  | { readonly type: "text-delta"; readonly id: string; readonly delta: string }
-  | { readonly type: "text-end"; readonly id: string }
-  | { readonly type: "reasoning-start"; readonly id: string }
-  | {
-      readonly type: "reasoning-delta"
-      readonly id: string
-      readonly delta: string
+    | { readonly type: "text-start"; readonly id: string }
+    | { readonly type: "text-delta"; readonly id: string; readonly delta: string }
+    | { readonly type: "text-end"; readonly id: string }
+    | { readonly type: "reasoning-start"; readonly id: string }
+    | {
+        readonly type: "reasoning-delta"
+        readonly id: string
+        readonly delta: string
     }
-  | { readonly type: "reasoning-end"; readonly id: string }
-  | {
-      readonly type: "tool-call"
-      readonly toolCallId: string
-      readonly toolName: string
-      readonly input: Record<string, unknown>
+    | { readonly type: "reasoning-end"; readonly id: string }
+    | {
+        readonly type: "tool-call"
+        readonly toolCallId: string
+        readonly toolName: string
+        readonly input: Record<string, unknown>
     }
-  | { readonly type: "finish"; readonly reason: string }
-  | { readonly type: "abort"; readonly reason?: string }
-  | { readonly type: "error"; readonly error: unknown }
+    | { readonly type: "finish"; readonly reason: string }
+    | { readonly type: "abort"; readonly reason?: string }
+    | { readonly type: "error"; readonly error: unknown }
 
 export interface IAgentModel {
-  readonly stream: (
-    request: IAgentModelRequest,
-  ) => AsyncIterable<IAgentModelEvent>
+    readonly stream: (
+        request: IAgentModelRequest,
+    ) => AsyncIterable<IAgentModelEvent>
 }
+
+export interface IAgentRunConfiguration {
+    readonly model: IAgentModel
+    readonly reasoningEffort: TReasoningEffort
+}
+
+export type TAgentRunConfigurationResolver = () => IAgentRunConfiguration
 
 export type { TAgentRunEndReason } from "@/domain"
 
 export type IAgentEvent =
-  | { readonly type: "agent_start" }
-  | {
-      readonly type: "agent_end"
-      readonly reason: TAgentRunEndReason
-      readonly messages: readonly TAgentMessage[]
+    | { readonly type: "agent_start" }
+    | {
+        readonly type: "agent_end"
+        readonly reason: TAgentRunEndReason
+        readonly messages: readonly TAgentMessage[]
     }
-  | { readonly type: "turn_start"; readonly index: number }
-  | {
-      readonly type: "turn_end"
-      readonly index: number
-      readonly message: IAssistantMessage
-      readonly toolResults: readonly IToolResultMessage[]
-      readonly willContinue: boolean
+    | { readonly type: "turn_start"; readonly index: number }
+    | {
+        readonly type: "turn_end"
+        readonly index: number
+        readonly message: IAssistantMessage
+        readonly toolResults: readonly IToolResultMessage[]
+        readonly willContinue: boolean
     }
-  | { readonly type: "message_start"; readonly message: TAgentMessage }
-  | {
-      readonly type: "message_update"
-      readonly message: IAssistantMessage
-      readonly modelEvent: IAgentModelEvent
+    | { readonly type: "message_start"; readonly message: TAgentMessage }
+    | {
+        readonly type: "message_update"
+        readonly message: IAssistantMessage
+        readonly modelEvent: IAgentModelEvent
     }
-  | { readonly type: "message_end"; readonly message: TAgentMessage }
-  | {
-      readonly type: "tool_execution_start"
-      readonly toolCallId: string
-      readonly toolName: string
-      readonly input: Record<string, unknown>
+    | { readonly type: "message_end"; readonly message: TAgentMessage }
+    | {
+        readonly type: "tool_execution_start"
+        readonly toolCallId: string
+        readonly toolName: string
+        readonly input: Record<string, unknown>
     }
-  | {
-      readonly type: "tool_execution_end"
-      readonly toolCallId: string
-      readonly toolName: string
-      readonly result: IToolResultMessage
+    | {
+        readonly type: "tool_execution_end"
+        readonly toolCallId: string
+        readonly toolName: string
+        readonly result: IToolResultMessage
     }
 
 export interface IAgentState {
-  readonly sessionId: string
-  readonly systemPrompt: string
-  readonly tools: readonly IAgentTool[]
-  readonly messages: readonly TAgentMessage[]
-  readonly isRunning: boolean
-  readonly streamingMessage: IAssistantMessage | undefined
-  readonly pendingToolCallIds: ReadonlySet<string>
-  readonly errorMessage: string | undefined
-  readonly lastRunReason: TAgentRunEndReason | undefined
+    readonly sessionId: string
+    readonly systemPrompt: string
+    readonly tools: readonly IAgentTool[]
+    readonly messages: readonly TAgentMessage[]
+    readonly isRunning: boolean
+    readonly streamingMessage: IAssistantMessage | undefined
+    readonly pendingToolCallIds: ReadonlySet<string>
+    readonly errorMessage: string | undefined
+    readonly lastRunReason: TAgentRunEndReason | undefined
 }
 
 export type TAgentEventListener = (
-  event: IAgentEvent,
-  signal: AbortSignal,
+    event: IAgentEvent,
+    signal: AbortSignal,
 ) => void | Promise<void>
 
 export interface IAgentLoopResult {
-  readonly reason: TAgentRunEndReason
-  readonly messages: readonly TAgentMessage[]
+    readonly reason: TAgentRunEndReason
+    readonly messages: readonly TAgentMessage[]
 }

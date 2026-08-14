@@ -15,10 +15,28 @@ const model: IAgentModel = {
 function runtimeWith(modelOverride: IAgentModel = model): BuliApplicationRuntime {
   return new BuliApplicationRuntime({
     manager: new InMemorySessionManager(),
-    model: modelOverride,
-    tools: [],
-    systemPrompt: "System",
+    models: [{
+      id: "test",
+      name: "Test",
+      model: modelOverride,
+      reasoningEfforts: ["medium"],
+    }],
+    selection: {
+      modelId: "test",
+      reasoningEffort: "medium",
+    },
     workspaceRoot: WORKSPACE_ROOT,
+  })
+}
+
+function createSession(
+  runtime: BuliApplicationRuntime,
+  sessionId = "session-1",
+) {
+  return runtime.createAgentSession({
+    sessionId,
+    systemPrompt: "System",
+    tools: [],
   })
 }
 
@@ -35,7 +53,7 @@ test("application runtime submits prompts into its session view", async () => {
       },
   })
   const input: IBuliPromptInput = { sessionId: "session-1", text: "Hello" }
-  const view = runtime.getAgentSession("session-1")
+  const view = createSession(runtime)
   const initial = view.getSnapshot()
 
   await runtime.submitPrompt(input)
@@ -54,22 +72,138 @@ test("application runtime submits prompts into its session view", async () => {
 
 test("application runtime ignores blank prompts", async () => {
   const runtime = runtimeWith()
+  const view = createSession(runtime)
 
   await runtime.submitPrompt({ sessionId: "session-1", text: "   " })
 
-  expect(runtime.getAgentSession("session-1").getSnapshot().messages).toEqual([])
+  expect(view.getSnapshot().messages).toEqual([])
   runtime.dispose()
 })
 
 test("application runtime returns one stable view per session", () => {
   const runtime = runtimeWith()
 
-  const first = runtime.getAgentSession("session-1")
+  const first = createSession(runtime)
   const second = runtime.getAgentSession("session-1")
-  const other = runtime.getAgentSession("session-2")
+  const other = createSession(runtime, "session-2")
 
   expect(second).toBe(first)
   expect(other).not.toBe(first)
+
+  runtime.dispose()
+})
+
+test("application runtime applies global selection to the next prompt", async () => {
+  const runs: string[] = []
+  const runtime = new BuliApplicationRuntime({
+    workspaceRoot: WORKSPACE_ROOT,
+    manager: new InMemorySessionManager(),
+    models: [
+      {
+        id: "first",
+        name: "First",
+        reasoningEfforts: ["low", "medium"],
+        model: {
+          async *stream(request) {
+            runs.push(`first:${request.reasoningEffort}`)
+            yield { type: "finish", reason: "stop" }
+          },
+        },
+      },
+      {
+        id: "second",
+        name: "Second",
+        reasoningEfforts: ["medium", "high"],
+        model: {
+          async *stream(request) {
+            runs.push(`second:${request.reasoningEffort}`)
+            yield { type: "finish", reason: "stop" }
+          },
+        },
+      },
+    ],
+    selection: {
+      modelId: "first",
+      reasoningEffort: "medium",
+    },
+  })
+  createSession(runtime)
+  const initialSnapshot = runtime.getSnapshot()
+  let notifications = 0
+  const unsubscribe = runtime.subscribe(() => {
+    notifications += 1
+  })
+
+  await runtime.submitPrompt({ sessionId: "session-1", text: "First" })
+  runtime.selectModel("second")
+  const modelSnapshot = runtime.getSnapshot()
+  await runtime.submitPrompt({ sessionId: "session-1", text: "Second" })
+  runtime.selectReasoningEffort("high")
+  await runtime.submitPrompt({ sessionId: "session-1", text: "Third" })
+
+  expect(runs).toEqual([
+    "first:medium",
+    "second:medium",
+    "second:high",
+  ])
+  expect(modelSnapshot).not.toBe(initialSnapshot)
+  expect(modelSnapshot.selection).toEqual({
+    modelId: "second",
+    reasoningEffort: "medium",
+  })
+  expect(runtime.getSnapshot().selection).toEqual({
+    modelId: "second",
+    reasoningEffort: "high",
+  })
+  expect(notifications).toBe(2)
+  expect(Object.isFrozen(runtime.getSnapshot())).toBe(true)
+  expect(Object.isFrozen(runtime.getSnapshot().models)).toBe(true)
+  expect(Object.isFrozen(runtime.getSnapshot().selection)).toBe(true)
+
+  unsubscribe()
+  runtime.dispose()
+})
+
+test("application runtime rejects invalid selections atomically", () => {
+  const runtime = runtimeWith()
+  const snapshot = runtime.getSnapshot()
+  let notifications = 0
+  runtime.subscribe(() => {
+    notifications += 1
+  })
+
+  runtime.selectModel("test")
+  runtime.selectReasoningEffort("medium")
+
+  expect(() => runtime.selectModel("missing")).toThrow(
+    "Unknown model: missing",
+  )
+  expect(() => runtime.selectReasoningEffort("high")).toThrow(
+    "Unsupported reasoning effort: high",
+  )
+  expect(runtime.getSnapshot()).toBe(snapshot)
+  expect(notifications).toBe(0)
+
+  runtime.dispose()
+})
+
+test("application runtime creates an explicit session once", () => {
+  const runtime = runtimeWith()
+
+  const session = runtime.createAgentSession({
+    sessionId: "session-1",
+    systemPrompt: "Session system prompt",
+    tools: [],
+  })
+
+  expect(runtime.getAgentSession("session-1")).toBe(session)
+  expect(() =>
+    runtime.createAgentSession({
+      sessionId: "session-1",
+      systemPrompt: "Different prompt",
+      tools: [],
+    })
+  ).toThrow("Agent session already exists: session-1")
 
   runtime.dispose()
 })
@@ -93,7 +227,7 @@ test("clears sessions explicitly and treats slash input as prompts", async () =>
         yield { type: "finish", reason: "stop" }
       },
   })
-  const view = runtime.getAgentSession("session-1")
+  const view = createSession(runtime)
 
   await runtime.submitPrompt({
     sessionId: "session-1",

@@ -7,7 +7,7 @@ import { BuliRuntimeProvider } from "@/application-state"
 import { InMemorySessionManager } from "@/session/session-manager"
 
 test("renders provider children without creating root-level text", async () => {
-  const runtime = await createBuliApplication({
+  const { runtime } = await createBuliApplication({
     signal: new AbortController().signal,
     manager: new InMemorySessionManager(),
     model: { async *stream() {} },

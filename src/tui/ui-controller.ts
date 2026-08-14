@@ -1,7 +1,9 @@
 import type {
     IBuliApplication,
+    IBuliModelInfo,
     ISnapshotSource,
 } from "@/application"
+import type { TReasoningEffort } from "@/agent/agent-types"
 
 export interface IBuliCommandInfo {
     readonly name: string
@@ -24,6 +26,33 @@ export interface IBuliCommandMenuSnapshot {
     readonly items: readonly IBuliCommandInfo[]
     readonly selectedIndex: number
 }
+
+interface IBuliMenuBase {
+    // store index of currently highlighted item
+    readonly selectedIndex: number
+    // store the last selection error, or null when there is no error
+    readonly errorMessage: string | null
+}
+
+export type TBuliMenuSnapshot =
+    | (IBuliMenuBase & {
+        // mark this menu as a command list
+        readonly mode: "commands"
+        // store commands available to the user
+        readonly items: readonly IBuliCommandInfo[]
+    })
+    | (IBuliMenuBase & {
+        // mark this menu as the model picker
+        readonly mode: "models"
+        // store public model information without executable adapters
+        readonly items: readonly IBuliModelInfo[]
+    })
+    | (IBuliMenuBase & {
+        // mark this menu as reasoning effort picker
+        readonly mode: "reasoning"
+        // Store efforts supported by the currently selected model
+        readonly items: readonly TReasoningEffort[]
+    })
 
 export interface IBuliUiSnapshot {
     readonly commandMenu: IBuliCommandMenuSnapshot | null
@@ -50,7 +79,7 @@ export const BULI_COMMANDS = [
 ] satisfies readonly IBuliCommand[]
 
 export class BuliUiController
-implements ISnapshotSource<IBuliUiSnapshot> {
+    implements ISnapshotSource<IBuliUiSnapshot> {
     readonly sessionId: string
     readonly workspaceRoot: string
     readonly commands: readonly IBuliCommandInfo[] = BULI_COMMANDS.map(

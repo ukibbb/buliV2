@@ -49,6 +49,7 @@ test("emits an explicit lifecycle for a text response", async () => {
     messages: [],
     prompt: userMessage("Question"),
     model,
+    reasoningEffort: "medium",
     tools: [],
     signal: new AbortController().signal,
     emit: (event) => {
@@ -133,6 +134,7 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
     messages: [],
     prompt: userMessage("Read"),
     model,
+    reasoningEffort: "medium",
     tools: [readFileTool],
     signal: new AbortController().signal,
     emit: (event) => {
@@ -261,6 +263,7 @@ test("turns an unknown local tool into a model-visible error", async () => {
     messages: [],
     prompt: userMessage("Run"),
     model,
+    reasoningEffort: "medium",
     tools: [],
     signal: new AbortController().signal,
     emit: () => undefined,
@@ -303,6 +306,7 @@ test("gives abort precedence over a racing provider finish", async () => {
     messages: [],
     prompt: userMessage("Question"),
     model,
+    reasoningEffort: "medium",
     tools: [],
     signal: controller.signal,
     emit: () => undefined,

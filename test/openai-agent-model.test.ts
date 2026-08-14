@@ -70,7 +70,10 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
     sessionId: "session-1",
     manager,
     systemPrompt: systemPrompt(WORKSPACE_ROOT),
-    model,
+    resolveRunConfiguration: () => ({
+      model,
+      reasoningEffort: "medium",
+    }),
     tools: createWorkspaceTools(WORKSPACE_ROOT),
   })
 
@@ -91,6 +94,7 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
   expect(body.model).toBe("gpt-5.6-sol")
   expect(body.store).toBe(false)
   expect(body.stream).toBe(true)
+  expect(body.reasoning).toMatchObject({ effort: "medium" })
   expect(body.instructions).toContain("pair programming")
   expect(body.instructions).toContain(
     `Aktualny katalog roboczy i root workspace: ${WORKSPACE_ROOT}.`,
@@ -224,8 +228,11 @@ test("replays a local tool failure into the next OAuth iteration", async () => {
     sessionId: "session-1",
     manager,
     systemPrompt: systemPrompt(WORKSPACE_ROOT),
-    model: new OpenAiAgentModel({
-      auth,
+    resolveRunConfiguration: () => ({
+      model: new OpenAiAgentModel({
+        auth,
+      }),
+      reasoningEffort: "medium",
     }),
     tools: createWorkspaceTools(WORKSPACE_ROOT),
   })
@@ -405,6 +412,7 @@ test("forwards cancellation to the OpenAI request", async () => {
       systemPrompt: systemPrompt(WORKSPACE_ROOT),
       messages: [userMessage("Wait")],
       tools: [],
+      reasoningEffort: "medium",
       signal: controller.signal,
     })) {
       events.push(event)
@@ -587,6 +595,7 @@ async function collectEvents(
     systemPrompt: "System",
     messages,
     tools,
+    reasoningEffort: "medium",
     signal: new AbortController().signal,
   })) {
     events.push(event)

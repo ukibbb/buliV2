@@ -25,6 +25,16 @@ export function createWorkspaceTools(
         execute: async (input, context) => {
             const path = requireString(input, "path")
             // ?? How abort singal works overall and how in this contexT?
+            // `AbortController` anuluje operację, a odbiorcy dostają jego
+            // `AbortSignal`. Sam sygnał nie zatrzymuje dowolnego kodu automatycznie:
+            // kod musi go sprawdzać albo przekazać do API, które obsługuje anulowanie.
+            // Tutaj jest to sygnał bieżącego uruchomienia Agenta, przekazany do
+            // każdego narzędzia. `throwIfAborted()` nic nie robi przed anulowaniem,
+            // a po nim rzuca `signal.reason`, więc ten `async execute` odrzuca Promise.
+            // Pierwsze sprawdzenie nie pozwala zacząć pracy po wcześniejszym abort.
+            // `realpath` i `Bun.file(...).text()` nie dostają tutaj sygnału, więc nie
+            // zostaną przerwane w trakcie; ostatnie sprawdzenie tylko nie pozwoli
+            // zwrócić wyniku po anulowaniu. Brakuje checkpointu pomiędzy tymi awaitami.
             //
             context.signal.throwIfAborted()
             const file = await realpath(resolve(workspaceRoot, path))
@@ -59,6 +69,11 @@ export function createWorkspaceTools(
             context.signal.throwIfAborted()
 
             // ?? How this if statment works
+            // `isAbsolute(pattern)` odrzuca ścieżkę absolutną. Operator `||` działa
+            // short-circuit: jeśli lewy warunek jest prawdziwy, prawy nie jest liczony.
+            // W przeciwnym razie `split(/[\\/]/)` dzieli wzorzec po `\` albo `/`,
+            // a `includes("..")` wykrywa dokładny segment przejścia do katalogu rodzica.
+            // Jeśli wystąpi którykolwiek przypadek, `throw` kończy wykonanie narzędzia.
             if (isAbsolute(pattern) || pattern.split(/[\\/]/).includes("..")) {
                 throw new Error("Glob pattern must stay inside the workspace")
             }
@@ -66,6 +81,17 @@ export function createWorkspaceTools(
             const files: string[] = []
 
             // how this works line by line ?
+            // `new Bun.Glob(pattern)` kompiluje wzorzec, a `scan` zwraca asynchroniczny
+            // iterator znalezionych ścieżek. `cwd` ustawia katalog startowy,
+            // `onlyFiles` pomija katalogi, `dot` pomija ukryte nazwy, a
+            // `followSymlinks` zabrania schodzenia do katalogów przez symlinki.
+            // `for await` pobiera kolejne względne ścieżki bez ładowania całej listy.
+            // Przy każdym wyniku sprawdzamy abort, dzielimy ścieżkę na segmenty
+            // i przez `continue` pomijamy `.git` oraz `node_modules`.
+            // Pozostałe pliki trafiają do tablicy; `break` zatrzymuje skan po 100.
+            // Końcowy checkpoint wykrywa abort także po zakończeniu lub pustym skanie.
+            // `join("\n")` zwraca po jednej ścieżce na linię, `||` daje komunikat dla
+            // pustej tablicy, a `limitToolOutput` pilnuje limitu długości odpowiedzi.
             for await (const file of new Bun.Glob(pattern).scan({
                 cwd: workspaceRoot,
                 onlyFiles: true,
@@ -88,6 +114,23 @@ export function createWorkspaceTools(
     }
 
     // ?? how this works line by line
+    // To definicja narzędzia `grep`: nazwa i opis są widoczne dla modelu, a
+    // `inputSchema` deklaruje obiekt z wymaganym, niepustym stringiem `pattern`.
+    // `execute` pobiera ten argument, sprawdza jego typ, abort i pusty tekst.
+    // `Bun.spawn` uruchamia `rg` bez powłoki, więc każdy element tablicy jest osobnym
+    // argumentem. `--no-config` ignoruje konfigurację użytkownika, `--line-number`
+    // dodaje numery linii, `--no-heading` usuwa nagłówki plików, a `--color=never`
+    // wyłącza kody kolorów. Dwa `--glob=!...` wykluczają `.git` i `node_modules`.
+    // `--` kończy listę opcji, dzięki czemu wzorzec zaczynający się od `-` nie jest
+    // flagą; po nim `pattern` jest regexem ripgrep, a `.` oznacza cały workspace.
+    // `cwd` ustawia katalog procesu, stdin jest zamknięte, a stdout i stderr trafiają
+    // do potoków. `AbortSignal.any` anuluje proces po abort bieżącego runu albo po 10 s.
+    // `Promise.all` równolegle opróżnia oba potoki i czeka na kod zakończenia procesu.
+    // Dla ripgrep kod 1 oznacza brak dopasowań, 0 sukces, a pozostałe kody błąd.
+    // Udany stdout jest dzielony na linie i obcinany do 100; jeśli wyników było więcej,
+    // dodawany jest marker. Na końcu `limitToolOutput` stosuje limit znaków.
+    // Ograniczenie: stdout i stderr są w całości buforowane przed obcięciem, a timeout
+    // może zostać pokazany jako ogólny błąd procesu zamiast czytelnego `TimeoutError`.
     const grep: IAgentTool = {
         name: "grep",
         description: "Search workspace file contents using a regular expression.",

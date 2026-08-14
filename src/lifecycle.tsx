@@ -378,66 +378,66 @@
 
 import { useEffect, useState, type ReactNode } from "react"
 
-import type { BuliApplicationRuntime } from "@/application"
+import type { BuliApplicationRuntime, IBuliApplicationStartup } from "@/application"
 import { BuliRuntimeProvider } from "@/application-state"
 import { BuliTui } from "@/tui/Buli"
 import { BuliUiControllerProvider } from "@/tui/ui-controller-state"
 import { BuliUiController } from "@/tui/ui-controller"
 
-const DEFAULT_SESSION_ID = "default"
 
 type TBuliLifecycleState =
-  | { type: "startup" }
-  | {
-      type: "ready"
-      runtime: BuliApplicationRuntime
-      uiController: BuliUiController
+    | { type: "startup" }
+    | {
+        type: "ready"
+        runtime: BuliApplicationRuntime
+        uiController: BuliUiController
     }
-  | { type: "error" }
+    | { type: "error" }
 
 // Decides which terminal screen to show while the application starts and run
 interface IBuliApplicationLifecycleProps {
-  runtimeTask: Promise<BuliApplicationRuntime>
+    runtimeTask: Promise<IBuliApplicationStartup>
 }
 
 /** Presents startup state; bootstrap remains responsible for owned resources. */
 export function BuliApplicationLifecycle(
-  props: IBuliApplicationLifecycleProps,
+    props: IBuliApplicationLifecycleProps,
 ): ReactNode {
-  const [state, setState] = useState<TBuliLifecycleState>({ type: "startup" })
+    const [state, setState] = useState<TBuliLifecycleState>({ type: "startup" })
 
-  useEffect(() => {
-    let mounted = true
+    useEffect(() => {
+        let mounted = true
 
-    void props.runtimeTask.then(
-      (runtime) => {
-        if (!mounted) return
-        setState({
-          type: "ready",
-          runtime,
-          uiController: new BuliUiController({
-            application: runtime,
-            sessionId: DEFAULT_SESSION_ID,
-          }),
-        })
-      },
-      () => {
-        if (mounted) setState({ type: "error" })
-      },
+        void props.runtimeTask.then(
+            (startup: IBuliApplicationStartup) => {
+                const { runtime, sessionId } = startup
+                if (!mounted) return
+                setState({
+                    type: "ready",
+                    runtime,
+                    uiController: new BuliUiController({
+                        application: runtime,
+                        sessionId,
+                    }),
+                })
+            },
+            () => {
+                if (mounted) setState({ type: "error" })
+            },
+        )
+
+        return () => {
+            mounted = false
+        }
+    }, [props.runtimeTask])
+
+    if (state.type !== "ready") return null
+
+    return (
+        <BuliRuntimeProvider runtime={state.runtime}>
+            <BuliUiControllerProvider controller={state.uiController}>
+                <BuliTui />
+            </BuliUiControllerProvider>
+        </BuliRuntimeProvider>
     )
-
-    return () => {
-      mounted = false
-    }
-  }, [props.runtimeTask])
-
-  if (state.type !== "ready") return null
-
-  return (
-    <BuliRuntimeProvider runtime={state.runtime}>
-      <BuliUiControllerProvider controller={state.uiController}>
-        <BuliTui />
-      </BuliUiControllerProvider>
-    </BuliRuntimeProvider>
-  )
 }

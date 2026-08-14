@@ -16,7 +16,10 @@ test("Agent owns live state and awaits event listeners", async () => {
   const agent = new Agent({
     sessionId: "session-1",
     systemPrompt: "System",
-    model,
+    resolveRunConfiguration: () => ({
+      model,
+      reasoningEffort: "medium",
+    }),
     tools: [],
   })
   let stateObservedDuringMessageEnd = false
@@ -60,7 +63,10 @@ test("Agent rejects overlap, aborts the active run, and can clear when idle", as
   const agent = new Agent({
     sessionId: "session-1",
     systemPrompt: "System",
-    model,
+    resolveRunConfiguration: () => ({
+      model,
+      reasoningEffort: "medium",
+    }),
     tools: [],
   })
   const first = agent.prompt("First")

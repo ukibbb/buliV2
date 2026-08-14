@@ -50,6 +50,41 @@ test("persists only durable messages in the existing JSONL shape", async () => {
   }
 })
 
+test("does not persist a session until its first non-blank prompt", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-"))
+  const filePath = join(directory, "sessions.jsonl")
+
+  try {
+    const session = new AgentSession({
+      sessionId: "new-session",
+      manager: new JsonlSessionManager({ filePath }),
+      systemPrompt: "System",
+      tools: [],
+      resolveRunConfiguration: () => ({
+        model: {
+          async *stream() {
+            yield { type: "finish", reason: "stop" }
+          },
+        },
+        reasoningEffort: "medium",
+      }),
+    })
+
+    expect(await Bun.file(filePath).exists()).toBe(false)
+
+    await session.prompt("   ")
+    expect(await Bun.file(filePath).exists()).toBe(false)
+
+    await session.prompt("Hello")
+    expect(await Bun.file(filePath).exists()).toBe(true)
+    expect(await records(filePath)).toHaveLength(2)
+
+    session.dispose()
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test("keeps the latest message ID and repairs a truncated final append", async () => {
   const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-"))
   const filePath = join(directory, "sessions.jsonl")
@@ -149,16 +184,19 @@ test("restores completed turns into the next Agent model request", async () => {
       manager: new JsonlSessionManager({ filePath }),
       systemPrompt: "System",
       tools: [],
-      model: {
-        async *stream(request) {
-          requests.push({
-            ...request,
-            messages: structuredClone(request.messages),
-            tools: structuredClone(request.tools),
-          })
-          yield { type: "finish", reason: "stop" }
+      resolveRunConfiguration: () => ({
+        model: {
+          async *stream(request) {
+            requests.push({
+              ...request,
+              messages: structuredClone(request.messages),
+              tools: structuredClone(request.tools),
+            })
+            yield { type: "finish", reason: "stop" }
+          },
         },
-      },
+        reasoningEffort: "medium",
+      }),
     })
 
     await session.prompt("New question")

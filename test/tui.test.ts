@@ -7,6 +7,7 @@ import {
   BuliApplicationRuntime,
   createBuliApplication,
   type IBuliApplication,
+  type IBuliApplicationSnapshot,
 } from "@/application"
 import { BuliRuntimeProvider } from "@/application-state"
 import type { IAgentModel } from "@/agent/agent-types"
@@ -18,6 +19,18 @@ import { BuliUiControllerProvider } from "@/tui/ui-controller-state"
 
 const WORKSPACE_ROOT = "/workspace"
 
+const APPLICATION_SNAPSHOT: IBuliApplicationSnapshot = {
+  models: [{
+    id: "test",
+    name: "Test",
+    reasoningEfforts: ["medium"],
+  }],
+  selection: {
+    modelId: "test",
+    reasoningEffort: "medium",
+  },
+}
+
 function codeRenderables(root: Renderable): CodeRenderable[] {
   return root.getChildren().flatMap((child) => [
     ...(child instanceof CodeRenderable ? [child] : []),
@@ -25,10 +38,10 @@ function codeRenderables(root: Renderable): CodeRenderable[] {
   ])
 }
 
-function buliElement(runtime: IBuliApplication) {
+function buliElement(runtime: IBuliApplication, sessionId = "default") {
   const controller = new BuliUiController({
     application: runtime,
-    sessionId: "default",
+    sessionId,
   })
 
   return createElement(BuliRuntimeProvider, {
@@ -41,13 +54,16 @@ function buliElement(runtime: IBuliApplication) {
 }
 
 test("provides the runtime above Buli", async () => {
-  const runtime = await createBuliApplication({
+  const { runtime, sessionId } = await createBuliApplication({
     signal: new AbortController().signal,
     manager: new InMemorySessionManager(),
     model: { async *stream() {} },
     tools: [],
   })
-  const setup = await testRender(buliElement(runtime), { width: 80, height: 24 })
+  const setup = await testRender(
+    buliElement(runtime, sessionId),
+    { width: 80, height: 24 },
+  )
 
   try {
     await act(async () => {
@@ -78,6 +94,11 @@ test("Escape aborts the default session while chat input is focused", async () =
   }
   const runtime: IBuliApplication = {
     workspaceRoot: WORKSPACE_ROOT,
+    subscribe: () => () => undefined,
+    getSnapshot: () => APPLICATION_SNAPSHOT,
+    selectModel: () => undefined,
+    selectReasoningEffort: () => undefined,
+    createAgentSession: () => session,
     submitPrompt: async () => undefined,
     clearSession: () => undefined,
     abort: (sessionId) => aborted.push(sessionId),
@@ -110,13 +131,25 @@ test("shows slash commands and executes the selected clear command", async () =>
   const runtime = new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,
     manager: new InMemorySessionManager(),
-    model: {
-      async *stream() {
-        yield { type: "finish", reason: "stop" }
+    models: [{
+      id: "test",
+      name: "Test",
+      model: {
+        async *stream() {
+          yield { type: "finish", reason: "stop" }
+        },
       },
+      reasoningEfforts: ["medium"],
+    }],
+    selection: {
+      modelId: "test",
+      reasoningEffort: "medium",
     },
-    tools: [],
+  })
+  runtime.createAgentSession({
+    sessionId: "default",
     systemPrompt: "System",
+    tools: [],
   })
   await runtime.submitPrompt({ sessionId: "default", text: "Old prompt" })
   const setup = await testRender(buliElement(runtime), { width: 80, height: 24 })
@@ -162,9 +195,21 @@ test("renders a submitted prompt and streamed response", async () => {
   const runtime = new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,
     manager: new InMemorySessionManager(),
-    model,
-    tools: [],
+    models: [{
+      id: "test",
+      name: "Test",
+      model,
+      reasoningEfforts: ["medium"],
+    }],
+    selection: {
+      modelId: "test",
+      reasoningEffort: "medium",
+    },
+  })
+  runtime.createAgentSession({
+    sessionId: "default",
     systemPrompt: "System",
+    tools: [],
   })
   const setup = await testRender(buliElement(runtime), { width: 80, height: 24 })
 
@@ -184,6 +229,10 @@ test("renders a submitted prompt and streamed response", async () => {
     const frame = setup.captureCharFrame()
     expect(frame).toContain("Rendered prompt")
     expect(frame).toContain("Rendered response")
+    expect(frame).toContain("model")
+    expect(frame).toContain("Test")
+    expect(frame).toContain("reasoning")
+    expect(frame).toContain("medium")
   } finally {
     runtime.dispose()
     act(() => {

@@ -22,7 +22,10 @@ test("AgentSession restores history, persists completion barriers, and publishes
     sessionId: "session-1",
     manager,
     systemPrompt: "System",
-    model,
+    resolveRunConfiguration: () => ({
+      model,
+      reasoningEffort: "medium",
+    }),
     tools: [],
   })
   const initial = session.getSnapshot()
@@ -54,7 +57,10 @@ test("AgentSession clear removes one durable session without detaching subscribe
     sessionId: "session-1",
     manager,
     systemPrompt: "System",
-    model: { async *stream() {} },
+    resolveRunConfiguration: () => ({
+      model: { async *stream() {} },
+      reasoningEffort: "medium",
+    }),
     tools: [],
   })
   let notifications = 0

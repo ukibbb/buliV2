@@ -8,14 +8,14 @@ export interface IBuliKey {
     readonly hyper?: boolean
 }
 
-export type TBuliKeyboardScope = "global" | "command-menu"
+export type TBuliKeyboardScope = "global" | "menu"
 
 export type TBuliKeyboardAction =
     | "cancel"
     | "console.toggle"
-    | "command.previous"
-    | "command.next"
-    | "command.execute"
+    | "menu.previous"
+    | "menu.next"
+    | "menu.activate"
 
 interface IBuliKeyboardShortcut {
     readonly scope: TBuliKeyboardScope
@@ -26,11 +26,11 @@ interface IBuliKeyboardShortcut {
 const SHORTCUTS: readonly IBuliKeyboardShortcut[] = [
     { scope: "global", key: { name: "escape" }, action: "cancel" },
     { scope: "global", key: { name: "d", ctrl: true }, action: "console.toggle" },
-    { scope: "command-menu", key: { name: "up" }, action: "command.previous" },
-    { scope: "command-menu", key: { name: "down" }, action: "command.next" },
-    { scope: "command-menu", key: { name: "return" }, action: "command.execute" },
-    { scope: "command-menu", key: { name: "enter" }, action: "command.execute" },
-    { scope: "command-menu", key: { name: "linefeed" }, action: "command.execute" },
+    { scope: "menu", key: { name: "up" }, action: "menu.previous" },
+    { scope: "menu", key: { name: "down" }, action: "menu.next" },
+    { scope: "menu", key: { name: "return" }, action: "menu.activate" },
+    { scope: "menu", key: { name: "enter" }, action: "menu.activate" },
+    { scope: "menu", key: { name: "linefeed" }, action: "menu.activate" },
 ]
 
 export class BuliKeyboardController {

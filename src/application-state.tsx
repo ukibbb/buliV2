@@ -8,7 +8,7 @@ import type {
     IBuliApplication,
     IBuliApplicationSnapshot,
     ISnapshotSource,
-} from "@/application"
+} from "@/application/contracts"
 import type { ISessionSnapshot } from "@/domain"
 
 export const BuliApplicationRuntimeContext =
@@ -48,6 +48,6 @@ export function useBuliApplicationSnapshot(): IBuliApplicationSnapshot {
 export function useSession(sessionId: string): ISessionSnapshot {
     const runtime = useBuliRuntime()
     const session: ISnapshotSource<ISessionSnapshot> =
-        runtime.getAgentSession(sessionId)
+        runtime.openSession(sessionId)
     return useSyncExternalStore(session.subscribe, session.getSnapshot)
 }

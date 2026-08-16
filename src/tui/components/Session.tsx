@@ -9,7 +9,6 @@ interface ISessionScreenProps {
 }
 
 export function SessionScreen(props: ISessionScreenProps): ReactNode {
-  console.count("Session")
   const session = useSession(props.sessionId)
 
   return (
@@ -35,7 +34,15 @@ export function SessionScreen(props: ISessionScreenProps): ReactNode {
         />
       </scrollbox>
 
-      <Chat />
+      <Chat
+        isRunning={session.isRunning}
+        {...(session.lastRunReason
+          ? { lastRunReason: session.lastRunReason }
+          : {})}
+        {...(session.errorMessage
+          ? { errorMessage: session.errorMessage }
+          : {})}
+      />
     </box>
   )
 }

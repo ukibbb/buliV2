@@ -1,14 +1,17 @@
-import { generateRandomId } from "@/common"
-import type { TAgentMessage } from "@/domain"
 import { runAgentLoop } from "@/agent/agent-loop"
 import type {
     IAgentEvent,
     IAgentRunConfiguration,
+    IAgentRunHandle,
     IAgentState,
     IAgentTool,
     TAgentEventListener,
+    TAgentCriticalEventSink,
     TAgentRunConfigurationResolver,
+    TAgentRunEndReason,
 } from "@/agent/agent-types"
+import { generateRandomId } from "@/common"
+import type { IUserMessage, TAgentMessage } from "@/domain"
 
 interface IAgentOptions {
     readonly sessionId: string
@@ -16,21 +19,32 @@ interface IAgentOptions {
     readonly resolveRunConfiguration: TAgentRunConfigurationResolver
     readonly tools: readonly IAgentTool[]
     readonly initialMessages?: readonly TAgentMessage[]
+    readonly criticalEventSink?: TAgentCriticalEventSink
+    readonly onObserverError?: (error: unknown) => void
     readonly maxProviderIterations?: number
     readonly now?: () => number
     readonly generateId?: () => string
 }
 
 interface IActiveAgentRun {
+    readonly runId: string
+    readonly promptId: string
     readonly abortController: AbortController
+    readonly accepted: Promise<void>
+    readonly resolveAccepted: () => void
+    readonly rejectAccepted: (reason?: unknown) => void
     readonly settled: Promise<void>
     readonly resolveSettled: () => void
+    readonly rejectSettled: (reason?: unknown) => void
+    acceptedCompleted: boolean
 }
 
 /** Owns one session's live agent state and active run. */
 export class Agent {
     private stateValue: IAgentState
     private readonly resolveRunConfiguration: TAgentRunConfigurationResolver
+    private readonly criticalEventSink: TAgentCriticalEventSink | undefined
+    private readonly onObserverError: ((error: unknown) => void) | undefined
     private readonly listeners = new Set<TAgentEventListener>()
     private readonly maxProviderIterations: number | undefined
     private readonly now: () => number
@@ -39,6 +53,8 @@ export class Agent {
 
     constructor(options: IAgentOptions) {
         this.resolveRunConfiguration = options.resolveRunConfiguration
+        this.criticalEventSink = options.criticalEventSink
+        this.onObserverError = options.onObserverError
         this.maxProviderIterations = options.maxProviderIterations
         this.now = options.now ?? Date.now
         this.generateId = options.generateId ?? generateRandomId
@@ -48,6 +64,7 @@ export class Agent {
             tools: [...options.tools],
             messages: structuredClone(options.initialMessages ?? []),
             isRunning: false,
+            activeRunId: undefined,
             streamingMessage: undefined,
             pendingToolCallIds: new Set(),
             errorMessage: undefined,
@@ -64,67 +81,59 @@ export class Agent {
         return () => this.listeners.delete(listener)
     }
 
-    async prompt(text: string): Promise<void> {
-        if (!text.trim()) return
+    prompt(text: string): IAgentRunHandle {
+        if (!text.trim()) throw new Error("Prompt cannot be empty")
         if (this.activeRun) {
             throw new Error("Agent is already processing a prompt")
         }
 
         const runConfiguration: IAgentRunConfiguration = this.resolveRunConfiguration()
+        const runId = this.generateId()
+        const prompt = this.createUserMessage(text, runId)
         const abortController = new AbortController()
+        const accepted = Promise.withResolvers<void>()
         const settled = Promise.withResolvers<void>()
+        // Consumers may intentionally observe only one phase of the run.
+        void accepted.promise.catch(() => {})
+        void settled.promise.catch(() => {})
         const activeRun: IActiveAgentRun = {
+            runId,
+            promptId: prompt.id,
             abortController,
+            accepted: accepted.promise,
+            resolveAccepted: accepted.resolve,
+            rejectAccepted: accepted.reject,
             settled: settled.promise,
             resolveSettled: settled.resolve,
+            rejectSettled: settled.reject,
+            acceptedCompleted: false,
         }
         this.activeRun = activeRun
         this.stateValue = {
             ...this.stateValue,
             isRunning: true,
+            activeRunId: runId,
             streamingMessage: undefined,
             pendingToolCallIds: new Set(),
             errorMessage: undefined,
             lastRunReason: undefined,
         }
 
-        try {
-            await runAgentLoop({
-                sessionId: this.stateValue.sessionId,
-                systemPrompt: this.stateValue.systemPrompt,
-                messages: this.stateValue.messages,
-                prompt: this.createUserMessage(text),
-                model: runConfiguration.model,
-                reasoningEffort: runConfiguration.reasoningEffort,
-                tools: this.stateValue.tools,
-                signal: abortController.signal,
-                emit: (event) => this.processEvent(event, abortController.signal),
-                ...(this.maxProviderIterations === undefined
-                    ? {}
-                    : { maxProviderIterations: this.maxProviderIterations }),
-                now: this.now,
-                generateId: this.generateId,
-            })
-        } finally {
-            if (this.activeRun === activeRun) {
-                this.stateValue = {
-                    ...this.stateValue,
-                    isRunning: false,
-                    streamingMessage: undefined,
-                    pendingToolCallIds: new Set(),
-                }
-                this.activeRun = undefined
-                activeRun.resolveSettled()
-            }
+        void this.executeRun(activeRun, prompt, runConfiguration)
+
+        return {
+            runId,
+            accepted: activeRun.accepted,
+            settled: activeRun.settled,
         }
     }
 
-    abort(): void {
-        this.activeRun?.abortController.abort("Buli interaction was aborted")
+    async abort(): Promise<void> {
+        await this.waitForRuns(true)
     }
 
     waitForIdle(): Promise<void> {
-        return this.activeRun?.settled ?? Promise.resolve()
+        return this.waitForRuns(false)
     }
 
     clear(): void {
@@ -133,6 +142,7 @@ export class Agent {
             ...this.stateValue,
             messages: [],
             isRunning: false,
+            activeRunId: undefined,
             streamingMessage: undefined,
             pendingToolCallIds: new Set(),
             errorMessage: undefined,
@@ -140,12 +150,148 @@ export class Agent {
         }
     }
 
+    restoreMessages(messages: readonly TAgentMessage[]): void {
+        if (this.activeRun) {
+            throw new Error("Cannot restore messages while Agent is running")
+        }
+        this.stateValue = {
+            ...this.stateValue,
+            messages: structuredClone(messages),
+            streamingMessage: undefined,
+            pendingToolCallIds: new Set(),
+        }
+    }
+
+    private async executeRun(
+        activeRun: IActiveAgentRun,
+        prompt: IUserMessage,
+        runConfiguration: IAgentRunConfiguration,
+    ): Promise<void> {
+        let reason: TAgentRunEndReason = "internal-error"
+        let failed = false
+        let failure: unknown
+
+        try {
+            const result = await runAgentLoop({
+                sessionId: this.stateValue.sessionId,
+                runId: activeRun.runId,
+                systemPrompt: this.stateValue.systemPrompt,
+                messages: this.stateValue.messages,
+                prompt,
+                model: runConfiguration.model,
+                reasoningEffort: runConfiguration.reasoningEffort,
+                tools: this.stateValue.tools,
+                signal: activeRun.abortController.signal,
+                emit: (event) => this.processEvent(event, activeRun),
+                ...(this.maxProviderIterations === undefined
+                    ? {}
+                    : { maxProviderIterations: this.maxProviderIterations }),
+                now: this.now,
+                generateId: this.generateId,
+            })
+            reason = result.reason
+        } catch (error) {
+            failed = true
+            failure = error
+            if (!activeRun.acceptedCompleted) {
+                activeRun.acceptedCompleted = true
+                activeRun.rejectAccepted(error)
+            }
+        } finally {
+            if (!activeRun.acceptedCompleted) {
+                const error = failed
+                    ? failure
+                    : new Error("Agent run ended before prompt acceptance")
+                activeRun.acceptedCompleted = true
+                activeRun.rejectAccepted(error)
+                if (!failed) {
+                    failed = true
+                    failure = error
+                }
+            }
+
+            if (this.activeRun === activeRun) {
+                const errorMessage = failed
+                    ? toErrorMessage(failure)
+                    : this.stateValue.errorMessage
+                this.stateValue = {
+                    ...this.stateValue,
+                    isRunning: false,
+                    activeRunId: undefined,
+                    streamingMessage: undefined,
+                    pendingToolCallIds: new Set(),
+                    errorMessage,
+                    lastRunReason: reason,
+                }
+
+                this.activeRun = undefined
+
+                this.notifyListeners({
+                    type: "agent_settled",
+                    runId: activeRun.runId,
+                    reason,
+                    ...(errorMessage === undefined ? {} : { errorMessage }),
+                }, activeRun.abortController.signal)
+
+                if (failed) activeRun.rejectSettled(failure)
+                else activeRun.resolveSettled()
+            }
+        }
+    }
+
+    private async waitForRuns(abort: boolean): Promise<void> {
+        let failed = false
+        let firstFailure: unknown
+        while (this.activeRun) {
+            const activeRun = this.activeRun
+            if (abort) {
+                activeRun.abortController.abort("Buli interaction was aborted")
+            }
+            try {
+                await activeRun.settled
+            } catch (error) {
+                if (!failed) {
+                    failed = true
+                    firstFailure = error
+                }
+            }
+        }
+        if (failed) throw firstFailure
+    }
+
     private async processEvent(
         event: IAgentEvent,
-        signal: AbortSignal,
+        activeRun: IActiveAgentRun,
     ): Promise<void> {
+        const signal = activeRun.abortController.signal
+        await this.criticalEventSink?.(event, signal)
         this.reduce(event)
-        for (const listener of this.listeners) await listener(event, signal)
+        this.notifyListeners(event, signal)
+
+        if (
+            event.type === "message_end"
+            && event.message.role === "user"
+            && event.message.id === activeRun.promptId
+            && !activeRun.acceptedCompleted
+        ) {
+            activeRun.acceptedCompleted = true
+            activeRun.resolveAccepted()
+        }
+    }
+
+    private notifyListeners(event: IAgentEvent, signal: AbortSignal): void {
+        for (const listener of [...this.listeners]) {
+            try {
+                const result = listener(event, signal)
+                if (result) {
+                    void result.catch((error: unknown) => {
+                        this.onObserverError?.(error)
+                    })
+                }
+            } catch (error) {
+                this.onObserverError?.(error)
+            }
+        }
     }
 
     private reduce(event: IAgentEvent): void {
@@ -196,23 +342,28 @@ export class Agent {
             case "agent_end":
                 this.stateValue = {
                     ...this.stateValue,
-                    isRunning: false,
-                    streamingMessage: undefined,
                     lastRunReason: event.reason,
                 }
                 return
+            case "agent_settled":
             case "turn_start":
                 return
         }
     }
 
-    private createUserMessage(text: string): TAgentMessage {
+    private createUserMessage(text: string, runId: string): IUserMessage {
         return {
             id: this.generateId(),
             sessionId: this.stateValue.sessionId,
+            runId,
             role: "user",
+            source: "prompt",
             content: text,
             createdAt: this.now(),
         }
     }
+}
+
+function toErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error)
 }

@@ -18,13 +18,16 @@ test("renders direct, streaming, and tool messages", async () => {
     {
       id: "user-message",
       sessionId: "default",
+      runId: "run-1",
       role: "user",
+      source: "prompt",
       createdAt: 1,
       content: "  User prompt  ",
     },
     {
       id: "assistant-message",
       sessionId: "default",
+      runId: "run-1",
       role: "assistant",
       createdAt: 2,
       stopReason: "tool-use",
@@ -54,6 +57,7 @@ test("renders direct, streaming, and tool messages", async () => {
     {
       id: "grep-result",
       sessionId: "default",
+      runId: "run-1",
       role: "toolResult",
       createdAt: 3,
       toolCallId: "call-grep",
@@ -64,6 +68,7 @@ test("renders direct, streaming, and tool messages", async () => {
     {
       id: "read-result",
       sessionId: "default",
+      runId: "run-1",
       role: "toolResult",
       createdAt: 4,
       toolCallId: "call-read",
@@ -74,6 +79,7 @@ test("renders direct, streaming, and tool messages", async () => {
     {
       id: "failed-assistant-message",
       sessionId: "default",
+      runId: "run-2",
       role: "assistant",
       createdAt: 5,
       content: [],
@@ -84,6 +90,7 @@ test("renders direct, streaming, and tool messages", async () => {
   const streamingMessage: IAssistantMessage = {
     id: "streaming-assistant-message",
     sessionId: "default",
+    runId: "run-3",
     role: "assistant",
     createdAt: 6,
     stopReason: "pending",

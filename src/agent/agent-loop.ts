@@ -19,6 +19,7 @@ const DEFAULT_MAX_PROVIDER_ITERATIONS = 5
 
 interface IRunAgentLoopOptions {
     readonly sessionId: string
+    readonly runId: string
     readonly systemPrompt: string
     readonly messages: readonly TAgentMessage[]
     readonly prompt: TAgentMessage
@@ -43,13 +44,17 @@ export async function runAgentLoop(
     const messages = structuredClone([...options.messages, options.prompt])
     const newMessages: TAgentMessage[] = [structuredClone(options.prompt)]
 
-    await options.emit({ type: "agent_start" })
-    await options.emit({ type: "turn_start", index: 0 })
-    await emitCompletedMessage(options.prompt, options.emit)
+    await options.emit({ type: "agent_start", runId: options.runId })
+    await options.emit({ type: "turn_start", runId: options.runId, index: 0 })
+    await emitCompletedMessage(options.prompt, options.runId, options.emit)
 
     for (let iteration = 0; iteration < maximumIterations; iteration += 1) {
         if (iteration > 0) {
-            await options.emit({ type: "turn_start", index: iteration })
+            await options.emit({
+                type: "turn_start",
+                runId: options.runId,
+                index: iteration,
+            })
         }
 
         const assistant = await streamAssistantMessage(
@@ -72,12 +77,18 @@ export async function runAgentLoop(
         if (assistantRunReason) {
             await options.emit({
                 type: "turn_end",
+                runId: options.runId,
                 index: iteration,
                 message: assistant,
                 toolResults: [],
                 willContinue: false,
             })
-            return finishRun(assistantRunReason, newMessages, options.emit)
+            return finishRun(
+                assistantRunReason,
+                newMessages,
+                options.runId,
+                options.emit,
+            )
         }
 
         const toolCalls = assistant.content.filter(
@@ -108,17 +119,22 @@ export async function runAgentLoop(
 
         await options.emit({
             type: "turn_end",
+            runId: options.runId,
             index: iteration,
             message: assistant,
             toolResults,
             willContinue,
         })
 
-        if (runReason) return finishRun(runReason, newMessages, options.emit)
-        if (!willContinue) return finishRun("completed", newMessages, options.emit)
+        if (runReason) {
+            return finishRun(runReason, newMessages, options.runId, options.emit)
+        }
+        if (!willContinue) {
+            return finishRun("completed", newMessages, options.runId, options.emit)
+        }
     }
 
-    return finishRun("max-iterations", newMessages, options.emit)
+    return finishRun("max-iterations", newMessages, options.runId, options.emit)
 }
 
 async function streamAssistantMessage(
@@ -129,10 +145,15 @@ async function streamAssistantMessage(
 ): Promise<IAssistantMessage> {
     const builder = new AssistantMessageBuilder({
         sessionId: options.sessionId,
+        runId: options.runId,
         now,
         generateId,
     })
-    await options.emit({ type: "message_start", message: builder.snapshot() })
+    await options.emit({
+        type: "message_start",
+        runId: options.runId,
+        message: builder.snapshot(),
+    })
 
     try {
         const tools: IAgentToolDescriptor[] = options.tools.map((agentTool) => ({
@@ -142,6 +163,7 @@ async function streamAssistantMessage(
         }))
         const stream = options.model.stream({
             sessionId: options.sessionId,
+            runId: options.runId,
             systemPrompt: options.systemPrompt,
             messages: structuredClone(messages),
             tools,
@@ -158,6 +180,7 @@ async function streamAssistantMessage(
             ) {
                 await options.emit({
                     type: "message_update",
+                    runId: options.runId,
                     message: builder.snapshot(),
                     modelEvent,
                 })
@@ -175,11 +198,15 @@ async function streamAssistantMessage(
     if (options.signal.aborted) {
         builder.abort(abortReason(options.signal))
     } else if (!builder.completed) {
-        builder.finish("stop")
+        builder.finish("error", "Model stream ended without a terminal event")
     }
 
     const assistant = builder.snapshot()
-    await options.emit({ type: "message_end", message: assistant })
+    await options.emit({
+        type: "message_end",
+        runId: options.runId,
+        message: assistant,
+    })
     return assistant
 }
 
@@ -194,6 +221,7 @@ async function executeToolCallsSequentially(
     for (const toolCall of toolCalls) {
         await options.emit({
             type: "tool_execution_start",
+            runId: options.runId,
             toolCallId: toolCall.toolCallId,
             toolName: toolCall.toolName,
             input: structuredClone(toolCall.input),
@@ -202,11 +230,12 @@ async function executeToolCallsSequentially(
         const result = await executeToolCall(toolCall, options, now, generateId)
         await options.emit({
             type: "tool_execution_end",
+            runId: options.runId,
             toolCallId: toolCall.toolCallId,
             toolName: toolCall.toolName,
             result,
         })
-        await emitCompletedMessage(result, options.emit)
+        await emitCompletedMessage(result, options.runId, options.emit)
         results.push(result)
     }
 
@@ -235,6 +264,7 @@ async function executeToolCall(
         try {
             content = await tool.execute(structuredClone(toolCall.input), {
                 toolCallId: toolCall.toolCallId,
+                runId: options.runId,
                 signal: options.signal,
             })
             options.signal.throwIfAborted()
@@ -250,6 +280,7 @@ async function executeToolCall(
     return {
         id: generateId(),
         sessionId: options.sessionId,
+        runId: options.runId,
         role: "toolResult",
         toolCallId: toolCall.toolCallId,
         toolName: toolCall.toolName,
@@ -261,10 +292,11 @@ async function executeToolCall(
 
 async function emitCompletedMessage(
     message: TAgentMessage,
+    runId: string,
     emit: (event: IAgentEvent) => void | Promise<void>,
 ): Promise<void> {
-    await emit({ type: "message_start", message })
-    await emit({ type: "message_end", message })
+    await emit({ type: "message_start", runId, message })
+    await emit({ type: "message_end", runId, message })
 }
 
 function runReasonForAssistant(
@@ -278,10 +310,11 @@ function runReasonForAssistant(
 async function finishRun(
     reason: TAgentRunEndReason,
     messages: readonly TAgentMessage[],
+    runId: string,
     emit: (event: IAgentEvent) => void | Promise<void>,
 ): Promise<IAgentLoopResult> {
     const result = { reason, messages: structuredClone(messages) }
-    await emit({ type: "agent_end", ...result })
+    await emit({ type: "agent_end", runId, ...result })
     return result
 }
 

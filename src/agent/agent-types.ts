@@ -35,6 +35,7 @@ export interface IAgentToolDescriptor {
 // bieżącego runu. Pętla agenta tworzy ten obiekt tuż przed wywołaniem `execute`.
 export interface IAgentToolExecutionContext {
     readonly toolCallId: string
+    readonly runId: string
     readonly signal: AbortSignal
 }
 
@@ -55,6 +56,7 @@ export interface IAgentTool extends IAgentToolDescriptor {
 // obiektu w runtime ani nie zatrzymuje zmiany stanu `AbortSignal`.
 export interface IAgentModelRequest {
     readonly sessionId: string
+    readonly runId: string
     readonly systemPrompt: string
     readonly messages: readonly TAgentMessage[]
     readonly tools: readonly IAgentToolDescriptor[]
@@ -98,7 +100,11 @@ export type TAgentRunConfigurationResolver = () => IAgentRunConfiguration
 
 export type { TAgentRunEndReason } from "@/domain"
 
-export type IAgentEvent =
+interface IAgentEventBase {
+    readonly runId: string
+}
+
+type TAgentEventPayload =
     | { readonly type: "agent_start" }
     | {
         readonly type: "agent_end"
@@ -132,6 +138,13 @@ export type IAgentEvent =
         readonly toolName: string
         readonly result: IToolResultMessage
     }
+    | {
+        readonly type: "agent_settled"
+        readonly reason: TAgentRunEndReason
+        readonly errorMessage?: string
+    }
+
+export type IAgentEvent = IAgentEventBase & TAgentEventPayload
 
 export interface IAgentState {
     readonly sessionId: string
@@ -139,6 +152,7 @@ export interface IAgentState {
     readonly tools: readonly IAgentTool[]
     readonly messages: readonly TAgentMessage[]
     readonly isRunning: boolean
+    readonly activeRunId: string | undefined
     readonly streamingMessage: IAssistantMessage | undefined
     readonly pendingToolCallIds: ReadonlySet<string>
     readonly errorMessage: string | undefined
@@ -149,6 +163,17 @@ export type TAgentEventListener = (
     event: IAgentEvent,
     signal: AbortSignal,
 ) => void | Promise<void>
+
+export type TAgentCriticalEventSink = (
+    event: IAgentEvent,
+    signal: AbortSignal,
+) => void | Promise<void>
+
+export interface IAgentRunHandle {
+    readonly runId: string
+    readonly accepted: Promise<void>
+    readonly settled: Promise<void>
+}
 
 export interface IAgentLoopResult {
     readonly reason: TAgentRunEndReason

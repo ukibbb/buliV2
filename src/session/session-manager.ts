@@ -1,24 +1,48 @@
 import type {
     IAssistantMessage,
+    ISessionInfo,
     ISessionSnapshot,
+    IToolResultMessage,
     TAgentMessage,
 } from "@/domain"
 
 export interface ISessionManager {
+    readonly createSession: (info: ISessionInfo) => void
+    readonly getSessionInfo: (sessionId: string) => ISessionInfo | undefined
+    readonly listSessions: () => readonly ISessionInfo[]
     readonly getMessages: (sessionId: string) => readonly TAgentMessage[]
     readonly appendMessage: (message: TAgentMessage) => void
     readonly clearSession: (sessionId: string) => void
+    readonly deleteSession: (sessionId: string) => void
 }
 
 type TSessionId = string
 
 /** Keeps durable messages separate from live Agent state. */
 export class InMemorySessionManager implements ISessionManager {
-    //
+    private readonly sessionsById = new Map<TSessionId, ISessionInfo>()
     private readonly messagesBySession = new Map<
         TSessionId,
         readonly TAgentMessage[]
     >()
+
+    readonly createSession = (info: ISessionInfo): void => {
+        assertSessionInfo(info)
+        if (this.sessionsById.has(info.id)) {
+            throw new Error(`Session already exists: ${info.id}`)
+        }
+
+        this.sessionsById.set(info.id, structuredClone(info))
+    }
+
+    readonly getSessionInfo = (sessionId: string): ISessionInfo | undefined => {
+        const info = this.sessionsById.get(sessionId)
+        return info === undefined ? undefined : structuredClone(info)
+    }
+
+    readonly listSessions = (): readonly ISessionInfo[] => {
+        return structuredClone([...this.sessionsById.values()])
+    }
 
     readonly getMessages = (sessionId: string): readonly TAgentMessage[] => {
         return structuredClone(this.messagesBySession.get(sessionId) ?? [])
@@ -26,6 +50,11 @@ export class InMemorySessionManager implements ISessionManager {
 
     readonly appendMessage = (message: TAgentMessage): void => {
         assertDurableSessionMessage(message)
+
+        const info = this.sessionsById.get(message.sessionId)
+        if (!info) {
+            throw new Error(`Session does not exist: ${message.sessionId}`)
+        }
 
         const current = this.messagesBySession.get(message.sessionId) ?? []
         const existingIndex = current.findIndex(
@@ -37,14 +66,44 @@ export class InMemorySessionManager implements ISessionManager {
         else updated[existingIndex] = structuredClone(message)
 
         this.messagesBySession.set(message.sessionId, updated)
+        this.sessionsById.set(message.sessionId, {
+            ...info,
+            updatedAt: Math.max(info.updatedAt, message.createdAt),
+        })
     }
 
     readonly clearSession = (sessionId: string): void => {
         this.messagesBySession.delete(sessionId)
     }
 
+    readonly deleteSession = (sessionId: string): void => {
+        this.sessionsById.delete(sessionId)
+        this.messagesBySession.delete(sessionId)
+    }
+
     getAllMessages(): readonly TAgentMessage[] {
         return structuredClone([...this.messagesBySession.values()].flat())
+    }
+}
+
+export function assertSessionInfo(
+    value: unknown,
+): asserts value is ISessionInfo {
+    if (
+        !isRecord(value)
+        || typeof value.id !== "string"
+        || value.id.trim().length === 0
+        || typeof value.agentId !== "string"
+        || value.agentId.trim().length === 0
+        || typeof value.title !== "string"
+        || value.title.trim().length === 0
+        || typeof value.createdAt !== "number"
+        || !Number.isFinite(value.createdAt)
+        || typeof value.updatedAt !== "number"
+        || !Number.isFinite(value.updatedAt)
+        || value.updatedAt < value.createdAt
+    ) {
+        throw new Error("Invalid session metadata")
     }
 }
 
@@ -55,11 +114,40 @@ export function assertDurableSessionMessage(
 
     switch (value.role) {
         case "user":
-            if (typeof value.content !== "string") {
+            if (
+                !hasExactKeys(value, [
+                    "id",
+                    "sessionId",
+                    "runId",
+                    "role",
+                    "source",
+                    "content",
+                    "createdAt",
+                ])
+                || typeof value.content !== "string"
+                || value.content.trim().length === 0
+                || (
+                    value.source !== "prompt"
+                    && value.source !== "steer"
+                    && value.source !== "followUp"
+                )
+            ) {
                 throw new Error("Invalid user message")
             }
             return
         case "assistant":
+            if (!hasExactKeys(value, [
+                "id",
+                "sessionId",
+                "runId",
+                "role",
+                "content",
+                "stopReason",
+                "createdAt",
+                ...(value.errorMessage === undefined ? [] : ["errorMessage"]),
+            ])) {
+                throw new Error("Invalid assistant message")
+            }
             assertAssistantMessage(value)
             if (value.stopReason === "pending") {
                 throw new Error("Cannot persist an incomplete assistant message")
@@ -67,8 +155,21 @@ export function assertDurableSessionMessage(
             return
         case "toolResult":
             if (
-                typeof value.toolCallId !== "string"
+                !hasExactKeys(value, [
+                    "id",
+                    "sessionId",
+                    "runId",
+                    "role",
+                    "toolCallId",
+                    "toolName",
+                    "content",
+                    "isError",
+                    "createdAt",
+                ])
+                || typeof value.toolCallId !== "string"
+                || value.toolCallId.trim().length === 0
                 || typeof value.toolName !== "string"
+                || value.toolName.trim().length === 0
                 || typeof value.content !== "string"
                 || typeof value.isError !== "boolean"
             ) {
@@ -88,10 +189,88 @@ export function freezeSessionSnapshot(
     return clone
 }
 
+/** Creates durable error results for tool calls left unmatched by an interrupted run. */
+export function createInterruptedToolResults(
+    messages: readonly TAgentMessage[],
+): readonly IToolResultMessage[] {
+    const messageIds = new Set(messages.map((message) => message.id))
+    let pending: {
+        assistant: IAssistantMessage
+        remainingToolCallIds: Set<string>
+    } | undefined
+
+    for (const message of messages) {
+        if (pending) {
+            if (
+                message.role === "toolResult"
+                && message.runId === pending.assistant.runId
+                && pending.remainingToolCallIds.delete(message.toolCallId)
+            ) {
+                if (pending.remainingToolCallIds.size === 0) pending = undefined
+                continue
+            }
+            throw new Error(
+                `Interrupted tool turn must be the final turn in session ${pending.assistant.sessionId}`,
+            )
+        }
+
+        if (
+            message.role !== "assistant"
+            || message.stopReason === "aborted"
+            || message.stopReason === "error"
+        ) {
+            continue
+        }
+        const toolCallIds = message.content.flatMap((content) =>
+            content.type === "toolCall" ? [content.toolCallId] : []
+        )
+        if (toolCallIds.length > 0) {
+            pending = {
+                assistant: message,
+                remainingToolCallIds: new Set(toolCallIds),
+            }
+        }
+    }
+
+    if (!pending) return []
+
+    return pending.assistant.content.flatMap((content) => {
+        if (
+            content.type !== "toolCall"
+            || !pending.remainingToolCallIds.has(content.toolCallId)
+        ) {
+            return []
+        }
+        const idBase = `recovered-${pending.assistant.id}-${content.toolCallId}`
+        let id = idBase
+        let suffix = 1
+        while (messageIds.has(id)) {
+            id = `${idBase}-${suffix}`
+            suffix += 1
+        }
+        messageIds.add(id)
+        return [{
+            id,
+            sessionId: pending.assistant.sessionId,
+            runId: pending.assistant.runId,
+            role: "toolResult" as const,
+            toolCallId: content.toolCallId,
+            toolName: content.toolName,
+            content: "Tool execution was interrupted before a durable result was recorded.",
+            isError: true,
+            createdAt: pending.assistant.createdAt,
+        }]
+    })
+}
+
 function assertAssistantMessage(
     message: Record<string, unknown>,
 ): asserts message is Record<string, unknown> & IAssistantMessage {
-    if (!Array.isArray(message.content) || typeof message.stopReason !== "string") {
+    if (
+        !Array.isArray(message.content)
+        || typeof message.stopReason !== "string"
+        || message.stopReason.trim().length === 0
+    ) {
         throw new Error("Invalid assistant message")
     }
     if (
@@ -101,34 +280,53 @@ function assertAssistantMessage(
         throw new Error("Invalid assistant error")
     }
 
+    const toolCallIds = new Set<string>()
     for (const content of message.content) {
         if (!isRecord(content)) throw new Error("Invalid assistant content")
         if (content.type === "text" || content.type === "reasoning") {
-            if (typeof content.text !== "string") {
+            if (
+                !hasExactKeys(content, ["type", "text"])
+                || typeof content.text !== "string"
+            ) {
                 throw new Error("Invalid assistant text content")
             }
             continue
         }
         if (
             content.type !== "toolCall"
+            || !hasExactKeys(content, [
+                "type",
+                "toolCallId",
+                "toolName",
+                "input",
+            ])
             || typeof content.toolCallId !== "string"
+            || content.toolCallId.trim().length === 0
+            || toolCallIds.has(content.toolCallId)
             || typeof content.toolName !== "string"
-            || !isRecord(content.input)
+            || content.toolName.trim().length === 0
+            || !isJsonObject(content.input)
         ) {
             throw new Error("Invalid assistant tool call")
         }
+        toolCallIds.add(content.toolCallId)
     }
 }
 
 function isMessageBase(value: unknown): value is Record<string, unknown> & {
     readonly id: string
     readonly sessionId: string
+    readonly runId: string
     readonly role: string
     readonly createdAt: number
 } {
     return isRecord(value)
         && typeof value.id === "string"
+        && value.id.trim().length > 0
         && typeof value.sessionId === "string"
+        && value.sessionId.trim().length > 0
+        && typeof value.runId === "string"
+        && value.runId.trim().length > 0
         && typeof value.role === "string"
         && typeof value.createdAt === "number"
         && Number.isFinite(value.createdAt)
@@ -136,6 +334,64 @@ function isMessageBase(value: unknown): value is Record<string, unknown> & {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return value !== null && typeof value === "object" && !Array.isArray(value)
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+    return isJsonObjectValue(value, new Set())
+}
+
+function isJsonValue(value: unknown, ancestors: Set<object>): boolean {
+    if (
+        value === null
+        || typeof value === "string"
+        || typeof value === "boolean"
+    ) {
+        return true
+    }
+    if (typeof value === "number") return Number.isFinite(value)
+    if (Array.isArray(value)) {
+        if (
+            ancestors.has(value)
+            || Object.keys(value).length !== value.length
+            || Reflect.ownKeys(value).length !== value.length + 1
+        ) {
+            return false
+        }
+        for (let index = 0; index < value.length; index += 1) {
+            if (!Object.hasOwn(value, index)) return false
+        }
+        ancestors.add(value)
+        const valid = value.every((item) => isJsonValue(item, ancestors))
+        ancestors.delete(value)
+        return valid
+    }
+    return isJsonObjectValue(value, ancestors)
+}
+
+function isJsonObjectValue(
+    value: unknown,
+    ancestors: Set<object>,
+): value is Record<string, unknown> {
+    if (!isRecord(value) || ancestors.has(value)) return false
+    const prototype = Object.getPrototypeOf(value)
+    if (prototype !== Object.prototype && prototype !== null) return false
+    if (Reflect.ownKeys(value).length !== Object.keys(value).length) return false
+
+    ancestors.add(value)
+    const valid = Object.values(value).every((item) =>
+        isJsonValue(item, ancestors)
+    )
+    ancestors.delete(value)
+    return valid
+}
+
+function hasExactKeys(
+    value: Record<string, unknown>,
+    keys: readonly string[],
+): boolean {
+    const actual = Object.keys(value)
+    return actual.length === keys.length
+        && keys.every((key) => Object.hasOwn(value, key))
 }
 
 function deepFreeze(value: unknown): void {

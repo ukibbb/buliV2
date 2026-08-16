@@ -7,12 +7,25 @@ test("keeps TUI code behind application and domain contracts", async () => {
   for await (const path of files.scan({ onlyFiles: true })) {
     const source = await Bun.file(path).text()
 
-    if (/from\s+["']@\/(?:engine|providers)(?:\/|["'])/.test(source)) {
-      violations.push(`${path}: concrete engine/provider import`)
+    if (
+      /from\s+["']@\/(?:agent|engine|providers|session|tools)(?:\/|["'])/.test(
+        source,
+      )
+    ) {
+      violations.push(`${path}: core implementation import`)
     }
 
     if (/\bBuliApplicationRuntime\b/.test(source)) {
       violations.push(`${path}: concrete application runtime`)
+    }
+
+    const applicationImports = source.matchAll(
+      /from\s+["'](@\/application(?:\/[^"']*)?)["']/g,
+    )
+    for (const match of applicationImports) {
+      if (match[1] !== "@/application/contracts") {
+        violations.push(`${path}: application implementation import`)
+      }
     }
   }
 

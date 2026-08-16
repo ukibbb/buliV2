@@ -48,13 +48,16 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
     {
       id: "previous-user",
       sessionId: "session-1",
+      runId: "previous-run",
       role: "user",
+      source: "prompt",
       content: "First\n\nSecond",
       createdAt: 1,
     },
     {
       id: "previous-assistant",
       sessionId: "session-1",
+      runId: "previous-run",
       role: "assistant",
       content: [
         { type: "text", text: "Answer" },
@@ -65,8 +68,10 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
     },
   ]
   const manager = new InMemorySessionManager()
+  manager.createSession(testSessionInfo())
   messages.forEach(manager.appendMessage)
   const session = new AgentSession({
+    agentId: "test-agent",
     sessionId: "session-1",
     manager,
     systemPrompt: systemPrompt(WORKSPACE_ROOT),
@@ -77,7 +82,7 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
     tools: createWorkspaceTools(WORKSPACE_ROOT),
   })
 
-  await session.prompt("Continue")
+  await session.prompt("Continue").settled
 
   const [firstRequest, secondRequest, thirdRequest, fourthRequest] = capturedRequests
   if (!firstRequest || !secondRequest || !thirdRequest || !fourthRequest) {
@@ -224,7 +229,9 @@ test("replays a local tool failure into the next OAuth iteration", async () => {
     now: () => 100,
   })
   const manager = new InMemorySessionManager()
+  manager.createSession(testSessionInfo())
   const session = new AgentSession({
+    agentId: "test-agent",
     sessionId: "session-1",
     manager,
     systemPrompt: systemPrompt(WORKSPACE_ROOT),
@@ -237,7 +244,7 @@ test("replays a local tool failure into the next OAuth iteration", async () => {
     tools: createWorkspaceTools(WORKSPACE_ROOT),
   })
 
-  await session.prompt("Read the missing file")
+  await session.prompt("Read the missing file").settled
 
   expect(capturedRequests).toHaveLength(2)
   const failedTool = manager
@@ -288,6 +295,7 @@ test("lowers direct assistant and text-only toolResult messages", async () => {
     {
       id: "assistant-message",
       sessionId: "session-1",
+      runId: "run-1",
       role: "assistant",
       content: [
         { type: "text", text: "I will inspect it." },
@@ -304,6 +312,7 @@ test("lowers direct assistant and text-only toolResult messages", async () => {
     {
       id: "tool-result-message",
       sessionId: "session-1",
+      runId: "run-1",
       role: "toolResult",
       toolCallId: "call-read",
       toolName: "read_file",
@@ -409,6 +418,7 @@ test("forwards cancellation to the OpenAI request", async () => {
     const events = []
     for await (const event of model.stream({
       sessionId: "session-1",
+      runId: "run-1",
       systemPrompt: systemPrompt(WORKSPACE_ROOT),
       messages: [userMessage("Wait")],
       tools: [],
@@ -592,6 +602,7 @@ async function collectEvents(
   const events: IAgentModelEvent[] = []
   for await (const event of model.stream({
     sessionId: "session-1",
+    runId: "run-1",
     systemPrompt: "System",
     messages,
     tools,
@@ -607,9 +618,21 @@ function userMessage(content: string): TAgentMessage {
   return {
     id: "user-message",
     sessionId: "session-1",
+    runId: "run-1",
     role: "user",
+    source: "prompt",
     content,
     createdAt: 1,
+  }
+}
+
+function testSessionInfo() {
+  return {
+    id: "session-1",
+    agentId: "test-agent",
+    title: "Test session",
+    createdAt: 1,
+    updatedAt: 1,
   }
 }
 

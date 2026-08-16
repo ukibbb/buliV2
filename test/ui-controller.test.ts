@@ -5,6 +5,7 @@ import type {
   IBuliApplicationSnapshot,
   IBuliPromptInput,
   IBuliPromptSubmission,
+  IBuliQueuedMessages,
 } from "@/application/contracts"
 import type { TReasoningEffort } from "@/agent/agent-types"
 import type { ISessionInfo, ISessionSnapshot } from "@/domain"
@@ -38,6 +39,9 @@ interface IApplicationSpyOptions {
   readonly accepted?: Promise<void>
   readonly settled?: Promise<void>
   readonly submitPrompt?: (prompt: IBuliPromptInput) => IBuliPromptSubmission
+  readonly steer?: (sessionId: string, text: string) => void
+  readonly followUp?: (sessionId: string, text: string) => void
+  readonly clearQueuedMessages?: (sessionId: string) => IBuliQueuedMessages
 }
 
 function applicationSpy(options: IApplicationSpyOptions = {}) {
@@ -48,6 +52,9 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
   const created: Array<{ agentId: string; title: string }> = []
   const selectedModels: string[] = []
   const selectedReasoningEfforts: TReasoningEffort[] = []
+  const steering: Array<{ sessionId: string; text: string }> = []
+  const followUps: Array<{ sessionId: string; text: string }> = []
+  const clearedQueues: string[] = []
   let createdCount = 0
   let runCount = 0
 
@@ -106,6 +113,21 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
         settled: options.settled ?? Promise.resolve(),
       }
     },
+    steer: (sessionId, text) => {
+      options.steer?.(sessionId, text)
+      steering.push({ sessionId, text })
+    },
+    followUp: (sessionId, text) => {
+      options.followUp?.(sessionId, text)
+      followUps.push({ sessionId, text })
+    },
+    clearQueuedMessages: (sessionId) => {
+      clearedQueues.push(sessionId)
+      return options.clearQueuedMessages?.(sessionId) ?? {
+        steering: [],
+        followUp: [],
+      }
+    },
     clearSession: (sessionId) => {
       cleared.push(sessionId)
     },
@@ -124,6 +146,9 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
     created,
     selectedModels,
     selectedReasoningEfforts,
+    steering,
+    followUps,
+    clearedQueues,
   }
 }
 
@@ -272,6 +297,81 @@ test("retains synchronous subscriber reentry during submission", async () => {
 
   accepted.resolve()
   expect(await firstSubmission).toBe("consumed")
+})
+
+test("routes Enter to steering while the active session is running", async () => {
+  const spy = applicationSpy({ runningSessionId: "session-1" })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+  controller.updateInput("Adjust the answer")
+
+  const result = await controller.submitInput("Adjust the answer")
+
+  expect(result).toBe("consumed")
+  expect(spy.steering).toEqual([{
+    sessionId: "session-1",
+    text: "Adjust the answer",
+  }])
+  expect(spy.prompts).toEqual([])
+  expect(controller.getSnapshot().input).toBe("")
+})
+
+test("routes Alt+Enter delivery to follow-up while a session is running", async () => {
+  const spy = applicationSpy({ runningSessionId: "session-1" })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+  controller.updateInput("Summarize when finished")
+
+  const result = await controller.submitInput(
+    "Summarize when finished",
+    "followUp",
+  )
+
+  expect(result).toBe("consumed")
+  expect(spy.followUps).toEqual([{
+    sessionId: "session-1",
+    text: "Summarize when finished",
+  }])
+  expect(spy.steering).toEqual([])
+  expect(spy.prompts).toEqual([])
+  expect(controller.getSnapshot().input).toBe("")
+})
+
+test("retains follow-up input when there is no active run", async () => {
+  const spy = applicationSpy()
+  const controller = new BuliUiController({ application: spy.application })
+  controller.updateInput("Run this later")
+
+  const result = await controller.submitInput("Run this later", "followUp")
+
+  expect(result).toBe("retained")
+  expect(spy.followUps).toEqual([])
+  expect(spy.prompts).toEqual([])
+  expect(controller.getSnapshot()).toMatchObject({
+    input: "Run this later",
+    inputError: "Follow-up requires an active run",
+  })
+})
+
+test("retains input when a finishing run rejects steering", async () => {
+  const spy = applicationSpy({
+    runningSessionId: "session-1",
+    steer: () => {
+      throw new Error("Agent is not accepting steering messages")
+    },
+  })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+  controller.updateInput("Late steering")
+
+  const result = await controller.submitInput("Late steering")
+
+  expect(result).toBe("retained")
+  expect(spy.steering).toEqual([])
+  expect(controller.getSnapshot()).toMatchObject({
+    input: "Late steering",
+    inputError: "Agent is not accepting steering messages",
+  })
 })
 
 test("does not replace a route changed while Home acceptance is pending", async () => {
@@ -448,6 +548,49 @@ test("handles clear and abort against only the active session", async () => {
   expect(spy.aborted).toEqual(["session-2"])
 })
 
+test("Escape restores queued steering before the current draft and aborts", () => {
+  const spy = applicationSpy({
+    clearQueuedMessages: () => ({
+      steering: ["First steering", "Second steering"],
+      followUp: ["Later follow-up"],
+    }),
+  })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+  controller.updateInput("Current draft")
+
+  controller.escape()
+
+  expect(spy.clearedQueues).toEqual(["session-1"])
+  expect(spy.aborted).toEqual(["session-1"])
+  expect(controller.getSnapshot()).toMatchObject({
+    input: "First steering\n\nSecond steering\n\nLater follow-up\n\nCurrent draft",
+    inputError: null,
+  })
+})
+
+test("Escape closes an open menu and still restores an active steering queue", () => {
+  const spy = applicationSpy({
+    runningSessionId: "session-1",
+    clearQueuedMessages: () => ({
+      steering: ["Queued while menu was open"],
+      followUp: [],
+    }),
+  })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+  controller.updateInput("/")
+
+  expect(controller.getSnapshot().menu).not.toBeNull()
+  controller.escape()
+
+  expect(controller.getSnapshot()).toMatchObject({
+    menu: null,
+    input: "Queued while menu was open\n\n/",
+  })
+  expect(spy.aborted).toEqual(["session-1"])
+})
+
 test("empty input preserves a picker while typed input closes it", async () => {
   const spy = applicationSpy()
   const controller = new BuliUiController({ application: spy.application })
@@ -475,6 +618,8 @@ function sessionInfo(id: string, title: string, updatedAt: number): ISessionInfo
 function sessionSource(isRunning: boolean) {
   const snapshot: ISessionSnapshot = {
     messages: [],
+    pendingSteeringMessages: [],
+    pendingFollowUpMessages: [],
     isRunning,
     pendingToolCallIds: [],
   }

@@ -26,6 +26,11 @@ interface IAgentSessionOptions {
     readonly disposeTimeoutMs?: number
 }
 
+interface IQueuedSessionMessages {
+    readonly steering: readonly string[]
+    readonly followUp: readonly string[]
+}
+
 type TSessionListener = () => void
 const DEFAULT_DISPOSE_TIMEOUT_MS = 5_000
 
@@ -120,6 +125,42 @@ export class AgentSession {
         return this.agent.prompt(text)
     }
 
+    steer(text: string): void {
+        if (this.disposed) throw new Error("AgentSession is disposed")
+        if (this.persistenceError !== undefined) {
+            throw new Error(
+                "Session persistence failed. Clear or reopen the session before submitting another prompt.",
+                { cause: this.persistenceError },
+            )
+        }
+        this.agent.steer(text)
+        this.publishSnapshot()
+    }
+
+    followUp(text: string): void {
+        if (this.disposed) throw new Error("AgentSession is disposed")
+        if (this.persistenceError !== undefined) {
+            throw new Error(
+                "Session persistence failed. Clear or reopen the session before submitting another prompt.",
+                { cause: this.persistenceError },
+            )
+        }
+        this.agent.followUp(text)
+        this.publishSnapshot()
+    }
+
+    clearQueuedMessages(): IQueuedSessionMessages {
+        if (this.disposed) throw new Error("AgentSession is disposed")
+        const messages = this.agent.clearQueuedMessages()
+        if (messages.steering.length > 0 || messages.followUp.length > 0) {
+            this.publishSnapshot()
+        }
+        return {
+            steering: messages.steering.map((message) => message.content),
+            followUp: messages.followUp.map((message) => message.content),
+        }
+    }
+
     async abort(): Promise<void> {
         if (this.disposed) return
         await this.agent.abort()
@@ -199,6 +240,8 @@ export class AgentSession {
 
         return freezeSessionSnapshot({
             messages: state.messages,
+            pendingSteeringMessages: this.agent.pendingSteeringMessages,
+            pendingFollowUpMessages: this.agent.pendingFollowUpMessages,
             ...(state.streamingMessage
                 ? { streamingMessage: state.streamingMessage }
                 : {}),

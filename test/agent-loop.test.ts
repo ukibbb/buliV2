@@ -8,6 +8,7 @@ import type {
   IAgentTool,
 } from "@/agent/agent-types"
 import { runAgentLoop } from "@/agent/agent-loop"
+import type { IUserMessage } from "@/domain"
 
 const RUN_ID = "run-1"
 
@@ -263,6 +264,176 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
   })
 })
 
+test("injects steering only after the complete tool batch", async () => {
+  const order: string[] = []
+  const steering: IUserMessage[] = []
+  const model = new ScriptedModel((iteration) => {
+    order.push(`model:${iteration}`)
+    return iteration === 0
+      ? [
+          {
+            type: "tool-call",
+            toolCallId: "call-first",
+            toolName: "read_file",
+            input: { path: "README.md" },
+          },
+          {
+            type: "tool-call",
+            toolCallId: "call-second",
+            toolName: "read_file",
+            input: { path: "package.json" },
+          },
+          { type: "finish", reason: "tool-calls" },
+        ]
+      : [{ type: "finish", reason: "stop" }]
+  })
+  const tool: IAgentTool = {
+    name: "read_file",
+    description: "Read a file",
+    inputSchema: { type: "object" },
+    async execute(input) {
+      order.push(`tool:${String(input.path)}`)
+      return String(input.path)
+    },
+  }
+  const events: IAgentEvent[] = []
+
+  const result = await runAgentLoop({
+    sessionId: "session-1",
+    runId: RUN_ID,
+    systemPrompt: "System",
+    messages: [],
+    prompt: userMessage("Read both files"),
+    model,
+    reasoningEffort: "medium",
+    tools: [tool],
+    signal: new AbortController().signal,
+    emit: (event) => {
+      events.push(structuredClone(event))
+      if (
+        event.type === "tool_execution_start"
+        && event.toolCallId === "call-first"
+      ) {
+        steering.push({
+          id: "steering-during-tools",
+          sessionId: "session-1",
+          runId: RUN_ID,
+          role: "user",
+          source: "steer",
+          content: "Check both results",
+          createdAt: 3,
+        })
+      }
+    },
+    hasSteeringMessages: () => steering.length > 0,
+    takeSteeringMessage: () => steering.shift(),
+    now: timeGenerator(),
+    generateId: idGenerator(),
+  })
+
+  expect(order).toEqual([
+    "model:0",
+    "tool:README.md",
+    "tool:package.json",
+    "model:1",
+  ])
+  expect(model.requests[1]?.messages.at(-1)).toMatchObject({
+    role: "user",
+    source: "steer",
+    content: "Check both results",
+  })
+  const secondToolEnd = events.findIndex((event) =>
+    event.type === "tool_execution_end"
+    && event.toolCallId === "call-second"
+  )
+  const firstSteeringStart = events.findIndex((event) =>
+    event.type === "message_start"
+    && event.message.role === "user"
+    && event.message.source === "steer"
+  )
+  expect(secondToolEnd).toBeGreaterThan(-1)
+  expect(firstSteeringStart).toBeGreaterThan(secondToolEnd)
+  expect(result.reason).toBe("completed")
+})
+
+test("delivers follow-up only after tool continuation and steering", async () => {
+  const steering: IUserMessage[] = []
+  const followUps: IUserMessage[] = []
+  const model = new ScriptedModel((iteration) => iteration === 0
+    ? [
+        {
+          type: "tool-call",
+          toolCallId: "call-read",
+          toolName: "read_file",
+          input: { path: "README.md" },
+        },
+        { type: "finish", reason: "tool-calls" },
+      ]
+    : [{ type: "finish", reason: "stop" }])
+  const tool: IAgentTool = {
+    name: "read_file",
+    description: "Read a file",
+    inputSchema: { type: "object" },
+    execute: async () => "contents",
+  }
+
+  const result = await runAgentLoop({
+    sessionId: "session-1",
+    runId: RUN_ID,
+    systemPrompt: "System",
+    messages: [],
+    prompt: userMessage("Read the file"),
+    model,
+    reasoningEffort: "medium",
+    tools: [tool],
+    signal: new AbortController().signal,
+    emit: (event) => {
+      if (event.type !== "tool_execution_start") return
+      steering.push({
+        id: "steering-1",
+        sessionId: "session-1",
+        runId: RUN_ID,
+        role: "user",
+        source: "steer",
+        content: "Check the result first",
+        createdAt: 2,
+      })
+      followUps.push({
+        id: "follow-up-1",
+        sessionId: "session-1",
+        runId: RUN_ID,
+        role: "user",
+        source: "followUp",
+        content: "Then summarize everything",
+        createdAt: 3,
+      })
+    },
+    hasSteeringMessages: () => steering.length > 0,
+    takeSteeringMessage: () => steering.shift(),
+    hasFollowUpMessages: () => followUps.length > 0,
+    takeFollowUpMessage: () => followUps.shift(),
+    now: timeGenerator(),
+    generateId: idGenerator(),
+  })
+
+  expect(model.requests).toHaveLength(3)
+  expect(model.requests[1]?.messages.at(-1)).toMatchObject({
+    source: "steer",
+    content: "Check the result first",
+  })
+  expect(model.requests[1]?.messages).not.toContainEqual(
+    expect.objectContaining({ source: "followUp" }),
+  )
+  expect(model.requests[2]?.messages.at(-1)).toMatchObject({
+    source: "followUp",
+    content: "Then summarize everything",
+  })
+  expect(result.messages.filter((message) => message.role === "user").map(
+    (message) => message.source,
+  )).toEqual(["prompt", "steer", "followUp"])
+  expect(result.reason).toBe("completed")
+})
+
 test("turns an unknown local tool into a model-visible error", async () => {
   const model = new ScriptedModel((iteration) => iteration === 0
     ? [
@@ -356,6 +527,72 @@ test("gives abort precedence over a racing provider finish", async () => {
     errorMessage: "Stopped by test",
     createdAt: 11,
   })
+})
+
+test("gives abort precedence over an iteration limit during turn_end", async () => {
+  const controller = new AbortController()
+  const model = new ScriptedModel([
+    {
+      type: "tool-call",
+      toolCallId: "call-read",
+      toolName: "read_file",
+      input: { path: "README.md" },
+    },
+    { type: "finish", reason: "tool-calls" },
+  ])
+  const tool: IAgentTool = {
+    name: "read_file",
+    description: "Read a file",
+    inputSchema: { type: "object" },
+    execute: async () => "contents",
+  }
+
+  const result = await runAgentLoop({
+    sessionId: "session-1",
+    runId: RUN_ID,
+    systemPrompt: "System",
+    messages: [],
+    prompt: userMessage("Read"),
+    model,
+    reasoningEffort: "medium",
+    tools: [tool],
+    signal: controller.signal,
+    emit: (event) => {
+      if (event.type === "turn_end") controller.abort("Stopped during turn_end")
+    },
+    maxProviderIterations: 1,
+    now: timeGenerator(),
+    generateId: idGenerator(),
+  })
+
+  expect(result.reason).toBe("aborted")
+})
+
+test("gives abort precedence over a provider error during turn_end", async () => {
+  const controller = new AbortController()
+  const model = new ScriptedModel([{
+    type: "error",
+    error: new Error("Provider failed"),
+  }])
+
+  const result = await runAgentLoop({
+    sessionId: "session-1",
+    runId: RUN_ID,
+    systemPrompt: "System",
+    messages: [],
+    prompt: userMessage("Question"),
+    model,
+    reasoningEffort: "medium",
+    tools: [],
+    signal: controller.signal,
+    emit: (event) => {
+      if (event.type === "turn_end") controller.abort("Stopped during turn_end")
+    },
+    now: timeGenerator(),
+    generateId: idGenerator(),
+  })
+
+  expect(result.reason).toBe("aborted")
 })
 
 function userMessage(text: string) {

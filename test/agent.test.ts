@@ -1,7 +1,11 @@
 import { expect, test } from "bun:test"
 
 import { Agent } from "@/agent/agent"
-import type { IAgentEvent, IAgentModel } from "@/agent/agent-types"
+import type {
+  IAgentEvent,
+  IAgentModel,
+  IAgentModelRequest,
+} from "@/agent/agent-types"
 
 test("Agent.prompt returns a synchronous handle and Agent owns live state", async () => {
   const agent = new Agent({
@@ -252,6 +256,270 @@ test("agent_settled observers can start a new run immediately", async () => {
   expect(agent.state.messages.filter((message) => message.role === "user"))
     .toHaveLength(2)
   expect(agent.state.isRunning).toBe(false)
+})
+
+test("Agent delivers queued steering FIFO one message per response", async () => {
+  const firstStarted = Promise.withResolvers<void>()
+  const secondStarted = Promise.withResolvers<void>()
+  const releaseFirst = Promise.withResolvers<void>()
+  const releaseSecond = Promise.withResolvers<void>()
+  const requests: IAgentModelRequest[] = []
+  const model: IAgentModel = {
+    async *stream(request) {
+      const index = requests.length
+      requests.push({
+        ...request,
+        messages: structuredClone(request.messages),
+        tools: structuredClone(request.tools),
+      })
+      if (index === 0) {
+        firstStarted.resolve()
+        await releaseFirst.promise
+      }
+      if (index === 1) {
+        secondStarted.resolve()
+        await releaseSecond.promise
+      }
+      yield { type: "finish", reason: "stop" }
+    },
+  }
+  const agent = new Agent({
+    sessionId: "session-1",
+    systemPrompt: "System",
+    resolveRunConfiguration: () => ({
+      model,
+      reasoningEffort: "medium",
+    }),
+    tools: [],
+  })
+
+  expect(() => agent.steer("Too early")).toThrow(
+    "Agent is not accepting steering messages",
+  )
+
+  const run = agent.prompt("Initial prompt")
+  await run.accepted
+  await firstStarted.promise
+  agent.steer("First steering")
+  agent.steer("Second steering")
+
+  expect(agent.pendingSteeringMessages.map((message) => message.content)).toEqual([
+    "First steering",
+    "Second steering",
+  ])
+
+  releaseFirst.resolve()
+  await secondStarted.promise
+
+  expect(requests[1]?.messages.at(-1)).toMatchObject({
+    runId: run.runId,
+    role: "user",
+    source: "steer",
+    content: "First steering",
+  })
+  expect(requests[1]?.messages).not.toContainEqual(
+    expect.objectContaining({ content: "Second steering" }),
+  )
+  expect(agent.pendingSteeringMessages.map((message) => message.content)).toEqual([
+    "Second steering",
+  ])
+
+  releaseSecond.resolve()
+  await run.settled
+
+  expect(requests).toHaveLength(3)
+  expect(requests[2]?.messages.at(-1)).toMatchObject({
+    runId: run.runId,
+    role: "user",
+    source: "steer",
+    content: "Second steering",
+  })
+  expect(agent.pendingSteeringMessages).toEqual([])
+  expect(agent.state.messages.filter((message) => message.role === "user").map(
+    (message) => message.source,
+  )).toEqual(["prompt", "steer", "steer"])
+})
+
+test("Agent delivers follow-ups FIFO only after it would otherwise stop", async () => {
+  const firstStarted = Promise.withResolvers<void>()
+  const releaseFirst = Promise.withResolvers<void>()
+  const requests: IAgentModelRequest[] = []
+  const agent = new Agent({
+    sessionId: "session-1",
+    systemPrompt: "System",
+    resolveRunConfiguration: () => ({
+      model: {
+        async *stream(request) {
+          requests.push({
+            ...request,
+            messages: structuredClone(request.messages),
+            tools: structuredClone(request.tools),
+          })
+          if (requests.length === 1) {
+            firstStarted.resolve()
+            await releaseFirst.promise
+          }
+          yield { type: "finish", reason: "stop" }
+        },
+      },
+      reasoningEffort: "medium",
+    }),
+    tools: [],
+  })
+
+  expect(() => agent.followUp("Too early")).toThrow(
+    "Agent is not accepting follow-up messages",
+  )
+
+  const run = agent.prompt("Initial prompt")
+  await run.accepted
+  await firstStarted.promise
+  agent.followUp("First follow-up")
+  agent.followUp("Second follow-up")
+
+  expect(agent.pendingFollowUpMessages.map((message) => message.content)).toEqual([
+    "First follow-up",
+    "Second follow-up",
+  ])
+
+  releaseFirst.resolve()
+  await run.settled
+
+  expect(requests).toHaveLength(3)
+  expect(requests[1]?.messages.at(-1)).toMatchObject({
+    runId: run.runId,
+    source: "followUp",
+    content: "First follow-up",
+  })
+  expect(requests[1]?.messages).not.toContainEqual(
+    expect.objectContaining({ content: "Second follow-up" }),
+  )
+  expect(requests[2]?.messages.at(-1)).toMatchObject({
+    runId: run.runId,
+    source: "followUp",
+    content: "Second follow-up",
+  })
+  expect(agent.pendingFollowUpMessages).toEqual([])
+  expect(agent.state.messages.filter((message) => message.role === "user").map(
+    (message) => message.source,
+  )).toEqual(["prompt", "followUp", "followUp"])
+})
+
+test("Agent rejects steering until the initial prompt is durable", async () => {
+  const promptPersistenceStarted = Promise.withResolvers<void>()
+  const releasePromptPersistence = Promise.withResolvers<void>()
+  const firstRequestStarted = Promise.withResolvers<void>()
+  const releaseFirstRequest = Promise.withResolvers<void>()
+  const requests: IAgentModelRequest[] = []
+  const agent = new Agent({
+    sessionId: "session-1",
+    systemPrompt: "System",
+    resolveRunConfiguration: () => ({
+      model: {
+        async *stream(request) {
+          requests.push({
+            ...request,
+            messages: structuredClone(request.messages),
+            tools: structuredClone(request.tools),
+          })
+          if (requests.length === 1) {
+            firstRequestStarted.resolve()
+            await releaseFirstRequest.promise
+          }
+          yield { type: "finish", reason: "stop" }
+        },
+      },
+      reasoningEffort: "medium",
+    }),
+    tools: [],
+    criticalEventSink: async (event) => {
+      if (
+        event.type === "message_end"
+        && event.message.role === "user"
+        && event.message.source === "prompt"
+      ) {
+        promptPersistenceStarted.resolve()
+        await releasePromptPersistence.promise
+      }
+    },
+  })
+
+  const run = agent.prompt("Initial prompt")
+  await promptPersistenceStarted.promise
+  expect(() => agent.steer("Too early")).toThrow(
+    "Agent is not accepting steering messages",
+  )
+  releasePromptPersistence.resolve()
+  await run.accepted
+  await firstRequestStarted.promise
+  agent.steer("Include this next")
+  releaseFirstRequest.resolve()
+  await run.settled
+
+  expect(requests).toHaveLength(2)
+  expect(requests[0]?.messages.map((message) =>
+    message.role === "user" ? message.source : message.role
+  )).toEqual(["prompt"])
+  expect(requests[1]?.messages.at(-1)).toMatchObject({
+    runId: run.runId,
+    source: "steer",
+    content: "Include this next",
+  })
+})
+
+test("Agent keeps steering recoverable when the iteration limit prevents delivery", async () => {
+  const modelStarted = Promise.withResolvers<void>()
+  const releaseModel = Promise.withResolvers<void>()
+  const agent = new Agent({
+    sessionId: "session-1",
+    systemPrompt: "System",
+    resolveRunConfiguration: () => ({
+      model: {
+        async *stream() {
+          modelStarted.resolve()
+          await releaseModel.promise
+          yield { type: "finish", reason: "stop" }
+        },
+      },
+      reasoningEffort: "medium",
+    }),
+    tools: [],
+    maxProviderIterations: 1,
+  })
+
+  const run = agent.prompt("Initial prompt")
+  await run.accepted
+  await modelStarted.promise
+  agent.steer("Try another approach")
+  agent.followUp("Then summarize it")
+  releaseModel.resolve()
+  await run.settled
+
+  expect(agent.state.lastRunReason).toBe("max-iterations")
+  expect(agent.pendingSteeringMessages).toEqual([
+    expect.objectContaining({
+      runId: run.runId,
+      source: "steer",
+      content: "Try another approach",
+    }),
+  ])
+  expect(agent.pendingFollowUpMessages).toEqual([
+    expect.objectContaining({
+      runId: run.runId,
+      source: "followUp",
+      content: "Then summarize it",
+    }),
+  ])
+  expect(() => agent.prompt("Another prompt")).toThrow(
+    "Restore queued messages before starting another prompt",
+  )
+  const queued = agent.clearQueuedMessages()
+  expect(queued.steering.map((message) => message.content)).toEqual([
+    "Try another approach",
+  ])
+  expect(queued.followUp.map((message) => message.content)).toEqual([
+    "Then summarize it",
+  ])
 })
 
 test("Agent rejects overlap, abort settles the active run, and can clear when idle", async () => {

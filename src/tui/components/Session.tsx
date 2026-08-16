@@ -36,6 +36,8 @@ export function SessionScreen(props: ISessionScreenProps): ReactNode {
 
       <Chat
         isRunning={session.isRunning}
+        pendingSteeringMessages={session.pendingSteeringMessages}
+        pendingFollowUpMessages={session.pendingFollowUpMessages}
         {...(session.lastRunReason
           ? { lastRunReason: session.lastRunReason }
           : {})}

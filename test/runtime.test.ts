@@ -105,6 +105,81 @@ test("application runtime submits prompts into its session view", async () => {
   await runtime.dispose()
 })
 
+test("application runtime queues and clears steering and follow-up", async () => {
+  const firstStarted = Promise.withResolvers<void>()
+  const releaseFirst = Promise.withResolvers<void>()
+  const requests: IAgentModelRequest[] = []
+  const runtime = runtimeWith({
+    async *stream(request) {
+      requests.push({
+        ...request,
+        messages: structuredClone(request.messages),
+        tools: structuredClone(request.tools),
+      })
+      if (requests.length === 1) {
+        firstStarted.resolve()
+        await releaseFirst.promise
+      }
+      yield { type: "finish", reason: "stop" }
+    },
+  })
+  const view = createSession(runtime)
+  const submission = runtime.submitPrompt({
+    sessionId: "session-1",
+    text: "Initial prompt",
+  })
+  await submission.accepted
+  await firstStarted.promise
+
+  runtime.steer("session-1", "Restore this")
+  runtime.followUp("session-1", "Restore this later")
+  expect(runtime.clearQueuedMessages("session-1")).toEqual({
+    steering: ["Restore this"],
+    followUp: ["Restore this later"],
+  })
+  runtime.steer("session-1", "Adjust the answer")
+  runtime.followUp("session-1", "Then summarize it")
+  expect(view.getSnapshot().pendingSteeringMessages).toEqual([
+    expect.objectContaining({
+      runId: submission.runId,
+      source: "steer",
+      content: "Adjust the answer",
+    }),
+  ])
+  expect(view.getSnapshot().pendingFollowUpMessages).toEqual([
+    expect.objectContaining({
+      runId: submission.runId,
+      source: "followUp",
+      content: "Then summarize it",
+    }),
+  ])
+
+  releaseFirst.resolve()
+  await submission.settled
+
+  expect(requests).toHaveLength(3)
+  expect(requests[1]?.messages.at(-1)).toMatchObject({
+    runId: submission.runId,
+    source: "steer",
+    content: "Adjust the answer",
+  })
+  expect(requests[2]?.messages.at(-1)).toMatchObject({
+    runId: submission.runId,
+    source: "followUp",
+    content: "Then summarize it",
+  })
+  expect(view.getSnapshot().pendingSteeringMessages).toEqual([])
+  expect(view.getSnapshot().pendingFollowUpMessages).toEqual([])
+  expect(() => runtime.steer("session-1", "Too late")).toThrow(
+    "Agent is not accepting steering messages",
+  )
+  expect(() => runtime.followUp("session-1", "Too late")).toThrow(
+    "Agent is not accepting follow-up messages",
+  )
+
+  await runtime.dispose()
+})
+
 test("application runtime rejects blank prompts", async () => {
   const runtime = runtimeWith()
   const view = createSession(runtime)

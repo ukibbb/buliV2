@@ -12,6 +12,7 @@ import type {
     IAssistantMessage,
     IToolCallContent,
     IToolResultMessage,
+    IUserMessage,
     TAgentMessage,
 } from "@/domain"
 
@@ -28,6 +29,12 @@ interface IRunAgentLoopOptions {
     readonly reasoningEffort: TReasoningEffort
     readonly signal: AbortSignal
     readonly emit: (event: IAgentEvent) => void | Promise<void>
+    readonly hasSteeringMessages?: () => boolean
+    readonly takeSteeringMessage?: () => IUserMessage | undefined
+    readonly hasFollowUpMessages?: () => boolean
+    readonly takeFollowUpMessage?: () => IUserMessage | undefined
+    readonly restoreQueuedMessage?: (message: IUserMessage) => void
+    readonly closeQueuedInput?: () => void
     readonly maxProviderIterations?: number
     readonly now?: () => number
     readonly generateId?: () => string
@@ -48,13 +55,50 @@ export async function runAgentLoop(
     await options.emit({ type: "turn_start", runId: options.runId, index: 0 })
     await emitCompletedMessage(options.prompt, options.runId, options.emit)
 
+    let continueForTools = false
     for (let iteration = 0; iteration < maximumIterations; iteration += 1) {
-        if (iteration > 0) {
-            await options.emit({
-                type: "turn_start",
-                runId: options.runId,
-                index: iteration,
-            })
+        const steeringMessage = iteration > 0
+            ? options.takeSteeringMessage?.()
+            : undefined
+        const followUpMessage = iteration > 0
+            && !continueForTools
+            && !steeringMessage
+            ? options.takeFollowUpMessage?.()
+            : undefined
+        const queuedMessage = steeringMessage ?? followUpMessage
+        if (iteration > 0 && !continueForTools && !queuedMessage) {
+            options.closeQueuedInput?.()
+            return finishRun(
+                "completed",
+                newMessages,
+                options.runId,
+                options.emit,
+            )
+        }
+
+        try {
+            if (iteration > 0) {
+                await options.emit({
+                    type: "turn_start",
+                    runId: options.runId,
+                    index: iteration,
+                })
+            }
+
+            if (queuedMessage) {
+                await emitCompletedMessage(
+                    queuedMessage,
+                    options.runId,
+                    options.emit,
+                )
+                messages.push(queuedMessage)
+                newMessages.push(queuedMessage)
+            }
+        } catch (error) {
+            if (queuedMessage) {
+                options.restoreQueuedMessage?.(queuedMessage)
+            }
+            throw error
         }
 
         const assistant = await streamAssistantMessage(
@@ -75,6 +119,7 @@ export async function runAgentLoop(
 
         const assistantRunReason = runReasonForAssistant(assistant)
         if (assistantRunReason) {
+            options.closeQueuedInput?.()
             await options.emit({
                 type: "turn_end",
                 runId: options.runId,
@@ -84,7 +129,7 @@ export async function runAgentLoop(
                 willContinue: false,
             })
             return finishRun(
-                assistantRunReason,
+                options.signal.aborted ? "aborted" : assistantRunReason,
                 newMessages,
                 options.runId,
                 options.emit,
@@ -106,7 +151,15 @@ export async function runAgentLoop(
             newMessages.push(toolResult)
         }
 
-        const reachedLimit = toolResults.length > 0
+        // Steering nie przerywa odpowiedzi ani tool calli i ma pierwszeństwo
+        // przy następnym requestcie. Follow-up czeka jeszcze dłużej: pętla użyje
+        // go dopiero wtedy, gdy nie zostało ani tool continuation, ani steering.
+        const hasSteeringMessages = options.hasSteeringMessages?.() ?? false
+        const hasFollowUpMessages = options.hasFollowUpMessages?.() ?? false
+        const wantsContinuation = toolResults.length > 0
+            || hasSteeringMessages
+            || hasFollowUpMessages
+        const reachedLimit = wantsContinuation
             && iteration + 1 >= maximumIterations
 
         const runReason = options.signal.aborted
@@ -115,7 +168,9 @@ export async function runAgentLoop(
                 ? "max-iterations"
                 : undefined
 
-        const willContinue = toolResults.length > 0 && runReason === undefined
+        const willContinue = wantsContinuation && runReason === undefined
+
+        if (runReason || !willContinue) options.closeQueuedInput?.()
 
         await options.emit({
             type: "turn_end",
@@ -126,14 +181,20 @@ export async function runAgentLoop(
             willContinue,
         })
 
+        if (options.signal.aborted) {
+            options.closeQueuedInput?.()
+            return finishRun("aborted", newMessages, options.runId, options.emit)
+        }
         if (runReason) {
             return finishRun(runReason, newMessages, options.runId, options.emit)
         }
         if (!willContinue) {
             return finishRun("completed", newMessages, options.runId, options.emit)
         }
+        continueForTools = toolResults.length > 0
     }
 
+    options.closeQueuedInput?.()
     return finishRun("max-iterations", newMessages, options.runId, options.emit)
 }
 

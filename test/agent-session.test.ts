@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 
-import type { IAgentModel } from "@/agent/agent-types"
+import type { IAgentModel, IAgentModelRequest } from "@/agent/agent-types"
 import type {
   IAssistantMessage,
   IToolResultMessage,
@@ -62,6 +62,242 @@ test("AgentSession restores history, persists completion barriers, and publishes
   )).toBe(true)
   expect(session.getSnapshot().isRunning).toBe(false)
   expect(notifications).toBeGreaterThan(0)
+
+  await session.dispose()
+})
+
+test("AgentSession persists steering and follow-up before each model request", async () => {
+  const manager = new InMemorySessionManager()
+  manager.createSession(sessionInfo("session-1", "test-agent", "Steering"))
+  const firstStarted = Promise.withResolvers<void>()
+  const releaseFirst = Promise.withResolvers<void>()
+  const requests: IAgentModelRequest[] = []
+  const persistedBeforeRequest: number[] = []
+  const model: IAgentModel = {
+    async *stream(request) {
+      requests.push({
+        ...request,
+        messages: structuredClone(request.messages),
+        tools: structuredClone(request.tools),
+      })
+      persistedBeforeRequest.push(manager.getMessages("session-1").length)
+      if (requests.length === 1) {
+        firstStarted.resolve()
+        await releaseFirst.promise
+      }
+      yield { type: "finish", reason: "stop" }
+    },
+  }
+  const session = new AgentSession({
+    agentId: "test-agent",
+    sessionId: "session-1",
+    manager,
+    systemPrompt: "System",
+    resolveRunConfiguration: () => ({
+      model,
+      reasoningEffort: "medium",
+    }),
+    tools: [],
+  })
+
+  const run = session.prompt("Initial prompt")
+  await run.accepted
+  await firstStarted.promise
+  session.steer("Adjust the answer")
+  session.followUp("Then summarize it")
+
+  expect(session.getSnapshot().pendingSteeringMessages).toEqual([
+    expect.objectContaining({
+      runId: run.runId,
+      source: "steer",
+      content: "Adjust the answer",
+    }),
+  ])
+  expect(session.getSnapshot().pendingFollowUpMessages).toEqual([
+    expect.objectContaining({
+      runId: run.runId,
+      source: "followUp",
+      content: "Then summarize it",
+    }),
+  ])
+
+  releaseFirst.resolve()
+  await run.settled
+
+  expect(requests).toHaveLength(3)
+  expect(requests[1]?.messages.at(-1)).toMatchObject({
+    runId: run.runId,
+    source: "steer",
+    content: "Adjust the answer",
+  })
+  expect(requests[2]?.messages.at(-1)).toMatchObject({
+    runId: run.runId,
+    source: "followUp",
+    content: "Then summarize it",
+  })
+  expect(persistedBeforeRequest).toEqual([1, 3, 5])
+  expect(manager.getMessages("session-1").map((message) => message.role)).toEqual([
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+  ])
+  expect(manager.getMessages("session-1")[2]).toMatchObject({
+    runId: run.runId,
+    source: "steer",
+    content: "Adjust the answer",
+  })
+  expect(manager.getMessages("session-1")[4]).toMatchObject({
+    runId: run.runId,
+    source: "followUp",
+    content: "Then summarize it",
+  })
+  expect(session.getSnapshot().pendingSteeringMessages).toEqual([])
+  expect(session.getSnapshot().pendingFollowUpMessages).toEqual([])
+
+  await session.dispose()
+})
+
+test("AgentSession restores steering to the queue when persistence fails", async () => {
+  const memory = new InMemorySessionManager()
+  memory.createSession(sessionInfo("session-1", "test-agent", "Steering failure"))
+  const persistenceFailure = new Error("Failed to persist steering")
+  const manager: ISessionManager = {
+    createSession: memory.createSession,
+    getSessionInfo: memory.getSessionInfo,
+    listSessions: memory.listSessions,
+    getMessages: memory.getMessages,
+    appendMessage: (message) => {
+      if (message.role === "user" && message.source === "steer") {
+        throw persistenceFailure
+      }
+      memory.appendMessage(message)
+    },
+    clearSession: memory.clearSession,
+    deleteSession: memory.deleteSession,
+  }
+  const firstStarted = Promise.withResolvers<void>()
+  const releaseFirst = Promise.withResolvers<void>()
+  let providerInvocations = 0
+  const session = new AgentSession({
+    agentId: "test-agent",
+    sessionId: "session-1",
+    manager,
+    systemPrompt: "System",
+    resolveRunConfiguration: () => ({
+      model: {
+        async *stream() {
+          providerInvocations += 1
+          firstStarted.resolve()
+          await releaseFirst.promise
+          yield { type: "finish", reason: "stop" }
+        },
+      },
+      reasoningEffort: "medium",
+    }),
+    tools: [],
+  })
+
+  const run = session.prompt("Initial prompt")
+  await run.accepted
+  await firstStarted.promise
+  session.steer("Recover this steering")
+  releaseFirst.resolve()
+  const settlementFailure = await run.settled.then(
+    () => undefined,
+    (error: unknown) => error,
+  )
+
+  expect(settlementFailure).toBe(persistenceFailure)
+  expect(providerInvocations).toBe(1)
+  expect(memory.getMessages("session-1").map((message) => message.role)).toEqual([
+    "user",
+    "assistant",
+  ])
+  expect(session.getSnapshot().pendingSteeringMessages).toEqual([
+    expect.objectContaining({
+      runId: run.runId,
+      source: "steer",
+      content: "Recover this steering",
+    }),
+  ])
+  expect(session.clearQueuedMessages()).toEqual({
+    steering: ["Recover this steering"],
+    followUp: [],
+  })
+
+  await session.dispose()
+})
+
+test("AgentSession restores follow-up to the queue when persistence fails", async () => {
+  const memory = new InMemorySessionManager()
+  memory.createSession(sessionInfo("session-1", "test-agent", "Follow-up failure"))
+  const persistenceFailure = new Error("Failed to persist follow-up")
+  const manager: ISessionManager = {
+    createSession: memory.createSession,
+    getSessionInfo: memory.getSessionInfo,
+    listSessions: memory.listSessions,
+    getMessages: memory.getMessages,
+    appendMessage: (message) => {
+      if (message.role === "user" && message.source === "followUp") {
+        throw persistenceFailure
+      }
+      memory.appendMessage(message)
+    },
+    clearSession: memory.clearSession,
+    deleteSession: memory.deleteSession,
+  }
+  const firstStarted = Promise.withResolvers<void>()
+  const releaseFirst = Promise.withResolvers<void>()
+  let providerInvocations = 0
+  const session = new AgentSession({
+    agentId: "test-agent",
+    sessionId: "session-1",
+    manager,
+    systemPrompt: "System",
+    resolveRunConfiguration: () => ({
+      model: {
+        async *stream() {
+          providerInvocations += 1
+          firstStarted.resolve()
+          await releaseFirst.promise
+          yield { type: "finish", reason: "stop" }
+        },
+      },
+      reasoningEffort: "medium",
+    }),
+    tools: [],
+  })
+
+  const run = session.prompt("Initial prompt")
+  await run.accepted
+  await firstStarted.promise
+  session.followUp("Recover this follow-up")
+  releaseFirst.resolve()
+  const settlementFailure = await run.settled.then(
+    () => undefined,
+    (error: unknown) => error,
+  )
+
+  expect(settlementFailure).toBe(persistenceFailure)
+  expect(providerInvocations).toBe(1)
+  expect(memory.getMessages("session-1").map((message) => message.role)).toEqual([
+    "user",
+    "assistant",
+  ])
+  expect(session.getSnapshot().pendingFollowUpMessages).toEqual([
+    expect.objectContaining({
+      runId: run.runId,
+      source: "followUp",
+      content: "Recover this follow-up",
+    }),
+  ])
+  expect(session.clearQueuedMessages()).toEqual({
+    steering: [],
+    followUp: ["Recover this follow-up"],
+  })
 
   await session.dispose()
 })

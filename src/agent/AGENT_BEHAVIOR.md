@@ -53,11 +53,12 @@ The current application is smaller than the behavior described in the WIP notes.
 | Area | Current behavior |
 | --- | --- |
 | Active prompt | Only the strings returned by `systemPrompt()` in `agents-prompts.ts` reach the model. All earlier comments are inactive notes. |
-| Provider integration | `OpenAiUserBuliInteractionDriver` sends the prompt through OpenAI `instructions`. |
+| Provider integration | `OpenAiAgentModel` maps provider-neutral requests to the AI SDK Responses API and sends the system prompt through OpenAI `instructions`. |
 | Tools | The default registry exposes only `read_file`, `glob`, and `grep`. |
 | Writes | There is no write tool, patch proposal, patch application, or approval workflow. |
 | Modes | `auto`, `plan`, `learn`, and `implement` exist only in comments. There is no runtime type or mode state. |
-| Session | The TUI uses one `default` session per workspace. Mode and prompt version are not persisted. |
+| Session | The TUI supports multiple named JSONL sessions per workspace. The first accepted prompt creates a session; mode, model selection, and prompt version are not persisted. |
+| Concurrent input | A second prompt is currently rejected while a run is active, but the TUI retains the text. Steering and follow-up queues are planned but not implemented. |
 | Learning notes | Neither `_learning` nor a notes MCP server currently exists. |
 | Web research | No web search or web fetch tool is exposed to Buli. |
 | Citations | `grep` returns line numbers, but `read_file` does not currently support line ranges or line-numbered output. |

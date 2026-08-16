@@ -9,6 +9,7 @@ import type { IAgentModelEvent } from "@/agent/agent-types"
 
 interface IAssistantMessageBuilderOptions {
   readonly sessionId: string
+  readonly runId: string
   readonly now: () => number
   readonly generateId: () => string
 }
@@ -87,6 +88,7 @@ export class AssistantMessageBuilder {
     return structuredClone({
       id: this.messageId,
       sessionId: this.options.sessionId,
+      runId: this.options.runId,
       role: "assistant" as const,
       content: this.content,
       stopReason: this.stopReason,

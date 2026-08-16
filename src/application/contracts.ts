@@ -1,0 +1,73 @@
+import type { TReasoningEffort } from "@/agent/agent-types"
+import type { ISessionInfo, ISessionSnapshot } from "@/domain"
+
+export interface ISnapshotSource<Snapshot> {
+    readonly subscribe: (listener: () => void) => () => void
+    readonly getSnapshot: () => Snapshot
+}
+
+export interface IBuliPromptInput {
+    readonly sessionId?: string
+    readonly text: string
+}
+
+export interface IBuliPromptSubmission {
+    readonly sessionId: string
+    readonly runId: string
+    readonly accepted: Promise<void>
+    readonly settled: Promise<void>
+}
+
+export interface IBuliAgentInfo {
+    readonly id: string
+    readonly name: string
+}
+
+// select model and it's effort
+export interface IBuliModelSelection {
+    readonly modelId: string
+    readonly reasoningEffort: TReasoningEffort
+}
+
+// bezpieczne dane dla ui i pickerow
+export interface IBuliModelInfo {
+    readonly id: string
+    readonly name: string
+    readonly reasoningEfforts: readonly TReasoningEffort[]
+}
+
+export interface IBuliApplicationSnapshot {
+    readonly agents: readonly IBuliAgentInfo[]
+    readonly defaultAgentId: string
+    readonly models: readonly IBuliModelInfo[]
+    readonly selection: IBuliModelSelection
+}
+
+// Resolve fixed prompt and tools from the registered agent when creating a session.
+export interface IBuliSessionCreationOptions {
+    readonly agentId: string
+    readonly title: string
+}
+
+export interface IBuliApplication
+    extends ISnapshotSource<IBuliApplicationSnapshot> {
+    readonly workspaceRoot: string
+
+    readonly selectModel: (modelId: string) => void
+    readonly selectReasoningEffort: (
+        reasoningEffort: TReasoningEffort,
+    ) => void
+
+    readonly submitPrompt: (prompt: IBuliPromptInput) => IBuliPromptSubmission
+    readonly clearSession: (sessionId: string) => void
+    readonly abort: (sessionId: string) => Promise<void>
+    readonly dispose: () => Promise<void>
+
+    readonly createSession: (
+        options: IBuliSessionCreationOptions,
+    ) => ISessionInfo
+    readonly openSession: (
+        sessionId: string,
+    ) => ISnapshotSource<ISessionSnapshot>
+    readonly listSessions: () => readonly ISessionInfo[]
+}

@@ -9,6 +9,8 @@ import type {
 } from "@/agent/agent-types"
 import { runAgentLoop } from "@/agent/agent-loop"
 
+const RUN_ID = "run-1"
+
 class ScriptedModel implements IAgentModel {
   readonly requests: IAgentModelRequest[] = []
 
@@ -45,6 +47,7 @@ test("emits an explicit lifecycle for a text response", async () => {
 
   const result = await runAgentLoop({
     sessionId: "session-1",
+    runId: RUN_ID,
     systemPrompt: "System",
     messages: [],
     prompt: userMessage("Question"),
@@ -72,10 +75,12 @@ test("emits an explicit lifecycle for a text response", async () => {
     "turn_end",
     "agent_end",
   ])
+  expect(events.every((event) => event.runId === RUN_ID)).toBe(true)
   expect(result.reason).toBe("completed")
   expect(result.messages.at(-1)).toEqual({
     id: "generated-1",
     sessionId: "session-1",
+    runId: RUN_ID,
     role: "assistant",
     content: [{ type: "text", text: "Hello" }],
     stopReason: "stop",
@@ -84,6 +89,7 @@ test("emits an explicit lifecycle for a text response", async () => {
   expect(model.requests[0]?.messages.map((message) => message.role)).toEqual([
     "user",
   ])
+  expect(model.requests[0]?.runId).toBe(RUN_ID)
 })
 
 test("executes multiple tools sequentially and emits each result lifecycle", async () => {
@@ -112,6 +118,7 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
   const executionOrder: string[] = []
   let activeToolCalls = 0
   let maximumActiveToolCalls = 0
+  const executionRunIds: string[] = []
   const readFileTool: IAgentTool = {
     name: "read_file",
     description: "Read a file",
@@ -120,6 +127,7 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
       activeToolCalls += 1
       maximumActiveToolCalls = Math.max(maximumActiveToolCalls, activeToolCalls)
       executionOrder.push(`start:${context.toolCallId}`)
+      executionRunIds.push(context.runId)
       await Promise.resolve()
       executionOrder.push(`end:${context.toolCallId}`)
       activeToolCalls -= 1
@@ -130,6 +138,7 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
 
   const result = await runAgentLoop({
     sessionId: "session-1",
+    runId: RUN_ID,
     systemPrompt: "System",
     messages: [],
     prompt: userMessage("Read"),
@@ -147,6 +156,7 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
   const readmeResult = {
     id: "generated-2",
     sessionId: "session-1",
+    runId: RUN_ID,
     role: "toolResult" as const,
     toolCallId: "call-readme",
     toolName: "read_file",
@@ -157,6 +167,7 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
   const packageResult = {
     id: "generated-3",
     sessionId: "session-1",
+    runId: RUN_ID,
     role: "toolResult" as const,
     toolCallId: "call-package",
     toolName: "read_file",
@@ -172,12 +183,15 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
     "end:call-package",
   ])
   expect(maximumActiveToolCalls).toBe(1)
+  expect(executionRunIds).toEqual([RUN_ID, RUN_ID])
   expect(model.requests).toHaveLength(2)
+  expect(model.requests.every((request) => request.runId === RUN_ID)).toBe(true)
   expect(model.requests[1]?.messages).toEqual([
     userMessage("Read"),
     {
       id: "generated-1",
       sessionId: "session-1",
+      runId: RUN_ID,
       role: "assistant",
       content: [
         {
@@ -209,33 +223,38 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
   )).toEqual([
     {
       type: "tool_execution_start",
+      runId: RUN_ID,
       toolCallId: "call-readme",
       toolName: "read_file",
       input: { path: "README.md" },
     },
     {
       type: "tool_execution_end",
+      runId: RUN_ID,
       toolCallId: "call-readme",
       toolName: "read_file",
       result: readmeResult,
     },
-    { type: "message_start", message: readmeResult },
-    { type: "message_end", message: readmeResult },
+    { type: "message_start", runId: RUN_ID, message: readmeResult },
+    { type: "message_end", runId: RUN_ID, message: readmeResult },
     {
       type: "tool_execution_start",
+      runId: RUN_ID,
       toolCallId: "call-package",
       toolName: "read_file",
       input: { path: "package.json" },
     },
     {
       type: "tool_execution_end",
+      runId: RUN_ID,
       toolCallId: "call-package",
       toolName: "read_file",
       result: packageResult,
     },
-    { type: "message_start", message: packageResult },
-    { type: "message_end", message: packageResult },
+    { type: "message_start", runId: RUN_ID, message: packageResult },
+    { type: "message_end", runId: RUN_ID, message: packageResult },
   ])
+  expect(events.every((event) => event.runId === RUN_ID)).toBe(true)
   expect(result.reason).toBe("completed")
   expect(result.messages.at(-1)).toMatchObject({
     role: "assistant",
@@ -259,6 +278,7 @@ test("turns an unknown local tool into a model-visible error", async () => {
 
   await runAgentLoop({
     sessionId: "session-1",
+    runId: RUN_ID,
     systemPrompt: "System",
     messages: [],
     prompt: userMessage("Run"),
@@ -274,6 +294,7 @@ test("turns an unknown local tool into a model-visible error", async () => {
   expect(model.requests[1]?.messages.at(-1)).toEqual({
     id: "generated-2",
     sessionId: "session-1",
+    runId: RUN_ID,
     role: "toolResult",
     toolCallId: "call-missing",
     toolName: "missing",
@@ -302,6 +323,7 @@ test("gives abort precedence over a racing provider finish", async () => {
 
   const result = await runAgentLoop({
     sessionId: "session-1",
+    runId: RUN_ID,
     systemPrompt: "System",
     messages: [],
     prompt: userMessage("Question"),
@@ -319,6 +341,7 @@ test("gives abort precedence over a racing provider finish", async () => {
   expect(assistant).toEqual({
     id: "generated-1",
     sessionId: "session-1",
+    runId: RUN_ID,
     role: "assistant",
     content: [
       {
@@ -339,7 +362,9 @@ function userMessage(text: string) {
   return {
     id: "user-message",
     sessionId: "session-1",
+    runId: RUN_ID,
     role: "user" as const,
+    source: "prompt" as const,
     content: text,
     createdAt: 1,
   }

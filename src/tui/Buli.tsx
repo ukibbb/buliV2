@@ -1,12 +1,17 @@
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 
 import { Layout } from "@/tui/components/Layout"
+import { Home } from "@/tui/components/Home"
 import { SessionScreen } from "@/tui/components/Session"
 import { buliKeyboardController } from "@/tui/keyboard-controller"
-import { useBuliUiController } from "@/tui/ui-controller-state"
+import {
+    useBuliUiController,
+    useBuliUiSnapshot,
+} from "@/tui/ui-controller-state"
 
 export function BuliTui() {
     const controller = useBuliUiController()
+    const ui = useBuliUiSnapshot()
     const renderer = useRenderer()
     const { width, height } = useTerminalDimensions()
 
@@ -25,7 +30,14 @@ export function BuliTui() {
 
     return (
         <Layout width={width} height={height}>
-            <SessionScreen sessionId={controller.sessionId} />
+            {ui.route.type === "home" ? (
+                <Home />
+            ) : (
+                <SessionScreen
+                    key={ui.route.sessionId}
+                    sessionId={ui.route.sessionId}
+                />
+            )}
         </Layout>
     )
 }

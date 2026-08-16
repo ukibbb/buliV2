@@ -1,14 +1,21 @@
 import { expect, test } from "bun:test"
-import { CodeRenderable, parseKeypress, type Renderable } from "@opentui/core"
+import {
+  CodeRenderable,
+  parseKeypress,
+  type Renderable,
+  TextareaRenderable,
+} from "@opentui/core"
 import { testRender } from "@opentui/react/test-utils"
 import { act, createElement } from "react"
 
-import {
-  BuliApplicationRuntime,
-  createBuliApplication,
-  type IBuliApplication,
-  type IBuliApplicationSnapshot,
-} from "@/application"
+import { createBuliApplication } from "@/application"
+import type {
+  IBuliApplication,
+  IBuliApplicationSnapshot,
+  IBuliPromptInput,
+  IBuliPromptSubmission,
+} from "@/application/contracts"
+import { BuliApplicationRuntime } from "@/application/runtime"
 import { BuliRuntimeProvider } from "@/application-state"
 import type { IAgentModel } from "@/agent/agent-types"
 import type { ISessionSnapshot } from "@/domain"
@@ -18,8 +25,17 @@ import { BuliUiController } from "@/tui/ui-controller"
 import { BuliUiControllerProvider } from "@/tui/ui-controller-state"
 
 const WORKSPACE_ROOT = "/workspace"
+const TEST_AGENT_ID = "test-agent"
+const TEST_AGENTS = [{
+  id: TEST_AGENT_ID,
+  name: "Test Agent",
+  systemPrompt: "System",
+  tools: [],
+}] as const
 
 const APPLICATION_SNAPSHOT: IBuliApplicationSnapshot = {
+  agents: [{ id: TEST_AGENT_ID, name: "Test Agent" }],
+  defaultAgentId: TEST_AGENT_ID,
   models: [{
     id: "test",
     name: "Test",
@@ -38,12 +54,98 @@ function codeRenderables(root: Renderable): CodeRenderable[] {
   ])
 }
 
-function buliElement(runtime: IBuliApplication, sessionId = "default") {
+function textareaRenderable(root: Renderable): TextareaRenderable {
+  const textarea = findTextareaRenderable(root)
+  if (textarea) return textarea
+  throw new Error("Expected a textarea renderable")
+}
+
+function findTextareaRenderable(root: Renderable): TextareaRenderable | undefined {
+  if (root instanceof TextareaRenderable) return root
+  for (const child of root.getChildren()) {
+    const textarea = findTextareaRenderable(child)
+    if (textarea) return textarea
+  }
+  return undefined
+}
+
+interface IFakeApplicationOptions {
+  readonly sessionSnapshot?: ISessionSnapshot
+  readonly submitPrompt?: (prompt: IBuliPromptInput) => IBuliPromptSubmission
+}
+
+function fakeApplication(options: IFakeApplicationOptions = {}) {
+  const prompts: IBuliPromptInput[] = []
+  const aborted: string[] = []
+  const sessionListeners = new Set<() => void>()
+  let sessionSnapshot: ISessionSnapshot = options.sessionSnapshot ?? {
+    messages: [],
+    isRunning: false,
+    pendingToolCallIds: [],
+  }
+  let runCount = 0
+  const session = {
+    subscribe: (listener: () => void) => {
+      sessionListeners.add(listener)
+      return () => sessionListeners.delete(listener)
+    },
+    getSnapshot: () => sessionSnapshot,
+  }
+  const application: IBuliApplication = {
+    workspaceRoot: WORKSPACE_ROOT,
+    subscribe: () => () => undefined,
+    getSnapshot: () => APPLICATION_SNAPSHOT,
+    selectModel: () => undefined,
+    selectReasoningEffort: () => undefined,
+    createSession: ({ agentId, title }) => ({
+      id: "default",
+      agentId,
+      title,
+      createdAt: 1,
+      updatedAt: 1,
+    }),
+    openSession: () => session,
+    listSessions: () => [],
+    submitPrompt: (prompt) => {
+      prompts.push(prompt)
+      return options.submitPrompt?.(prompt) ?? {
+        sessionId: prompt.sessionId ?? "default",
+        runId: `run-${++runCount}`,
+        accepted: Promise.resolve(),
+        settled: Promise.resolve(),
+      }
+    },
+    clearSession: () => undefined,
+    abort: async (sessionId) => {
+      aborted.push(sessionId)
+    },
+    dispose: async () => undefined,
+  }
+
+  return {
+    application,
+    prompts,
+    aborted,
+    setSessionSnapshot(snapshot: ISessionSnapshot) {
+      sessionSnapshot = snapshot
+      for (const listener of [...sessionListeners]) listener()
+    },
+  }
+}
+
+function buliElement(runtime: IBuliApplication, sessionId?: string) {
   const controller = new BuliUiController({
     application: runtime,
-    sessionId,
   })
+  if (sessionId) controller.activateSession(sessionId)
 
+  return buliElementWithController(runtime, controller)
+}
+
+function buliElementWithController(
+  runtime: IBuliApplication,
+  controller: BuliUiController,
+) {
   return createElement(BuliRuntimeProvider, {
     runtime,
     children: createElement(BuliUiControllerProvider, {
@@ -54,18 +156,23 @@ function buliElement(runtime: IBuliApplication, sessionId = "default") {
 }
 
 test("provides the runtime above Buli", async () => {
-  const { runtime, sessionId } = await createBuliApplication({
+  const { runtime } = await createBuliApplication({
     signal: new AbortController().signal,
     manager: new InMemorySessionManager(),
     model: { async *stream() {} },
     tools: [],
   })
   const setup = await testRender(
-    buliElement(runtime, sessionId),
+    buliElement(runtime),
     { width: 80, height: 24 },
   )
 
   try {
+    expect(runtime.getSnapshot().agents).toEqual([{
+      id: "buli",
+      name: "Buli",
+    }])
+
     await act(async () => {
       await setup.renderOnce()
     })
@@ -73,8 +180,10 @@ test("provides the runtime above Buli", async () => {
 
     expect(frame.trim()).not.toBe("")
     expect(frame).not.toContain("Buli runtime not available")
+    expect(frame).toContain("____")
+    expect(runtime.listSessions()).toEqual([])
   } finally {
-    runtime.dispose()
+    await runtime.dispose()
     act(() => {
       setup.renderer.destroy()
     })
@@ -82,29 +191,11 @@ test("provides the runtime above Buli", async () => {
 })
 
 test("Escape aborts the default session while chat input is focused", async () => {
-  const aborted: string[] = []
-  const snapshot: ISessionSnapshot = {
-    messages: [],
-    isRunning: false,
-    pendingToolCallIds: [],
-  }
-  const session = {
-    subscribe: () => () => undefined,
-    getSnapshot: () => snapshot,
-  }
-  const runtime: IBuliApplication = {
-    workspaceRoot: WORKSPACE_ROOT,
-    subscribe: () => () => undefined,
-    getSnapshot: () => APPLICATION_SNAPSHOT,
-    selectModel: () => undefined,
-    selectReasoningEffort: () => undefined,
-    createAgentSession: () => session,
-    submitPrompt: async () => undefined,
-    clearSession: () => undefined,
-    abort: (sessionId) => aborted.push(sessionId),
-    getAgentSession: () => session,
-  }
-  const setup = await testRender(buliElement(runtime), { width: 80, height: 24 })
+  const fake = fakeApplication()
+  const setup = await testRender(
+    buliElement(fake.application, "default"),
+    { width: 80, height: 24 },
+  )
 
   try {
     await act(async () => {
@@ -119,7 +210,285 @@ test("Escape aborts the default session while chat input is focused", async () =
       await setup.renderOnce()
     })
 
-    expect(aborted).toEqual(["default"])
+    expect(fake.aborted).toEqual(["default"])
+  } finally {
+    act(() => {
+      setup.renderer.destroy()
+    })
+  }
+})
+
+test("retains textarea input until acceptance and clears it afterward", async () => {
+  const acceptance = Promise.withResolvers<void>()
+  const fake = fakeApplication({
+    submitPrompt: () => ({
+      sessionId: "default",
+      runId: "run-1",
+      accepted: acceptance.promise,
+      settled: acceptance.promise,
+    }),
+  })
+  const setup = await testRender(
+    buliElement(fake.application),
+    { width: 80, height: 24 },
+  )
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+      await setup.mockInput.typeText("Accepted prompt")
+      setup.mockInput.pressEnter()
+      await Promise.resolve()
+      await setup.renderOnce()
+    })
+
+    expect(textareaRenderable(setup.renderer.root).plainText).toBe(
+      "Accepted prompt",
+    )
+
+    await act(async () => {
+      acceptance.resolve()
+      await acceptance.promise
+      await Promise.resolve()
+      await setup.renderOnce()
+    })
+
+    expect(textareaRenderable(setup.renderer.root).plainText).toBe("")
+    expect(fake.prompts).toEqual([{ text: "Accepted prompt" }])
+  } finally {
+    act(() => {
+      setup.renderer.destroy()
+    })
+  }
+})
+
+test("preserves a replacement draft when a second submission is pending", async () => {
+  const acceptance = Promise.withResolvers<void>()
+  const fake = fakeApplication({
+    submitPrompt: () => ({
+      sessionId: "default",
+      runId: "run-1",
+      accepted: acceptance.promise,
+      settled: acceptance.promise,
+    }),
+  })
+  const setup = await testRender(
+    buliElement(fake.application, "default"),
+    { width: 80, height: 24 },
+  )
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+      await setup.mockInput.typeText("First prompt")
+      setup.mockInput.pressEnter()
+      await Promise.resolve()
+      await setup.renderOnce()
+    })
+
+    await act(async () => {
+      const textarea = textareaRenderable(setup.renderer.root)
+      textarea.clear()
+      textarea.insertText("Replacement draft")
+      await setup.renderOnce()
+    })
+
+    await act(async () => {
+      const textarea = textareaRenderable(setup.renderer.root)
+      textarea.submit()
+      await Promise.resolve()
+      await setup.renderOnce()
+    })
+
+    expect(fake.prompts).toEqual([{
+      sessionId: "default",
+      text: "First prompt",
+    }])
+    expect(textareaRenderable(setup.renderer.root).plainText).toBe(
+      "Replacement draft",
+    )
+    expect(setup.captureCharFrame()).toContain(
+      "Prompt submission is still pending",
+    )
+
+    await act(async () => {
+      acceptance.resolve()
+      await acceptance.promise
+      await Promise.resolve()
+      await setup.renderOnce()
+    })
+
+    expect(textareaRenderable(setup.renderer.root).plainText).toBe(
+      "Replacement draft",
+    )
+  } finally {
+    act(() => {
+      setup.renderer.destroy()
+    })
+  }
+})
+
+test("restores a replacement Home draft after acceptance opens its session", async () => {
+  const acceptance = Promise.withResolvers<void>()
+  const fake = fakeApplication({
+    submitPrompt: () => ({
+      sessionId: "default",
+      runId: "run-1",
+      accepted: acceptance.promise,
+      settled: acceptance.promise,
+    }),
+  })
+  const controller = new BuliUiController({ application: fake.application })
+  const setup = await testRender(
+    buliElementWithController(fake.application, controller),
+    { width: 80, height: 24 },
+  )
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+      await setup.mockInput.typeText("First prompt")
+      setup.mockInput.pressEnter()
+      await Promise.resolve()
+      await setup.renderOnce()
+    })
+    expect(controller.getSnapshot().route).toEqual({ type: "home" })
+
+    await act(async () => {
+      const textarea = textareaRenderable(setup.renderer.root)
+      textarea.clear()
+      textarea.insertText("Replacement draft")
+      await setup.renderOnce()
+    })
+    expect(controller.getSnapshot().input).toBe("Replacement draft")
+
+    await act(async () => {
+      acceptance.resolve()
+      await acceptance.promise
+      await Promise.resolve()
+      await setup.renderOnce()
+      await Promise.resolve()
+      await setup.renderOnce()
+    })
+
+    expect(controller.getSnapshot()).toMatchObject({
+      route: { type: "session", sessionId: "default" },
+      input: "Replacement draft",
+    })
+    expect(textareaRenderable(setup.renderer.root).plainText).toBe(
+      "Replacement draft",
+    )
+  } finally {
+    act(() => {
+      setup.renderer.destroy()
+    })
+  }
+})
+
+test("retains textarea input when prompt acceptance fails", async () => {
+  const acceptance = Promise.withResolvers<void>()
+  const fake = fakeApplication({
+    submitPrompt: () => ({
+      sessionId: "default",
+      runId: "run-1",
+      accepted: acceptance.promise,
+      settled: acceptance.promise,
+    }),
+  })
+  const setup = await testRender(
+    buliElement(fake.application),
+    { width: 80, height: 24 },
+  )
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+      await setup.mockInput.typeText("Unpersisted prompt")
+      setup.mockInput.pressEnter()
+      await Promise.resolve()
+      acceptance.reject(new Error("Failed to persist prompt"))
+      await Promise.resolve()
+      await setup.renderOnce()
+    })
+
+    expect(textareaRenderable(setup.renderer.root).plainText).toBe(
+      "Unpersisted prompt",
+    )
+    expect(setup.captureCharFrame()).toContain("Failed to persist prompt")
+  } finally {
+    act(() => {
+      setup.renderer.destroy()
+    })
+  }
+})
+
+test("retains textarea input when the agent is already busy", async () => {
+  const fake = fakeApplication({
+    submitPrompt: () => {
+      throw new Error("Agent is already processing a prompt")
+    },
+  })
+  const setup = await testRender(
+    buliElement(fake.application, "default"),
+    { width: 80, height: 24 },
+  )
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+      await setup.mockInput.typeText("Queued prompt")
+      setup.mockInput.pressEnter()
+      await Promise.resolve()
+      await setup.renderOnce()
+    })
+
+    expect(textareaRenderable(setup.renderer.root).plainText).toBe(
+      "Queued prompt",
+    )
+    expect(setup.captureCharFrame()).toContain(
+      "Agent is already processing a prompt",
+    )
+  } finally {
+    act(() => {
+      setup.renderer.destroy()
+    })
+  }
+})
+
+test("renders running and failed session status", async () => {
+  const fake = fakeApplication({
+    sessionSnapshot: {
+      messages: [],
+      isRunning: true,
+      activeRunId: "run-1",
+      pendingToolCallIds: [],
+    },
+  })
+  const setup = await testRender(
+    buliElement(fake.application, "default"),
+    { width: 80, height: 24 },
+  )
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+    })
+    expect(setup.captureCharFrame()).toContain("Working... Esc to stop")
+
+    await act(async () => {
+      fake.setSessionSnapshot({
+        messages: [],
+        isRunning: false,
+        pendingToolCallIds: [],
+        lastRunReason: "error",
+        errorMessage: "Provider request failed",
+      })
+      await setup.renderOnce()
+    })
+
+    const frame = setup.captureCharFrame()
+    expect(frame).not.toContain("Working... Esc to stop")
+    expect(frame).toContain("Provider request failed")
   } finally {
     act(() => {
       setup.renderer.destroy()
@@ -131,6 +500,8 @@ test("shows slash commands and executes the selected clear command", async () =>
   const runtime = new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,
     manager: new InMemorySessionManager(),
+    agents: TEST_AGENTS,
+    defaultAgentId: TEST_AGENT_ID,
     models: [{
       id: "test",
       name: "Test",
@@ -145,14 +516,20 @@ test("shows slash commands and executes the selected clear command", async () =>
       modelId: "test",
       reasoningEffort: "medium",
     },
+    generateId: () => "default",
   })
-  runtime.createAgentSession({
-    sessionId: "default",
-    systemPrompt: "System",
-    tools: [],
+  const session = runtime.createSession({
+    agentId: TEST_AGENT_ID,
+    title: "Old prompt",
   })
-  await runtime.submitPrompt({ sessionId: "default", text: "Old prompt" })
-  const setup = await testRender(buliElement(runtime), { width: 80, height: 24 })
+  await runtime.submitPrompt({
+    sessionId: session.id,
+    text: "Old prompt",
+  }).settled
+  const setup = await testRender(
+    buliElement(runtime, session.id),
+    { width: 80, height: 24 },
+  )
 
   try {
     await act(async () => {
@@ -174,9 +551,86 @@ test("shows slash commands and executes the selected clear command", async () =>
       await setup.renderOnce()
     })
 
-    expect(runtime.getAgentSession("default").getSnapshot().messages).toEqual([])
+    expect(runtime.openSession(session.id).getSnapshot().messages).toEqual([])
   } finally {
-    runtime.dispose()
+    await runtime.dispose()
+    act(() => {
+      setup.renderer.destroy()
+    })
+  }
+})
+
+test("selects a model from the picker and updates the status row", async () => {
+  const model: IAgentModel = { async *stream() {} }
+  const runtime = new BuliApplicationRuntime({
+    workspaceRoot: WORKSPACE_ROOT,
+    manager: new InMemorySessionManager(),
+    agents: TEST_AGENTS,
+    defaultAgentId: TEST_AGENT_ID,
+    models: [
+      {
+        id: "test",
+        name: "Test",
+        model,
+        reasoningEfforts: ["medium"],
+      },
+      {
+        id: "other",
+        name: "Other",
+        model,
+        reasoningEfforts: ["medium"],
+      },
+    ],
+    selection: {
+      modelId: "test",
+      reasoningEffort: "medium",
+    },
+    generateId: () => "default",
+  })
+  const session = runtime.createSession({
+    agentId: TEST_AGENT_ID,
+    title: "Model picker",
+  })
+  const setup = await testRender(
+    buliElement(runtime, session.id),
+    { width: 80, height: 24 },
+  )
+
+  try {
+    const slash = parseKeypress("/")
+    const down = parseKeypress("\u001b[B")
+    const enter = parseKeypress("\r")
+    if (!slash || !down || !enter) {
+      throw new Error("Expected picker keypresses to parse")
+    }
+
+    await act(async () => {
+      await setup.renderOnce()
+      setup.renderer.keyInput.processParsedKey(slash)
+      await setup.renderOnce()
+      setup.renderer.keyInput.processParsedKey(down)
+      await setup.renderOnce()
+      setup.renderer.keyInput.processParsedKey(enter)
+      await Promise.resolve()
+      await setup.renderOnce()
+    })
+
+    expect(setup.captureCharFrame()).toContain("→ Test")
+
+    await act(async () => {
+      setup.renderer.keyInput.processParsedKey(down)
+      await setup.renderOnce()
+      setup.renderer.keyInput.processParsedKey(enter)
+      await Promise.resolve()
+      await setup.renderOnce()
+    })
+
+    expect(runtime.getSnapshot().selection.modelId).toBe("other")
+    const frame = setup.captureCharFrame()
+    expect(frame).toContain("Other")
+    expect(frame).not.toContain("→ Other")
+  } finally {
+    await runtime.dispose()
     act(() => {
       setup.renderer.destroy()
     })
@@ -195,6 +649,8 @@ test("renders a submitted prompt and streamed response", async () => {
   const runtime = new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,
     manager: new InMemorySessionManager(),
+    agents: TEST_AGENTS,
+    defaultAgentId: TEST_AGENT_ID,
     models: [{
       id: "test",
       name: "Test",
@@ -205,18 +661,24 @@ test("renders a submitted prompt and streamed response", async () => {
       modelId: "test",
       reasoningEffort: "medium",
     },
+    generateId: () => "default",
   })
-  runtime.createAgentSession({
-    sessionId: "default",
-    systemPrompt: "System",
-    tools: [],
+  const session = runtime.createSession({
+    agentId: TEST_AGENT_ID,
+    title: "Rendered prompt",
   })
-  const setup = await testRender(buliElement(runtime), { width: 80, height: 24 })
+  const setup = await testRender(
+    buliElement(runtime, session.id),
+    { width: 80, height: 24 },
+  )
 
   try {
     await act(async () => {
       await setup.renderOnce()
-      await runtime.submitPrompt({ sessionId: "default", text: "Rendered prompt" })
+      await runtime.submitPrompt({
+        sessionId: session.id,
+        text: "Rendered prompt",
+      }).settled
       await setup.renderOnce()
       await Promise.all(
         codeRenderables(setup.renderer.root).map((renderable) =>
@@ -234,7 +696,85 @@ test("renders a submitted prompt and streamed response", async () => {
     expect(frame).toContain("reasoning")
     expect(frame).toContain("medium")
   } finally {
-    runtime.dispose()
+    await runtime.dispose()
+    act(() => {
+      setup.renderer.destroy()
+    })
+  }
+})
+
+test("renders the sessions picker and switches transcripts", async () => {
+  let sessionNumber = 0
+  const runtime = new BuliApplicationRuntime({
+    workspaceRoot: WORKSPACE_ROOT,
+    manager: new InMemorySessionManager(),
+    agents: TEST_AGENTS,
+    defaultAgentId: TEST_AGENT_ID,
+    models: [{
+      id: "test",
+      name: "Test",
+      model: {
+        async *stream() {
+          yield { type: "finish", reason: "stop" }
+        },
+      },
+      reasoningEfforts: ["medium"],
+    }],
+    selection: {
+      modelId: "test",
+      reasoningEffort: "medium",
+    },
+    generateId: () => `session-${++sessionNumber}`,
+    now: () => sessionNumber,
+  })
+  const first = runtime.createSession({
+    agentId: TEST_AGENT_ID,
+    title: "First history",
+  })
+  await runtime.submitPrompt({
+    sessionId: first.id,
+    text: "First history",
+  }).settled
+  const second = runtime.createSession({
+    agentId: TEST_AGENT_ID,
+    title: "Second history",
+  })
+  await runtime.submitPrompt({
+    sessionId: second.id,
+    text: "Second history",
+  }).settled
+  const controller = new BuliUiController({ application: runtime })
+  controller.activateSession(first.id)
+  const setup = await testRender(
+    buliElementWithController(runtime, controller),
+    { width: 80, height: 24 },
+  )
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+      await controller.submitInput("/sessions")
+      await setup.renderOnce()
+    })
+
+    const pickerFrame = setup.captureCharFrame()
+    expect(pickerFrame).toContain("First history")
+    expect(pickerFrame).toContain("Second history")
+
+    await act(async () => {
+      controller.moveMenuSelection(-1)
+      await controller.activateSelectedMenuItem()
+      await setup.renderOnce()
+    })
+
+    const sessionFrame = setup.captureCharFrame()
+    expect(sessionFrame).toContain("Second history")
+    expect(controller.getSnapshot().route).toEqual({
+      type: "session",
+      sessionId: second.id,
+    })
+  } finally {
+    await runtime.dispose()
     act(() => {
       setup.renderer.destroy()
     })

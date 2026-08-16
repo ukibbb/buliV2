@@ -12,6 +12,7 @@ export type {
     IBuliModelSelection,
     IBuliPromptInput,
     IBuliPromptSubmission,
+    IBuliQueuedMessages,
     IBuliSessionCreationOptions,
     ISnapshotSource,
 } from "@/application/contracts"

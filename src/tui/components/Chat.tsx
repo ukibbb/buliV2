@@ -6,11 +6,12 @@ import {
 import { useEffect, useRef } from "react"
 
 import { useBuliApplicationSnapshot } from "@/application-state"
-import type { TAgentRunEndReason } from "@/domain"
+import type { IUserMessage, TAgentRunEndReason } from "@/domain"
 import {
     useBuliUiController,
     useBuliUiSnapshot,
 } from "@/tui/ui-controller-state"
+import type { TBuliInputDelivery } from "@/tui/ui-controller"
 import { buliKeyboardController } from "@/tui/keyboard-controller"
 import { theme } from "@/tui/theme"
 
@@ -24,6 +25,8 @@ const chatTextAreaKeybindings: KeyBinding[] = [
 
 interface IChatProps {
     readonly isRunning?: boolean
+    readonly pendingSteeringMessages?: readonly IUserMessage[]
+    readonly pendingFollowUpMessages?: readonly IUserMessage[]
     readonly lastRunReason?: TAgentRunEndReason
     readonly errorMessage?: string
 }
@@ -54,11 +57,11 @@ export function Chat(props: IChatProps) {
         controller.updateInput("")
     }
 
-    const submitInput = (): void => {
+    const submitInput = (delivery: TBuliInputDelivery): void => {
         const input = textAreaRef.current?.plainText ?? ""
         if (!input.trim()) return
 
-        void controller.submitInput(input).then((result) => {
+        void controller.submitInput(input, delivery).then((result) => {
             if (
                 result === "consumed"
                 && textAreaRef.current?.plainText === input
@@ -78,6 +81,14 @@ export function Chat(props: IChatProps) {
     }
 
     const handleKeyDown = (key: KeyEvent): void => {
+        const inputAction = buliKeyboardController.resolve("input", key)
+        if (inputAction === "input.followUp") {
+            key.preventDefault()
+            key.stopPropagation()
+            submitInput("followUp")
+            return
+        }
+
         if (!ui.menu) return
 
         const action = buliKeyboardController.resolve("menu", key)
@@ -117,7 +128,7 @@ export function Chat(props: IChatProps) {
             >
                 <textarea
                     ref={textAreaRef}
-                    onSubmit={submitInput}
+                    onSubmit={() => submitInput("auto")}
                     onKeyDown={handleKeyDown}
                     onContentChange={() => {
                         controller.updateInput(
@@ -138,7 +149,25 @@ export function Chat(props: IChatProps) {
                 paddingBottom={1}
             >
                 {props.isRunning ? (
-                    <text fg={theme.amber}>Working... Esc to stop</text>
+                    <text fg={theme.amber}>
+                        Working... Enter steer | Alt+Enter follow-up | Esc stop
+                    </text>
+                ) : null}
+                {props.pendingSteeringMessages?.map((message) => (
+                    <text key={message.id} fg={theme.textMuted}>
+                        {`Steering: ${message.content}`}
+                    </text>
+                ))}
+                {props.pendingFollowUpMessages?.map((message) => (
+                    <text key={message.id} fg={theme.textMuted}>
+                        {`Follow-up: ${message.content}`}
+                    </text>
+                ))}
+                {(
+                    (props.pendingSteeringMessages?.length ?? 0)
+                    + (props.pendingFollowUpMessages?.length ?? 0)
+                ) > 0 ? (
+                    <text fg={theme.textMuted}>Esc restores queued input</text>
                 ) : null}
                 {!props.isRunning && props.lastRunReason === "aborted" ? (
                     <text fg={theme.textMuted}>Operation aborted</text>

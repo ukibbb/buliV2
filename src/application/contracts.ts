@@ -18,6 +18,11 @@ export interface IBuliPromptSubmission {
     readonly settled: Promise<void>
 }
 
+export interface IBuliQueuedMessages {
+    readonly steering: readonly string[]
+    readonly followUp: readonly string[]
+}
+
 export interface IBuliAgentInfo {
     readonly id: string
     readonly name: string
@@ -59,6 +64,9 @@ export interface IBuliApplication
     ) => void
 
     readonly submitPrompt: (prompt: IBuliPromptInput) => IBuliPromptSubmission
+    readonly steer: (sessionId: string, text: string) => void
+    readonly followUp: (sessionId: string, text: string) => void
+    readonly clearQueuedMessages: (sessionId: string) => IBuliQueuedMessages
     readonly clearSession: (sessionId: string) => void
     readonly abort: (sessionId: string) => Promise<void>
     readonly dispose: () => Promise<void>

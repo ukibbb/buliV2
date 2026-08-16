@@ -11,7 +11,11 @@ import type {
     TAgentRunEndReason,
 } from "@/agent/agent-types"
 import { generateRandomId } from "@/common"
-import type { IUserMessage, TAgentMessage } from "@/domain"
+import type {
+    IUserMessage,
+    TAgentMessage,
+    TUserMessageSource,
+} from "@/domain"
 
 interface IAgentOptions {
     readonly sessionId: string
@@ -37,6 +41,12 @@ interface IActiveAgentRun {
     readonly resolveSettled: () => void
     readonly rejectSettled: (reason?: unknown) => void
     acceptedCompleted: boolean
+    acceptingQueuedInput: boolean
+}
+
+interface IQueuedAgentMessages {
+    readonly steering: readonly IUserMessage[]
+    readonly followUp: readonly IUserMessage[]
 }
 
 /** Owns one session's live agent state and active run. */
@@ -49,6 +59,8 @@ export class Agent {
     private readonly maxProviderIterations: number | undefined
     private readonly now: () => number
     private readonly generateId: () => string
+    private steeringQueue: IUserMessage[] = []
+    private followUpQueue: IUserMessage[] = []
     private activeRun: IActiveAgentRun | undefined
 
     constructor(options: IAgentOptions) {
@@ -76,6 +88,14 @@ export class Agent {
         return this.stateValue
     }
 
+    get pendingSteeringMessages(): readonly IUserMessage[] {
+        return structuredClone(this.steeringQueue)
+    }
+
+    get pendingFollowUpMessages(): readonly IUserMessage[] {
+        return structuredClone(this.followUpQueue)
+    }
+
     subscribe(listener: TAgentEventListener): () => void {
         this.listeners.add(listener)
         return () => this.listeners.delete(listener)
@@ -86,10 +106,15 @@ export class Agent {
         if (this.activeRun) {
             throw new Error("Agent is already processing a prompt")
         }
+        if (this.steeringQueue.length > 0 || this.followUpQueue.length > 0) {
+            throw new Error(
+                "Restore queued messages before starting another prompt",
+            )
+        }
 
         const runConfiguration: IAgentRunConfiguration = this.resolveRunConfiguration()
         const runId = this.generateId()
-        const prompt = this.createUserMessage(text, runId)
+        const prompt = this.createUserMessage(text, runId, "prompt")
         const abortController = new AbortController()
         const accepted = Promise.withResolvers<void>()
         const settled = Promise.withResolvers<void>()
@@ -107,6 +132,7 @@ export class Agent {
             resolveSettled: settled.resolve,
             rejectSettled: settled.reject,
             acceptedCompleted: false,
+            acceptingQueuedInput: true,
         }
         this.activeRun = activeRun
         this.stateValue = {
@@ -128,6 +154,42 @@ export class Agent {
         }
     }
 
+    steer(text: string): void {
+        this.enqueueQueuedMessage(text, "steer")
+    }
+
+    followUp(text: string): void {
+        // Follow-up nie zmienia bieżącego turnu. Czeka, aż skończą się tool
+        // continuation i steering, a dopiero potem uruchamia kolejny request.
+        this.enqueueQueuedMessage(text, "followUp")
+    }
+
+    clearQueuedMessages(): IQueuedAgentMessages {
+        const messages = {
+            steering: structuredClone(this.steeringQueue),
+            followUp: structuredClone(this.followUpQueue),
+        }
+        this.steeringQueue = []
+        this.followUpQueue = []
+        return messages
+    }
+
+    private enqueueQueuedMessage(
+        text: string,
+        source: "steer" | "followUp",
+    ): void {
+        const label = source === "steer" ? "Steering" : "Follow-up"
+        if (!text.trim()) throw new Error(`${label} message cannot be empty`)
+        const activeRun = this.activeRun
+        if (!activeRun?.acceptingQueuedInput || !activeRun.acceptedCompleted) {
+            throw new Error(`Agent is not accepting ${label.toLowerCase()} messages`)
+        }
+
+        const message = this.createUserMessage(text, activeRun.runId, source)
+        if (source === "steer") this.steeringQueue.push(message)
+        else this.followUpQueue.push(message)
+    }
+
     async abort(): Promise<void> {
         await this.waitForRuns(true)
     }
@@ -138,6 +200,8 @@ export class Agent {
 
     clear(): void {
         if (this.activeRun) throw new Error("Cannot clear while Agent is running")
+        this.steeringQueue = []
+        this.followUpQueue = []
         this.stateValue = {
             ...this.stateValue,
             messages: [],
@@ -183,6 +247,17 @@ export class Agent {
                 tools: this.stateValue.tools,
                 signal: activeRun.abortController.signal,
                 emit: (event) => this.processEvent(event, activeRun),
+                hasSteeringMessages: () =>
+                    this.hasSteeringMessages(activeRun),
+                takeSteeringMessage: () =>
+                    this.takeSteeringMessage(activeRun),
+                hasFollowUpMessages: () =>
+                    this.hasFollowUpMessages(activeRun),
+                takeFollowUpMessage: () =>
+                    this.takeFollowUpMessage(activeRun),
+                restoreQueuedMessage: (message) =>
+                    this.restoreQueuedMessage(activeRun, message),
+                closeQueuedInput: () => this.closeQueuedInput(activeRun),
                 ...(this.maxProviderIterations === undefined
                     ? {}
                     : { maxProviderIterations: this.maxProviderIterations }),
@@ -209,6 +284,8 @@ export class Agent {
                     failure = error
                 }
             }
+
+            activeRun.acceptingQueuedInput = false
 
             if (this.activeRun === activeRun) {
                 const errorMessage = failed
@@ -245,6 +322,7 @@ export class Agent {
         while (this.activeRun) {
             const activeRun = this.activeRun
             if (abort) {
+                activeRun.acceptingQueuedInput = false
                 activeRun.abortController.abort("Buli interaction was aborted")
             }
             try {
@@ -292,6 +370,41 @@ export class Agent {
                 this.onObserverError?.(error)
             }
         }
+    }
+
+    private hasSteeringMessages(activeRun: IActiveAgentRun): boolean {
+        return this.activeRun === activeRun && this.steeringQueue.length > 0
+    }
+
+    private hasFollowUpMessages(activeRun: IActiveAgentRun): boolean {
+        return this.activeRun === activeRun && this.followUpQueue.length > 0
+    }
+
+    private takeSteeringMessage(
+        activeRun: IActiveAgentRun,
+    ): IUserMessage | undefined {
+        if (this.activeRun !== activeRun) return undefined
+        return this.steeringQueue.shift()
+    }
+
+    private takeFollowUpMessage(
+        activeRun: IActiveAgentRun,
+    ): IUserMessage | undefined {
+        if (this.activeRun !== activeRun) return undefined
+        return this.followUpQueue.shift()
+    }
+
+    private restoreQueuedMessage(
+        activeRun: IActiveAgentRun,
+        message: IUserMessage,
+    ): void {
+        if (this.activeRun !== activeRun) return
+        if (message.source === "steer") this.steeringQueue.unshift(message)
+        if (message.source === "followUp") this.followUpQueue.unshift(message)
+    }
+
+    private closeQueuedInput(activeRun: IActiveAgentRun): void {
+        if (this.activeRun === activeRun) activeRun.acceptingQueuedInput = false
     }
 
     private reduce(event: IAgentEvent): void {
@@ -351,13 +464,17 @@ export class Agent {
         }
     }
 
-    private createUserMessage(text: string, runId: string): IUserMessage {
+    private createUserMessage(
+        text: string,
+        runId: string,
+        source: TUserMessageSource,
+    ): IUserMessage {
         return {
             id: this.generateId(),
             sessionId: this.stateValue.sessionId,
             runId,
             role: "user",
-            source: "prompt",
+            source,
             content: text,
             createdAt: this.now(),
         }

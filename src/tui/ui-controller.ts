@@ -84,6 +84,7 @@ export interface IBuliUiSnapshot {
 }
 
 export type TBuliInputSubmitResult = "consumed" | "retained"
+export type TBuliInputDelivery = "auto" | "followUp"
 
 interface IBuliUiControllerOptions {
     readonly application: IBuliApplication
@@ -351,7 +352,10 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
         if (this.snapshot.menu === menu) this.setMenu(null)
     }
 
-    readonly submitInput = async (input: string): Promise<TBuliInputSubmitResult> => {
+    readonly submitInput = async (
+        input: string,
+        delivery: TBuliInputDelivery = "auto",
+    ): Promise<TBuliInputSubmitResult> => {
         const text = input.trim()
         if (!text) return "retained"
         if (this.inputSubmissionPending) {
@@ -360,7 +364,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
         }
         this.inputSubmissionPending = true
         try {
-            return await this.submitInputOnce(input, text)
+            return await this.submitInputOnce(input, text, delivery)
         } finally {
             this.inputSubmissionPending = false
         }
@@ -369,6 +373,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     private async submitInputOnce(
         input: string,
         text: string,
+        delivery: TBuliInputDelivery,
     ): Promise<TBuliInputSubmitResult> {
 
         this.setSnapshot({ ...this.snapshot, menu: null, inputError: null })
@@ -408,6 +413,25 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
 
         try {
             const activeSessionId = this.activeSessionId()
+            const activeSession = activeSessionId
+                ? this.application.openSession(activeSessionId).getSnapshot()
+                : undefined
+            if (delivery === "followUp") {
+                if (!activeSessionId || !activeSession?.isRunning) {
+                    throw new Error("Follow-up requires an active run")
+                }
+                this.application.followUp(activeSessionId, text)
+                this.consumeInput(input)
+                return "consumed"
+            }
+            if (
+                activeSessionId
+                && activeSession?.isRunning
+            ) {
+                this.application.steer(activeSessionId, text)
+                this.consumeInput(input)
+                return "consumed"
+            }
             const submission = this.application.submitPrompt({
                 ...(activeSessionId ? { sessionId: activeSessionId } : {}),
                 text,
@@ -434,11 +458,39 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     readonly escape = (): void => {
         if (this.snapshot.menu) {
             this.setMenu(null)
-            return
+            const sessionId = this.activeSessionId()
+            if (!sessionId) return
+            const session = this.application.openSession(sessionId).getSnapshot()
+            if (
+                !session.isRunning
+                && session.pendingSteeringMessages.length === 0
+                && session.pendingFollowUpMessages.length === 0
+            ) {
+                return
+            }
         }
 
         const sessionId = this.activeSessionId()
         if (sessionId) {
+            try {
+                const queued = this.application.clearQueuedMessages(sessionId)
+                if (queued.steering.length > 0 || queued.followUp.length > 0) {
+                    const input = [
+                        ...queued.steering,
+                        ...queued.followUp,
+                        this.snapshot.input,
+                    ]
+                        .filter((text) => text.trim())
+                        .join("\n\n")
+                    this.setSnapshot({
+                        ...this.snapshot,
+                        input,
+                        inputError: null,
+                    })
+                }
+            } catch (error) {
+                this.setInputError(error)
+            }
             void this.application.abort(sessionId).catch((error: unknown) => {
                 this.setInputError(error)
             })

@@ -72,14 +72,21 @@ function findTextareaRenderable(root: Renderable): TextareaRenderable | undefine
 interface IFakeApplicationOptions {
   readonly sessionSnapshot?: ISessionSnapshot
   readonly submitPrompt?: (prompt: IBuliPromptInput) => IBuliPromptSubmission
+  readonly steer?: (sessionId: string, text: string) => void
+  readonly followUp?: (sessionId: string, text: string) => void
+  readonly clearQueuedMessages?: IBuliApplication["clearQueuedMessages"]
 }
 
 function fakeApplication(options: IFakeApplicationOptions = {}) {
   const prompts: IBuliPromptInput[] = []
+  const steering: Array<{ sessionId: string; text: string }> = []
+  const followUps: Array<{ sessionId: string; text: string }> = []
   const aborted: string[] = []
   const sessionListeners = new Set<() => void>()
   let sessionSnapshot: ISessionSnapshot = options.sessionSnapshot ?? {
     messages: [],
+    pendingSteeringMessages: [],
+    pendingFollowUpMessages: [],
     isRunning: false,
     pendingToolCallIds: [],
   }
@@ -115,6 +122,20 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
         settled: Promise.resolve(),
       }
     },
+    steer: (sessionId, text) => {
+      options.steer?.(sessionId, text)
+      steering.push({ sessionId, text })
+    },
+    followUp: (sessionId, text) => {
+      options.followUp?.(sessionId, text)
+      followUps.push({ sessionId, text })
+    },
+    clearQueuedMessages: (sessionId) => {
+      return options.clearQueuedMessages?.(sessionId) ?? {
+        steering: [],
+        followUp: [],
+      }
+    },
     clearSession: () => undefined,
     abort: async (sessionId) => {
       aborted.push(sessionId)
@@ -125,6 +146,8 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
   return {
     application,
     prompts,
+    steering,
+    followUps,
     aborted,
     setSessionSnapshot(snapshot: ISessionSnapshot) {
       sessionSnapshot = snapshot
@@ -190,8 +213,13 @@ test("provides the runtime above Buli", async () => {
   }
 })
 
-test("Escape aborts the default session while chat input is focused", async () => {
-  const fake = fakeApplication()
+test("Escape restores steering and aborts while chat input is focused", async () => {
+  const fake = fakeApplication({
+    clearQueuedMessages: () => ({
+      steering: ["Queued steering"],
+      followUp: ["Queued follow-up"],
+    }),
+  })
   const setup = await testRender(
     buliElement(fake.application, "default"),
     { width: 80, height: 24 },
@@ -211,6 +239,9 @@ test("Escape aborts the default session while chat input is focused", async () =
     })
 
     expect(fake.aborted).toEqual(["default"])
+    expect(textareaRenderable(setup.renderer.root).plainText).toBe(
+      "Queued steering\n\nQueued follow-up",
+    )
   } finally {
     act(() => {
       setup.renderer.destroy()
@@ -422,10 +453,95 @@ test("retains textarea input when prompt acceptance fails", async () => {
   }
 })
 
-test("retains textarea input when the agent is already busy", async () => {
+test("submits textarea input as steering while the session is running", async () => {
   const fake = fakeApplication({
-    submitPrompt: () => {
-      throw new Error("Agent is already processing a prompt")
+    sessionSnapshot: {
+      messages: [],
+      pendingSteeringMessages: [],
+      pendingFollowUpMessages: [],
+      isRunning: true,
+      activeRunId: "run-1",
+      pendingToolCallIds: [],
+    },
+  })
+  const setup = await testRender(
+    buliElement(fake.application, "default"),
+    { width: 80, height: 24 },
+  )
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+      await setup.mockInput.typeText("Steering prompt")
+      setup.mockInput.pressEnter()
+      await Promise.resolve()
+      await setup.renderOnce()
+    })
+
+    expect(fake.steering).toEqual([{
+      sessionId: "default",
+      text: "Steering prompt",
+    }])
+    expect(fake.prompts).toEqual([])
+    expect(textareaRenderable(setup.renderer.root).plainText).toBe("")
+  } finally {
+    act(() => {
+      setup.renderer.destroy()
+    })
+  }
+})
+
+test("submits Alt+Enter input as follow-up while the session is running", async () => {
+  const fake = fakeApplication({
+    sessionSnapshot: {
+      messages: [],
+      pendingSteeringMessages: [],
+      pendingFollowUpMessages: [],
+      isRunning: true,
+      activeRunId: "run-1",
+      pendingToolCallIds: [],
+    },
+  })
+  const setup = await testRender(
+    buliElement(fake.application, "default"),
+    { width: 80, height: 24 },
+  )
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+      await setup.mockInput.typeText("Follow-up prompt")
+      setup.mockInput.pressEnter({ meta: true })
+      await Promise.resolve()
+      await setup.renderOnce()
+    })
+
+    expect(fake.followUps).toEqual([{
+      sessionId: "default",
+      text: "Follow-up prompt",
+    }])
+    expect(fake.steering).toEqual([])
+    expect(fake.prompts).toEqual([])
+    expect(textareaRenderable(setup.renderer.root).plainText).toBe("")
+  } finally {
+    act(() => {
+      setup.renderer.destroy()
+    })
+  }
+})
+
+test("retains textarea input when a finishing run rejects steering", async () => {
+  const fake = fakeApplication({
+    sessionSnapshot: {
+      messages: [],
+      pendingSteeringMessages: [],
+      pendingFollowUpMessages: [],
+      isRunning: true,
+      activeRunId: "run-1",
+      pendingToolCallIds: [],
+    },
+    steer: () => {
+      throw new Error("Agent is not accepting steering messages")
     },
   })
   const setup = await testRender(
@@ -446,7 +562,7 @@ test("retains textarea input when the agent is already busy", async () => {
       "Queued prompt",
     )
     expect(setup.captureCharFrame()).toContain(
-      "Agent is already processing a prompt",
+      "Agent is not accepting steering messages",
     )
   } finally {
     act(() => {
@@ -459,6 +575,24 @@ test("renders running and failed session status", async () => {
   const fake = fakeApplication({
     sessionSnapshot: {
       messages: [],
+      pendingSteeringMessages: [{
+        id: "steering-1",
+        sessionId: "default",
+        runId: "run-1",
+        role: "user",
+        source: "steer",
+        content: "Adjust the answer",
+        createdAt: 1,
+      }],
+      pendingFollowUpMessages: [{
+        id: "follow-up-1",
+        sessionId: "default",
+        runId: "run-1",
+        role: "user",
+        source: "followUp",
+        content: "Then summarize it",
+        createdAt: 2,
+      }],
       isRunning: true,
       activeRunId: "run-1",
       pendingToolCallIds: [],
@@ -473,11 +607,18 @@ test("renders running and failed session status", async () => {
     await act(async () => {
       await setup.renderOnce()
     })
-    expect(setup.captureCharFrame()).toContain("Working... Esc to stop")
+    expect(setup.captureCharFrame()).toContain(
+      "Working... Enter steer | Alt+Enter follow-up | Esc stop",
+    )
+    expect(setup.captureCharFrame()).toContain("Steering: Adjust the answer")
+    expect(setup.captureCharFrame()).toContain("Follow-up: Then summarize it")
+    expect(setup.captureCharFrame()).toContain("Esc restores queued input")
 
     await act(async () => {
       fake.setSessionSnapshot({
         messages: [],
+        pendingSteeringMessages: [],
+        pendingFollowUpMessages: [],
         isRunning: false,
         pendingToolCallIds: [],
         lastRunReason: "error",
@@ -487,7 +628,9 @@ test("renders running and failed session status", async () => {
     })
 
     const frame = setup.captureCharFrame()
-    expect(frame).not.toContain("Working... Esc to stop")
+    expect(frame).not.toContain(
+      "Working... Enter steer | Alt+Enter follow-up | Esc stop",
+    )
     expect(frame).toContain("Provider request failed")
   } finally {
     act(() => {

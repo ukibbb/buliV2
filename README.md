@@ -19,7 +19,9 @@ That runs `cli/main.ts` with Bun watch and opens the OpenTUI console overlay so 
 
 Inside the TUI:
 
-- press `Escape` to stop the active response
+- press `Enter` during an active response to queue steering for the next model request
+- press `Alt+Enter` to queue follow-up work after tools and steering finish
+- press `Escape` to restore undelivered queued input and stop the active response
 - use `/new` to return to a fresh Home screen
 - use `/sessions` to reopen a saved conversation
 - use `/model` and `/reasoning` to change the next run configuration
@@ -47,6 +49,8 @@ bun test
 Buli stores multiple conversations per workspace. The app starts on Home without creating a session; the first non-empty prompt creates one, using that prompt as its title. Completed messages and session metadata are appended to a JSONL file under `~/.buli/sessions/`; the filename is the SHA-256 hash of the canonical workspace path.
 
 On restart, saved sessions are available through `/sessions`. Opening one restores its completed turns for the next model request. `/clear` removes the conversation history but keeps the session entry. In-progress assistant snapshots are kept only in memory, so a process crash can lose the unfinished response without growing the JSONL file once per streamed token.
+
+Pending steering and follow-up messages are also kept only in memory. `Escape` restores them to the editor before aborting, but exiting or crashing the process can discard them.
 
 Run only one Buli process per workspace. Concurrent writers are not currently supported for the shared workspace session log.
 

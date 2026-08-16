@@ -192,6 +192,23 @@ export class BuliApplicationRuntime implements IBuliApplication {
         this.getOrOpenAgentSession(sessionId).clear()
     }
 
+    readonly steer = (sessionId: string, text: string): void => {
+        if (this.disposed) throw new Error("Buli runtime is disposed")
+        this.getOrOpenAgentSession(sessionId).steer(text)
+    }
+
+    readonly followUp = (sessionId: string, text: string): void => {
+        if (this.disposed) throw new Error("Buli runtime is disposed")
+        this.getOrOpenAgentSession(sessionId).followUp(text)
+    }
+
+    readonly clearQueuedMessages = (
+        sessionId: string,
+    ): ReturnType<AgentSession["clearQueuedMessages"]> => {
+        if (this.disposed) throw new Error("Buli runtime is disposed")
+        return this.getOrOpenAgentSession(sessionId).clearQueuedMessages()
+    }
+
     readonly getSnapshot = (): IBuliApplicationSnapshot => this.snapshot
     readonly subscribe = (
         listener: TBuliRuntimeListener,

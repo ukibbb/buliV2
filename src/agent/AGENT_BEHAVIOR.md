@@ -58,7 +58,7 @@ The current application is smaller than the behavior described in the WIP notes.
 | Writes | There is no write tool, patch proposal, patch application, or approval workflow. |
 | Modes | `auto`, `plan`, `learn`, and `implement` exist only in comments. There is no runtime type or mode state. |
 | Session | The TUI supports multiple named JSONL sessions per workspace. The first accepted prompt creates a session; mode, model selection, and prompt version are not persisted. |
-| Concurrent input | A second prompt is currently rejected while a run is active, but the TUI retains the text. Steering and follow-up queues are planned but not implemented. |
+| Concurrent input | After the initial prompt is durably accepted, `Enter` queues FIFO steering and `Alt+Enter` queues FIFO follow-up. Both deliver one message at a time; steering runs after the current response and tool batch, while follow-up waits until no tool continuation or steering remains. |
 | Learning notes | Neither `_learning` nor a notes MCP server currently exists. |
 | Web research | No web search or web fetch tool is exposed to Buli. |
 | Citations | `grep` returns line numbers, but `read_file` does not currently support line ranges or line-numbered output. |

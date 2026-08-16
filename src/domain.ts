@@ -73,6 +73,8 @@ export interface ISessionInfo {
 
 export interface ISessionSnapshot {
     readonly messages: readonly TAgentMessage[]
+    readonly pendingSteeringMessages: readonly IUserMessage[]
+    readonly pendingFollowUpMessages: readonly IUserMessage[]
     readonly streamingMessage?: IAssistantMessage
     readonly isRunning: boolean
     readonly activeRunId?: string

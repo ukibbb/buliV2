@@ -18,13 +18,19 @@ import type {
     IAgentToolDescriptor,
 } from "@/agent/agent-types"
 import type { TAgentMessage } from "@/domain"
-import { OpenAiAuth } from "@/providers/openai/openai-auth"
-import { OPENAI_OAUTH_DUMMY_API_KEY } from "@/providers/openai/openai-constants"
+import {
+    OpenAiAuth,
+    type IOpenAiAuth,
+} from "@/providers/openai/openai-auth"
+import {
+    OPENAI_CODEX_BASE_URL,
+    OPENAI_OAUTH_DUMMY_API_KEY,
+} from "@/providers/openai/openai-constants"
 
 export const DEFAULT_OPENAI_MODEL_ID = "gpt-5.6-sol"
 
 export interface IOpenAiAgentModelOptions {
-    readonly auth?: OpenAiAuth
+    readonly auth?: IOpenAiAuth
     readonly modelId?: string
 }
 
@@ -49,7 +55,7 @@ type AIAssistantPart = Exclude<AssistantContent, string>[number]
 
 /** Translates one Buli model turn to and from the OpenAI AI SDK protocol. */
 export class OpenAiAgentModel implements IAgentModel {
-    private readonly auth: OpenAiAuth
+    private readonly auth: IOpenAiAuth
     private readonly modelId: string
 
     constructor(options: IOpenAiAgentModelOptions = {}) {
@@ -65,6 +71,7 @@ export class OpenAiAgentModel implements IAgentModel {
         request.signal.throwIfAborted()
 
         const provider = createOpenAI({
+            baseURL: OPENAI_CODEX_BASE_URL,
             apiKey: OPENAI_OAUTH_DUMMY_API_KEY,
             fetch: this.auth.authenticatedFetch,
         })

@@ -2,6 +2,8 @@ import { realpath } from "node:fs/promises"
 
 import type { IAgentModel, IAgentTool } from "@/agent/agent-types"
 import { systemPrompt } from "@/agent/agents-prompts"
+import type { IAuthenticationService } from "@/auth/contracts"
+import { createAuthentication } from "@/auth/create-authentication"
 import type { IBuliModelSelection } from "@/application/contracts"
 import type { IBuliApplication } from "@/application/contracts"
 import {
@@ -24,6 +26,7 @@ const BULI_AGENT_ID = "buli"
 
 export interface IBuliApplicationStartup {
     readonly runtime: IBuliApplication
+    readonly authentication: IAuthenticationService
 }
 
 export interface IBuliApplicationOptions {
@@ -37,7 +40,6 @@ export interface IBuliApplicationOptions {
 export async function createBuliApplication(
     options: IBuliApplicationOptions,
 ): Promise<IBuliApplicationStartup> {
-    // ?? totalnie nie rozumiem dlaczego 2x wywolujemy throwIfAborted i po co
     // To dwa checkpointy po obu stronach operacji asynchronicznej. Pierwszy kończy
     // start od razu, jeśli sygnał był już anulowany, więc nie uruchamiamy `realpath`.
     // Podczas `await realpath(...)` sterowanie wraca do event loopa i właśnie wtedy
@@ -49,10 +51,14 @@ export async function createBuliApplication(
     const workspaceRoot: string = await realpath(process.cwd())
     options.signal.throwIfAborted()
 
+    const auth = createAuthentication({ signal: options.signal })
+    const authentication = auth.service
     const manager: ISessionManager = options.manager ?? new JsonlSessionManager({
         filePath: defaultSessionFilePath(workspaceRoot),
     })
-    const model: IAgentModel = options.model ?? new OpenAiAgentModel()
+    const model: IAgentModel = options.model ?? new OpenAiAgentModel({
+        auth: auth.openAi,
+    })
     const models: readonly IBuliModelRegistration[] = [{
         id: DEFAULT_OPENAI_MODEL_ID,
         name: "GPT-5.6 Sol",
@@ -79,6 +85,8 @@ export async function createBuliApplication(
         systemPrompt: systemPrompt(workspaceRoot),
         tools,
     }]
+
+    //
     const runtime = new BuliApplicationRuntime({
         workspaceRoot,
         manager,
@@ -89,7 +97,8 @@ export async function createBuliApplication(
     })
 
     options.signal.addEventListener("abort", () => {
-        void runtime.dispose().catch(() => {})
+        void runtime.dispose().catch(() => { })
     }, { once: true })
-    return { runtime }
+
+    return { runtime, authentication }
 }

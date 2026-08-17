@@ -1,5 +1,7 @@
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 
+import type { IAuthenticationService } from "@/auth/contracts"
+import { AuthenticationFlow } from "@/tui/AuthenticationFlow"
 import { Layout } from "@/tui/components/Layout"
 import { Home } from "@/tui/components/Home"
 import { SessionScreen } from "@/tui/components/Session"
@@ -9,7 +11,11 @@ import {
     useBuliUiSnapshot,
 } from "@/tui/ui-controller-state"
 
-export function BuliTui() {
+interface IBuliTuiProps {
+    readonly authentication: IAuthenticationService
+}
+
+export function BuliTui(props: IBuliTuiProps) {
     const controller = useBuliUiController()
     const ui = useBuliUiSnapshot()
     const renderer = useRenderer()
@@ -19,6 +25,7 @@ export function BuliTui() {
         const action = buliKeyboardController.resolve("global", key)
 
         if (action === "cancel") {
+            if (ui.authenticationMode) return
             key.preventDefault()
             key.stopPropagation()
             controller.escape()
@@ -30,7 +37,13 @@ export function BuliTui() {
 
     return (
         <Layout width={width} height={height}>
-            {ui.route.type === "home" ? (
+            {ui.authenticationMode ? (
+                <AuthenticationFlow
+                    mode={ui.authenticationMode}
+                    authentication={props.authentication}
+                    onClose={() => controller.closeAuthentication()}
+                />
+            ) : ui.route.type === "home" ? (
                 <Home />
             ) : (
                 <SessionScreen

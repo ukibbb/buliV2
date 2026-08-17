@@ -1,246 +1,485 @@
 import { expect, test } from "bun:test"
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises"
+import { Buffer } from "node:buffer"
+import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import type { TAuthInfo } from "@/providers/auth-store"
-import { OpenAiAuthStore } from "@/providers/openai/openai-auth-store"
+import { FileAuthStore } from "@/auth/file-auth-store"
+import type {
+  IAuthStore,
+  IOAuthCredential,
+  TAuthCredential,
+} from "@/auth/types"
 import { OpenAiAuth } from "@/providers/openai/openai-auth"
+import {
+  OPENAI_CODEX_RESPONSES_URL,
+  OPENAI_OAUTH_CALLBACK_URL,
+  OPENAI_OAUTH_TOKEN_URL,
+} from "@/providers/openai/openai-constants"
+import { OpenAiOAuth } from "@/providers/openai/openai-oauth"
 
-test("reads generic OpenAI OAuth credentials", async () => {
-  await withAuthFile(
-    {
-      openai: {
-        type: "oauth",
-        access: "access-token",
-        refresh: "refresh-token",
-        expires: 200,
-        accountId: "account-id",
-      },
-    },
-    async (path) => {
-      const store = new OpenAiAuthStore(path)
-      const auth = new OpenAiAuth({ store, now: () => 100 })
-
-      expect(await store.all()).toEqual({
-        openai: {
-          type: "oauth",
-          access: "access-token",
-          refresh: "refresh-token",
-          expires: 200,
-          accountId: "account-id",
-        },
-      })
-      expect(await auth.getCredential()).toEqual({
-        type: "oauth",
-        access: "access-token",
-        refresh: "refresh-token",
-        expires: 200,
-        accountId: "account-id",
-      })
-    },
-  )
-})
-
-test("adds file OAuth credentials and rewrites Responses requests to Codex", async () => {
-  await withAuthFile(
-    {
-      openai: {
-        type: "oauth",
-        access: "access-token",
-        refresh: "refresh-token",
-        expires: 200,
-        accountId: "account-id",
-      },
-    },
-    async (path) => {
-      let capturedRequest: Request | undefined
-      const captureFetch = Object.assign(
-        async (...args: Parameters<typeof globalThis.fetch>) => {
-          capturedRequest = new Request(...args)
-          return new Response("ok")
-        },
-        { preconnect: globalThis.fetch.preconnect },
-      )
-      const auth = new OpenAiAuth({
-        store: new OpenAiAuthStore(path),
-        fetch: captureFetch,
-        now: () => 100,
-      })
-
-      await auth.authenticatedFetch("https://api.openai.com/v1/responses", {
-        method: "POST",
-        body: "request-body",
-        headers: {
-          authorization: "Bearer sdk-placeholder",
-          "x-request-id": "request-id",
-        },
-      })
-
-      expect(capturedRequest?.url).toBe("https://chatgpt.com/backend-api/codex/responses")
-      expect(capturedRequest?.method).toBe("POST")
-      expect(await capturedRequest?.text()).toBe("request-body")
-      expect(capturedRequest?.headers.get("authorization")).toBe("Bearer access-token")
-      expect(capturedRequest?.headers.get("ChatGPT-Account-Id")).toBe("account-id")
-      expect(capturedRequest?.headers.get("originator")).toBe("opencode")
-      expect(capturedRequest?.headers.get("x-request-id")).toBe("request-id")
-    },
-  )
-})
-
-test("rejects API key credentials", async () => {
-  await withAuthText(
-    JSON.stringify({ openai: { type: "api", key: "api-key" } }),
-    async (path) => {
-      const store = new OpenAiAuthStore(path)
-
-      await expect(store.get("openai")).rejects.toThrow(
-        "only OAuth credentials are supported",
-      )
-    },
-  )
-})
-
-test("rejects missing credentials without making a request", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "buli-auth-test-"))
-  const path = join(directory, "missing-auth.json")
-  let requests = 0
-  const captureFetch = Object.assign(
-    async () => {
-      requests += 1
-      return new Response("ok")
-    },
-    { preconnect: globalThis.fetch.preconnect },
-  ) as typeof globalThis.fetch
-
-  try {
-    const missing = new OpenAiAuth({
-      store: new OpenAiAuthStore(path),
-      fetch: captureFetch,
-    })
-    await expect(
-      missing.authenticatedFetch("https://api.openai.com/v1/responses"),
-    ).rejects.toThrow("OpenAI authentication is missing")
-
-    expect(requests).toBe(0)
-  } finally {
-    await rm(directory, { recursive: true, force: true })
-  }
-})
-
-test("refreshes expired OAuth credentials and persists the canonical schema", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "buli-auth-test-"))
-  const path = join(directory, "auth.json")
-  await Bun.write(path, JSON.stringify({
-    openai: {
-      type: "oauth",
-      access: "expired-access-token",
-      refresh: "old-refresh-token",
-      expires: 100,
-      accountId: "account-id",
-    },
-  }))
-  const requests: Request[] = []
-  const captureFetch = Object.assign(
-    async (...args: Parameters<typeof globalThis.fetch>) => {
-      const request = new Request(...args)
-      requests.push(request)
-      if (request.url === "https://auth.openai.com/oauth/token") {
-        return Response.json({
-          access_token: "refreshed-access-token",
-          refresh_token: "refreshed-refresh-token",
-          expires_in: 3600,
-        })
-      }
-      return new Response("ok")
-    },
-    { preconnect: globalThis.fetch.preconnect },
-  )
-
-  try {
-    const auth = new OpenAiAuth({
-      store: new OpenAiAuthStore(path),
-      fetch: captureFetch,
-      now: () => 100,
-    })
-
-    await auth.authenticatedFetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      body: "request-body",
-    })
-
-    expect(requests).toHaveLength(2)
-    expect(await requests[0]?.text()).toContain("refresh_token=old-refresh-token")
-    expect(requests[1]?.headers.get("authorization")).toBe(
-      "Bearer refreshed-access-token",
-    )
-    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
-      openai: {
-        type: "oauth",
-        access: "refreshed-access-token",
-        refresh: "refreshed-refresh-token",
-        expires: 3_600_100,
-        accountId: "account-id",
-      },
-    })
-  } finally {
-    await rm(directory, { recursive: true, force: true })
-  }
-})
-
-test("writes canonical OAuth credentials with private permissions", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "buli-auth-test-"))
-  const path = join(directory, "nested", "auth.json")
-  const store = new OpenAiAuthStore(path)
-
-  try {
+test("reports and reads an existing OpenAI OAuth credential", async () => {
+  await withStore(async (store) => {
     await store.set("openai", {
       type: "oauth",
       access: "access-token",
       refresh: "refresh-token",
-      expires: 200,
+      expires: 1_000_000,
+      accountId: "account-id",
     })
+    const auth = new OpenAiAuth({ store, now: () => 100 })
 
-    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
-      openai: {
-        type: "oauth",
-        access: "access-token",
-        refresh: "refresh-token",
-        expires: 200,
-      },
+    expect(await auth.getCredential()).toEqual({
+      type: "oauth",
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: 1_000_000,
+      accountId: "account-id",
     })
-    expect((await stat(join(directory, "nested"))).mode & 0o777).toBe(0o700)
-    expect((await stat(path)).mode & 0o777).toBe(0o600)
-  } finally {
-    await rm(directory, { recursive: true, force: true })
-  }
-})
-
-test("rejects malformed authentication files", async () => {
-  await withAuthText("not json", async (path) => {
-    const store = new OpenAiAuthStore(path)
-    await expect(store.all()).rejects.toThrow("Unable to read authentication")
+    expect(await auth.status()).toEqual({
+      providerId: "openai",
+      connected: true,
+      expiresAt: 1_000_000,
+      accountId: "account-id",
+    })
   })
 })
 
-async function withAuthFile(
-  value: Record<string, TAuthInfo>,
-  run: (path: string) => Promise<void>,
-): Promise<void> {
-  return withAuthText(JSON.stringify(value), run)
-}
+test("rejects missing credentials with an actionable login command", async () => {
+  await withStore(async (store) => {
+    const auth = new OpenAiAuth({ store })
 
-async function withAuthText(
-  text: string,
-  run: (path: string) => Promise<void>,
-): Promise<void> {
-  const directory = await mkdtemp(join(tmpdir(), "buli-auth-test-"))
-  const path = join(directory, "auth.json")
+    await expect(auth.requireCredential()).rejects.toThrow(
+      "OpenAI is not connected. Run `buli login`.",
+    )
+    expect(await auth.status()).toEqual({
+      providerId: "openai",
+      connected: false,
+    })
+  })
+})
 
+test("refreshes inside the five-minute skew and persists rotated tokens", async () => {
+  await withStore(async (store, path) => {
+    await store.set("anthropic", {
+      type: "api_key",
+      key: "anthropic-key",
+    })
+    await store.set("openai", {
+      type: "oauth",
+      access: "old-access",
+      refresh: "old-refresh",
+      expires: 200,
+      accountId: "account-id",
+    })
+    const requests: Request[] = []
+    const auth = new OpenAiAuth({
+      store,
+      now: () => 100,
+      fetch: fetchImplementation(async (...args) => {
+        const request = new Request(...args)
+        requests.push(request)
+        if (request.url !== OPENAI_OAUTH_TOKEN_URL) {
+          throw new Error(`Unexpected request: ${request.url}`)
+        }
+        return Response.json({
+          access_token: "new-access",
+          refresh_token: "new-refresh",
+          expires_in: 3600,
+        })
+      }),
+    })
+
+    const [first, second] = await Promise.all([
+      auth.requireCredential(),
+      auth.requireCredential(),
+    ])
+
+    expect(first).toEqual(second)
+    expect(requests).toHaveLength(1)
+    expect(await requests[0]?.text()).toContain("refresh_token=old-refresh")
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
+      openai: {
+        type: "oauth",
+        access: "new-access",
+        refresh: "new-refresh",
+        expires: 3_600_100,
+        accountId: "account-id",
+      },
+      anthropic: {
+        type: "api_key",
+        key: "anthropic-key",
+      },
+      $buli: { authOperations: { anthropic: 1, openai: 1 } },
+    })
+  })
+})
+
+test("backfills an account ID from a valid stored access token", async () => {
+  await withStore(async (store) => {
+    await store.set("openai", {
+      type: "oauth",
+      access: jwt({
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: "jwt-account",
+        },
+      }),
+      refresh: "refresh-token",
+      expires: 1_000_000,
+    })
+    const auth = new OpenAiAuth({ store, now: () => 100 })
+
+    expect((await auth.requireCredential()).accountId).toBe("jwt-account")
+    expect((await auth.getCredential())?.accountId).toBe("jwt-account")
+  })
+})
+
+test("OpenAI rejects an API key credential stored under its provider ID", async () => {
+  await withStore(async (store) => {
+    await store.set("openai", { type: "api_key", key: "platform-key" })
+    const auth = new OpenAiAuth({ store })
+
+    await expect(auth.requireCredential()).rejects.toThrow(
+      "OpenAI / ChatGPT requires an OAuth credential",
+    )
+  })
+})
+
+test("logout removes only the OpenAI credential and is idempotent", async () => {
+  await withStore(async (store) => {
+    await store.set("openai", {
+      type: "oauth",
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: 1_000_000,
+      accountId: "account-id",
+    })
+    const auth = new OpenAiAuth({ store })
+    const signal = new AbortController().signal
+
+    expect(await auth.logout(signal)).toBe(true)
+    expect(await auth.logout(signal)).toBe(false)
+    expect(await auth.getCredential()).toBeUndefined()
+  })
+})
+
+test("browser login persists the OAuth result through the shared auth facade", async () => {
+  await withStore(async (store) => {
+    let authorizationUrl: string | undefined
+    const oauth = new OpenAiOAuth({
+      now: () => 100,
+      callbackFactory: async () => {
+        throw new Error("callback unavailable in test")
+      },
+      fetch: async (input) => {
+        expect(String(input)).toBe(OPENAI_OAUTH_TOKEN_URL)
+        return Response.json({
+          access_token: jwt({ chatgpt_account_id: "login-account" }),
+          refresh_token: "login-refresh",
+          expires_in: 3600,
+        })
+      },
+    })
+    const auth = new OpenAiAuth({ store, oauth, now: () => 100 })
+
+    const status = await auth.login("browser", {
+      signal: new AbortController().signal,
+      notify: (event) => {
+        if (event.type === "authorization") authorizationUrl = event.url
+      },
+      prompt: async () => {
+        const state = new URL(requireValue(authorizationUrl)).searchParams
+          .get("state")
+        return `${OPENAI_OAUTH_CALLBACK_URL}?code=login-code&state=${requireValue(state)}`
+      },
+    })
+
+    expect(status).toEqual({
+      providerId: "openai",
+      connected: true,
+      expiresAt: 3_600_100,
+      accountId: "login-account",
+    })
+    expect(await store.get("openai")).toEqual({
+      type: "oauth",
+      access: expect.any(String),
+      refresh: "login-refresh",
+      expires: 3_600_100,
+      accountId: "login-account",
+    })
+  })
+})
+
+test("browser login repairs one malformed OpenAI provider record", async () => {
+  await withStore(async (store, path) => {
+    await store.set("openai", {
+      type: "oauth",
+      access: "old-access",
+      refresh: "old-refresh",
+      expires: 1,
+    })
+    await Bun.write(path, JSON.stringify({
+      openai: { type: "oauth", access: 42, refresh: null, expires: "later" },
+      other: { type: "future", value: true },
+    }))
+    const auth = new OpenAiAuth({ store, oauth: loginOAuth() })
+
+    await expect(startBrowserLogin(auth)).resolves.toMatchObject({
+      connected: true,
+      accountId: "login-account",
+    })
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
+      openai: {
+        type: "oauth",
+        access: expect.any(String),
+        refresh: "login-refresh",
+        expires: expect.any(Number),
+        accountId: "login-account",
+      },
+      other: { type: "future", value: true },
+      $buli: { authOperations: { openai: 1 } },
+    })
+  })
+})
+
+test("refuses to replay an unauthorized request under a different account", async () => {
+  await withStore(async (store) => {
+    await store.set("openai", {
+      type: "oauth",
+      access: "new-account-token",
+      refresh: "new-account-refresh",
+      expires: 1_000_000,
+      accountId: "account-b",
+    })
+    const auth = new OpenAiAuth({ store, now: () => 100 })
+
+    await expect(auth.refreshAfterUnauthorized(
+      "observed-account-a-token",
+      "account-a",
+    )).rejects.toThrow("account changed")
+  })
+})
+
+test("logout prevents an in-flight login from committing afterward", async () => {
+  const store = new LoginGateStore()
+  const auth = new OpenAiAuth({ store, oauth: loginOAuth() })
+  const login = startBrowserLogin(auth)
+
+  await store.modifyStarted.promise
+  const logout = auth.logout(new AbortController().signal)
+  store.allowModify.resolve()
+
+  await expect(login).rejects.toThrow("login was replaced")
+  await logout
+  expect(await store.get("openai")).toBeUndefined()
+})
+
+test("a concurrent external logout blocks replacement of an existing credential", async () => {
+  const store = new LoginGateStore({
+    type: "oauth",
+    access: "existing-access",
+    refresh: "existing-refresh",
+    expires: 1_000_000,
+    accountId: "login-account",
+  })
+  const auth = new OpenAiAuth({ store, oauth: loginOAuth() })
+  const login = startBrowserLogin(auth)
+
+  await store.modifyStarted.promise
+  await store.remove("openai")
+  store.allowModify.resolve()
+
+  await expect(login).rejects.toThrow("login was replaced")
+  expect(await store.get("openai")).toBeUndefined()
+})
+
+test("a pre-aborted 401 retry does not start a background refresh", async () => {
+  await withStore(async (store) => {
+    let requests = 0
+    const auth = new OpenAiAuth({
+      store,
+      fetch: fetchImplementation(async () => {
+        requests += 1
+        return new Response(null, { status: 500 })
+      }),
+    })
+    const controller = new AbortController()
+    controller.abort(new Error("request cancelled"))
+
+    await expect(auth.refreshAfterUnauthorized(
+      "access-token",
+      "account-id",
+      controller.signal,
+    )).rejects.toThrow("request cancelled")
+    expect(requests).toBe(0)
+  })
+})
+
+test("dispose waits for an active browser login to abort and clean up", async () => {
+  await withStore(async (store) => {
+    const authorizationShown = Promise.withResolvers<void>()
+    let promptSignal: AbortSignal | undefined
+    const auth = new OpenAiAuth({ store, oauth: loginOAuth() })
+    const login = auth.login("browser", {
+      signal: new AbortController().signal,
+      notify: (event) => {
+        if (event.type === "authorization") authorizationShown.resolve()
+      },
+      prompt: (request) => {
+        promptSignal = request.signal
+        return new Promise<string>((_resolve, reject) => {
+          request.signal.addEventListener("abort", () => {
+            reject(request.signal.reason)
+          }, { once: true })
+        })
+      },
+    })
+    const loginFailure = login.catch((error: unknown) => error)
+
+    await authorizationShown.promise
+    while (!promptSignal) await Promise.resolve()
+    await auth.dispose(new Error("test shutdown"))
+
+    expect(promptSignal?.aborted).toBe(true)
+    await expect(loginFailure).resolves.toMatchObject({ message: "test shutdown" })
+  })
+})
+
+test("disposed authentication cannot send a stored bearer token", async () => {
+  await withStore(async (store) => {
+    await store.set("openai", {
+      type: "oauth",
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: 1_000_000,
+      accountId: "account-id",
+    })
+    let requests = 0
+    const auth = new OpenAiAuth({
+      store,
+      fetch: fetchImplementation(async () => {
+        requests += 1
+        return new Response("unexpected")
+      }),
+    })
+    await auth.dispose(new Error("authentication disposed"))
+
+    await expect(auth.authenticatedFetch(OPENAI_CODEX_RESPONSES_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    })).rejects.toThrow("authentication disposed")
+    expect(requests).toBe(0)
+  })
+})
+
+async function withStore(
+  run: (store: FileAuthStore, path: string) => Promise<void>,
+): Promise<void> {
+  const directory = await mkdtemp(join(tmpdir(), "buli-openai-auth-"))
+  const path = join(directory, "private", "auth.json")
   try {
-    await Bun.write(path, text)
-    await run(path)
+    await run(new FileAuthStore(path), path)
   } finally {
     await rm(directory, { recursive: true, force: true })
+  }
+}
+
+function fetchImplementation(
+  run: (...args: Parameters<typeof globalThis.fetch>) => Promise<Response>,
+): typeof fetch {
+  return Object.assign(run, { preconnect: globalThis.fetch.preconnect })
+}
+
+function jwt(payload: Record<string, unknown>): string {
+  const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url")
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url")
+  return `${header}.${body}.signature`
+}
+
+function requireValue<T>(value: T | null | undefined): T {
+  if (value === null || value === undefined) throw new Error("Expected test value")
+  return value
+}
+
+function loginOAuth(): OpenAiOAuth {
+  return new OpenAiOAuth({
+    callbackFactory: async () => {
+      throw new Error("callback unavailable in test")
+    },
+    fetch: async () => Response.json({
+      access_token: jwt({ chatgpt_account_id: "login-account" }),
+      refresh_token: "login-refresh",
+      expires_in: 3600,
+    }),
+  })
+}
+
+function startBrowserLogin(auth: OpenAiAuth): ReturnType<OpenAiAuth["login"]> {
+  let authorizationUrl: string | undefined
+  return auth.login("browser", {
+    signal: new AbortController().signal,
+    notify: (event) => {
+      if (event.type === "authorization") authorizationUrl = event.url
+    },
+    prompt: async () => {
+      const state = new URL(requireValue(authorizationUrl)).searchParams.get("state")
+      return `code=login-code&state=${requireValue(state)}`
+    },
+  })
+}
+
+class LoginGateStore implements IAuthStore {
+  readonly modifyStarted = Promise.withResolvers<void>()
+  readonly allowModify = Promise.withResolvers<void>()
+  private credential: TAuthCredential | undefined
+  private operation = 0
+
+  constructor(credential?: IOAuthCredential) {
+    this.credential = credential
+  }
+
+  async get(_providerId: string): Promise<TAuthCredential | undefined> {
+    return this.credential
+  }
+
+  async set(_providerId: string, credential: TAuthCredential): Promise<void> {
+    this.credential = credential
+  }
+
+  async remove(_providerId: string): Promise<boolean> {
+    const existed = this.credential !== undefined
+    this.credential = undefined
+    this.operation += 1
+    return existed
+  }
+
+  async modify(
+    _providerId: string,
+    update: (
+      current: TAuthCredential | undefined,
+    ) => Promise<TAuthCredential | undefined>,
+  ): Promise<TAuthCredential | undefined> {
+    this.modifyStarted.resolve()
+    await this.allowModify.promise
+    this.credential = await update(this.credential)
+    return this.credential
+  }
+
+  async beginOperation(): Promise<number> {
+    this.operation += 1
+    return this.operation
+  }
+
+  async commitOperation(
+    _providerId: string,
+    operation: number,
+    credential: TAuthCredential,
+  ): Promise<boolean> {
+    this.modifyStarted.resolve()
+    await this.allowModify.promise
+    if (operation !== this.operation) return false
+    this.credential = credential
+    return true
   }
 }

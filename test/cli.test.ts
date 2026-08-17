@@ -17,10 +17,57 @@ test("prints formatted help instead of the raw yargs instance", async () => {
 
   expect(exitCode).toBe(0);
   expect(output).toContain("buli");
+  expect(output).toContain("buli login");
+  expect(output).toContain("buli logout");
   expect(output).toContain("--help");
   expect(output).not.toContain("buli tui");
   expect(output).not.toContain("tui [project]");
   expect(output).not.toContain("YargsInstance");
+});
+
+test.each(["login", "logout"])(
+  "%s help exits without starting OpenTUI",
+  async (command) => {
+    const helpProcess = Bun.spawn({
+      cmd: ["bun", "cli/main.ts", command, "--help"],
+      cwd: import.meta.dir + "/..",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(helpProcess.stdout).text(),
+      new Response(helpProcess.stderr).text(),
+      helpProcess.exited,
+    ]);
+    const output = stdout + stderr;
+
+    expect(exitCode).toBe(0);
+    expect(output).toContain(`buli ${command}`);
+    expect(output).toContain("--help");
+    expect(output).not.toContain("OpenTUI");
+    expect(output).not.toContain("Loading providers");
+  },
+);
+
+test("does not accept a positional provider shortcut", async () => {
+  const loginProcess = Bun.spawn({
+    cmd: ["bun", "cli/main.ts", "login", "openai"],
+    cwd: import.meta.dir + "/..",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(loginProcess.stdout).text(),
+    new Response(loginProcess.stderr).text(),
+    loginProcess.exited,
+  ]);
+  const output = stdout + stderr;
+
+  expect(exitCode).toBe(1);
+  expect(output).toContain("Unknown argument: openai");
+  expect(output).not.toContain("OpenTUI");
 });
 
 test("does not expose an explicit buli tui command", async () => {

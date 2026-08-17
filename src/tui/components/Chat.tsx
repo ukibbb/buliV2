@@ -128,12 +128,14 @@ export function Chat(props: IChatProps) {
             >
                 <textarea
                     ref={textAreaRef}
+                    initialValue={ui.input}
                     onSubmit={() => submitInput("auto")}
                     onKeyDown={handleKeyDown}
                     onContentChange={() => {
-                        controller.updateInput(
-                            textAreaRef.current?.plainText ?? "",
-                        )
+                        const input = textAreaRef.current?.plainText ?? ""
+                        if (input !== controller.getSnapshot().input) {
+                            controller.updateInput(input)
+                        }
                     }}
                     focused
                     style={{

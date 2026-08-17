@@ -3,8 +3,12 @@ import { realpathSync } from "node:fs"
 
 import { systemPrompt } from "@/agent/agents-prompts"
 import type { IAgentModelEvent, IAgentToolDescriptor } from "@/agent/agent-types"
+import type {
+  IAuthStore,
+  IOAuthCredential,
+  TAuthCredential,
+} from "@/auth/types"
 import type { TAgentMessage } from "@/domain"
-import type { IAuthStore, TAuthInfo } from "@/providers/auth-store"
 import { OpenAiAuth } from "@/providers/openai/openai-auth"
 import { OpenAiAgentModel } from "@/providers/openai/openai-agent-model"
 import { OPENAI_CODEX_RESPONSES_URL } from "@/providers/openai/openai-constants"
@@ -34,7 +38,7 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
       type: "oauth",
       access: "test-access-token",
       refresh: "test-refresh-token",
-      expires: 200,
+      expires: 1_000_000,
       accountId: "test-account-id",
     }),
     fetch: captureFetch,
@@ -93,7 +97,8 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
   expect(firstRequest.url).toBe(OPENAI_CODEX_RESPONSES_URL)
   expect(firstRequest.headers.get("authorization")).toBe("Bearer test-access-token")
   expect(firstRequest.headers.get("chatgpt-account-id")).toBe("test-account-id")
-  expect(firstRequest.headers.get("originator")).toBe("opencode")
+  expect(firstRequest.headers.get("originator")).toBe("buli")
+  expect(firstRequest.headers.get("openai-beta")).toBe("responses=experimental")
 
   const body = (await firstRequest.json()) as Record<string, unknown>
   expect(body.model).toBe("gpt-5.6-sol")
@@ -223,7 +228,8 @@ test("replays a local tool failure into the next OAuth iteration", async () => {
       type: "oauth",
       access: "test-access-token",
       refresh: "test-refresh-token",
-      expires: 200,
+      expires: 1_000_000,
+      accountId: "test-account-id",
     }),
     fetch: captureFetch,
     now: () => 100,
@@ -405,7 +411,8 @@ test("forwards cancellation to the OpenAI request", async () => {
       type: "oauth",
       access: "test-access-token",
       refresh: "test-refresh-token",
-      expires: 200,
+      expires: 1_000_000,
+      accountId: "test-account-id",
     }),
     fetch: stalledFetch,
     now: () => 100,
@@ -438,16 +445,32 @@ test("forwards cancellation to the OpenAI request", async () => {
   expect(events).toContainEqual({ type: "abort", reason: "Stopped by test" })
 })
 
-function authStore(credential: TAuthInfo): IAuthStore {
+function authStore(credential: IOAuthCredential): IAuthStore {
+  let current: TAuthCredential | undefined = credential
   return {
-    async all() {
-      return { openai: credential }
-    },
     async get(providerID) {
-      return providerID === "openai" ? credential : undefined
+      return providerID === "openai" ? current : undefined
     },
-    async set() {
-      throw new Error("Test auth store is read-only")
+    async set(providerID, next) {
+      if (providerID === "openai") current = next
+    },
+    async remove(providerID) {
+      if (providerID !== "openai" || !current) return false
+      current = undefined
+      return true
+    },
+    async modify(providerID, update) {
+      if (providerID !== "openai") return undefined
+      current = await update(current)
+      return current
+    },
+    async beginOperation() {
+      return 1
+    },
+    async commitOperation(providerID, _operation, next) {
+      if (providerID !== "openai") return false
+      current = next
+      return true
     },
   }
 }
@@ -586,7 +609,8 @@ function createModel(
       type: "oauth",
       access: "test-access-token",
       refresh: "test-refresh-token",
-      expires: 200,
+      expires: 1_000_000,
+      accountId: "test-account-id",
     }),
     fetch: fetchImplementation(run),
     now: () => 100,

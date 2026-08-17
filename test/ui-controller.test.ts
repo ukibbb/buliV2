@@ -170,6 +170,8 @@ test("publishes all command suggestions from slash input", () => {
     "reasoning",
     "new",
     "sessions",
+    "login",
+    "logout",
   ])
   expect(notifications).toBe(1)
 })
@@ -180,6 +182,7 @@ test("creates the first session only when a prompt is submitted from Home", asyn
 
   expect(controller.getSnapshot()).toEqual({
     route: { type: "home" },
+    authenticationMode: null,
     menu: null,
     input: "",
     inputError: null,
@@ -493,6 +496,52 @@ test("new returns Home without creating an empty session", async () => {
 
   expect(controller.getSnapshot().route).toEqual({ type: "home" })
   expect(spy.created).toEqual([])
+})
+
+test("login and logout commands activate authentication mode", async () => {
+  const spy = applicationSpy()
+  const controller = new BuliUiController({ application: spy.application })
+
+  expect(await controller.submitInput("/login")).toBe("consumed")
+  expect(controller.getSnapshot().authenticationMode).toBe("login")
+  expect(spy.prompts).toEqual([])
+
+  controller.escape()
+  expect(controller.getSnapshot().authenticationMode).toBeNull()
+
+  expect(await controller.submitInput("/logout")).toBe("consumed")
+  expect(controller.getSnapshot().authenticationMode).toBe("logout")
+  expect(spy.prompts).toEqual([])
+})
+
+test("known slash commands reject arguments instead of sending a prompt", async () => {
+  const spy = applicationSpy()
+  const controller = new BuliUiController({ application: spy.application })
+
+  expect(await controller.submitInput("/login openai")).toBe("retained")
+  expect(controller.getSnapshot()).toMatchObject({
+    authenticationMode: null,
+    inputError: "/login does not accept arguments",
+  })
+  expect(spy.prompts).toEqual([])
+  expect(spy.created).toEqual([])
+})
+
+test("Escape closes authentication without changing the session or draft", () => {
+  const spy = applicationSpy({ runningSessionId: "session-1" })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+  controller.updateInput("Preserved draft")
+  controller.openAuthentication("login")
+
+  controller.escape()
+
+  expect(controller.getSnapshot()).toMatchObject({
+    route: { type: "session", sessionId: "session-1" },
+    authenticationMode: null,
+    input: "Preserved draft",
+  })
+  expect(spy.aborted).toEqual([])
 })
 
 test("blocks session changes while the current session is running", async () => {

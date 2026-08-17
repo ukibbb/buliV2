@@ -3,6 +3,7 @@
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 
+import { LoginCommand, LogoutCommand } from "./cmd/authentication";
 import { RunBuliTuiCommand } from "./cmd/tui";
 
 // Node/Bun starts process.argv as [runtimePath, scriptPath, ...userArgs].
@@ -19,12 +20,14 @@ const cli = yargs(args)
   .help("help", "show help")
   // Allow -h as the short version of --help.
   .alias("help", "h")
-  // Keep the top usage line minimal until buli has real subcommands.
+  // Keep the top usage line minimal.
   .usage("")
   // Add a built-in completion command for future shell completion scripts.
   .completion("completion", "generate shell completion script")
-  // Register the default TUI command so bare `buli` can start the terminal UI.
-  // We intentionally do not register an explicit `buli tui` subcommand yet.
+  // Authentication commands use the same interactive OpenTUI flow as the app.
+  .command(LoginCommand)
+  .command(LogoutCommand)
+  // Keep bare `buli` as the main TUI entry point without exposing `buli tui`.
   .command(RunBuliTuiCommand)
   .fail((message, error) => {
     if (args[0] === "tui") {

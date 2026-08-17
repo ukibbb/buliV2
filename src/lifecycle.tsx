@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactNode } from "react"
 import type { IBuliApplication } from "@/application"
 import type { IBuliApplicationStartup } from "@/application/startup"
 import { BuliRuntimeProvider } from "@/application-state"
+import type { IAuthenticationService } from "@/auth/contracts"
 import { BuliTui } from "@/tui/Buli"
 import { theme } from "@/tui/theme"
 import { BuliUiController } from "@/tui/ui-controller"
@@ -13,6 +14,7 @@ type TBuliLifecycleState =
     | {
         type: "ready"
         runtime: IBuliApplication
+        authentication: IAuthenticationService
         uiController: BuliUiController
     }
     | { type: "error"; message: string }
@@ -31,11 +33,12 @@ export function BuliApplicationLifecycle(
         let mounted = true
 
         void props.runtimeTask.then(
-            ({ runtime }) => {
+            ({ runtime, authentication }) => {
                 if (!mounted) return
                 setState({
                     type: "ready",
                     runtime,
+                    authentication,
                     uiController: new BuliUiController({ application: runtime }),
                 })
             },
@@ -65,7 +68,7 @@ export function BuliApplicationLifecycle(
     return (
         <BuliRuntimeProvider runtime={state.runtime}>
             <BuliUiControllerProvider controller={state.uiController}>
-                <BuliTui />
+                <BuliTui authentication={state.authentication} />
             </BuliUiControllerProvider>
         </BuliRuntimeProvider>
     )

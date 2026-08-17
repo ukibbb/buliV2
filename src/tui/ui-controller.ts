@@ -2,6 +2,7 @@ import type {
     IBuliApplication,
     ISnapshotSource,
 } from "@/application/contracts"
+import type { TAuthenticationMode } from "@/auth/contracts"
 
 export interface IBuliCommandInfo {
     readonly name: string
@@ -13,6 +14,7 @@ export interface IBuliCommandContext {
     readonly sessionId: string | null
     readonly activateSession: (sessionId: string) => void
     readonly goHome: () => void
+    readonly openAuthentication: (mode: TAuthenticationMode) => void
 }
 
 export interface IBuliMenuItem {
@@ -77,6 +79,7 @@ export type TBuliCommand = IBuliCommandInfo & (
 
 export interface IBuliUiSnapshot {
     readonly route: TBuliRoute
+    readonly authenticationMode: TAuthenticationMode | null
     // Store the currently visible menu variant, or null when no menu is open.
     readonly menu: TBuliMenuSnapshot | null
     readonly input: string
@@ -197,6 +200,22 @@ export const BULI_COMMANDS: readonly TBuliCommand[] = [
             context.activateSession(sessionId)
         },
     },
+    {
+        kind: "action",
+        name: "login",
+        description: "Connect an authentication provider",
+        handler: (_args, context) => {
+            context.openAuthentication("login")
+        },
+    },
+    {
+        kind: "action",
+        name: "logout",
+        description: "Disconnect an authentication provider",
+        handler: (_args, context) => {
+            context.openAuthentication("logout")
+        },
+    },
 ]
 
 export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
@@ -212,6 +231,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
 
     private snapshot: IBuliUiSnapshot = {
         route: { type: "home" },
+        authenticationMode: null,
         menu: null,
         input: "",
         inputError: null,
@@ -381,6 +401,14 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
         const invocation = text.match(/^\/([^\s/]+)(?:\s+([\s\S]*))?$/)
         const name = invocation?.[1]
         const args = invocation?.[2] ?? ""
+        const knownCommand = name
+            ? this.commands.find((command) => command.name === name)
+            : undefined
+
+        if (knownCommand && args) {
+            this.setInputError(new Error(`/${knownCommand.name} does not accept arguments`))
+            return "retained"
+        }
 
         if (name && !args) {
             try {
@@ -456,6 +484,11 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     }
 
     readonly escape = (): void => {
+        if (this.snapshot.authenticationMode) {
+            this.closeAuthentication()
+            return
+        }
+
         if (this.snapshot.menu) {
             this.setMenu(null)
             const sessionId = this.activeSessionId()
@@ -509,6 +542,23 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
             route: { type: "home" },
             menu: null,
             inputError: null,
+        })
+    }
+
+    readonly openAuthentication = (mode: TAuthenticationMode): void => {
+        this.setSnapshot({
+            ...this.snapshot,
+            authenticationMode: mode,
+            menu: null,
+            inputError: null,
+        })
+    }
+
+    readonly closeAuthentication = (): void => {
+        if (!this.snapshot.authenticationMode) return
+        this.setSnapshot({
+            ...this.snapshot,
+            authenticationMode: null,
         })
     }
 
@@ -584,6 +634,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
             sessionId: this.activeSessionId(),
             activateSession: this.activateSession,
             goHome: this.goHome,
+            openAuthentication: this.openAuthentication,
         }
     }
 

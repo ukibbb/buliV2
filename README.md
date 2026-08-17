@@ -25,6 +25,7 @@ Inside the TUI:
 - use `/new` to return to a fresh Home screen
 - use `/sessions` to reopen a saved conversation
 - use `/model` and `/reasoning` to change the next run configuration
+- use `/login` and `/logout` to manage provider authentication
 - press `Ctrl+D` to toggle the console
 - use `Up`/`Down` to scroll while the console is focused
 - use `+`/`-` to resize the console
@@ -43,6 +44,37 @@ Useful feedback commands:
 bun run typecheck
 bun test
 ```
+
+## Authentication
+
+Buli uses ChatGPT/Codex OAuth for OpenAI models. This is separate from the
+OpenAI Platform API and does not use `OPENAI_API_KEY`.
+
+Start the interactive provider and login-method picker with:
+
+```bash
+buli login
+```
+
+The browser method opens an OpenAI authorization page and listens on
+`http://localhost:1455/auth/callback`. If the callback cannot reach Buli, paste
+the complete callback URL into the terminal. Device login displays a URL and a
+one-time code instead.
+
+Disconnect locally with:
+
+```bash
+buli logout
+```
+
+Logout removes Buli's local token but does not sign the browser out of ChatGPT
+or revoke copies of the token stored elsewhere.
+
+Credentials are stored as plaintext JSON in `~/.buli/auth.json`. Buli protects
+the directory and file with `0700` and `0600` permissions on POSIX systems,
+uses atomic writes, and locks updates across processes.
+The file is keyed by provider and supports OAuth and API-key credentials;
+the current OpenAI/ChatGPT integration accepts OAuth only.
 
 ## Session persistence
 

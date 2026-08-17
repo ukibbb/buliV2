@@ -27,6 +27,15 @@ test("keeps TUI code behind application and domain contracts", async () => {
         violations.push(`${path}: application implementation import`)
       }
     }
+
+    const authImports = source.matchAll(
+      /from\s+["'](@\/auth(?:\/[^"']*)?)["']/g,
+    )
+    for (const match of authImports) {
+      if (match[1] !== "@/auth/contracts") {
+        violations.push(`${path}: concrete authentication import`)
+      }
+    }
   }
 
   expect(violations).toEqual([])
@@ -52,6 +61,9 @@ test("uses Agent ownership instead of the old engine-store-view stack", async ()
 
     if (/from\s+["'](?:\.\.\/)*pi(?:\/|["'])/.test(source)) {
       violations.push(`${path}: Pi implementation import`)
+    }
+    if (/from\s+["'](?:\.\.\/)*opencode-react(?:\/|["'])/.test(source)) {
+      violations.push(`${path}: OpenCode implementation import`)
     }
   }
 

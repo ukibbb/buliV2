@@ -15,6 +15,7 @@ import type {
   IBuliPromptInput,
   IBuliPromptSubmission,
 } from "@/application/contracts"
+import type { IAuthenticationService } from "@/auth/contracts"
 import { BuliApplicationRuntime } from "@/application/runtime"
 import { BuliRuntimeProvider } from "@/application-state"
 import type { IAgentModel } from "@/agent/agent-types"
@@ -45,6 +46,14 @@ const APPLICATION_SNAPSHOT: IBuliApplicationSnapshot = {
     modelId: "test",
     reasoningEffort: "medium",
   },
+}
+
+const AUTHENTICATION: IAuthenticationService = {
+  listProviders: async () => [],
+  login: async () => {
+    throw new Error("No authentication provider configured for this test")
+  },
+  logout: async () => false,
 }
 
 function codeRenderables(root: Renderable): CodeRenderable[] {
@@ -173,7 +182,7 @@ function buliElementWithController(
     runtime,
     children: createElement(BuliUiControllerProvider, {
       controller,
-      children: createElement(BuliTui),
+      children: createElement(BuliTui, { authentication: AUTHENTICATION }),
     }),
   })
 }
@@ -242,6 +251,41 @@ test("Escape restores steering and aborts while chat input is focused", async ()
     expect(textareaRenderable(setup.renderer.root).plainText).toBe(
       "Queued steering\n\nQueued follow-up",
     )
+  } finally {
+    act(() => {
+      setup.renderer.destroy()
+    })
+  }
+})
+
+test("preserves the chat draft while authentication opens and closes", async () => {
+  const fake = fakeApplication()
+  const controller = new BuliUiController({ application: fake.application })
+  controller.updateInput("Unsent draft")
+  const setup = await testRender(
+    buliElementWithController(fake.application, controller),
+    { width: 80, height: 24 },
+  )
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+    })
+    expect(textareaRenderable(setup.renderer.root).plainText).toBe("Unsent draft")
+
+    await act(async () => {
+      controller.openAuthentication("login")
+      await Promise.resolve()
+      await setup.renderOnce()
+    })
+    expect(setup.captureCharFrame()).toContain("Buli Authentication")
+    expect(controller.getSnapshot().input).toBe("Unsent draft")
+
+    await act(async () => {
+      controller.closeAuthentication()
+      await setup.renderOnce()
+    })
+    expect(textareaRenderable(setup.renderer.root).plainText).toBe("Unsent draft")
   } finally {
     act(() => {
       setup.renderer.destroy()

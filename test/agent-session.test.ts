@@ -175,6 +175,8 @@ test("AgentSession restores steering to the queue when persistence fails", async
       }
       memory.appendMessage(message)
     },
+    getCompactionCheckpoint: memory.getCompactionCheckpoint,
+    saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
     clearSession: memory.clearSession,
     deleteSession: memory.deleteSession,
   }
@@ -246,6 +248,8 @@ test("AgentSession restores follow-up to the queue when persistence fails", asyn
       }
       memory.appendMessage(message)
     },
+    getCompactionCheckpoint: memory.getCompactionCheckpoint,
+    saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
     clearSession: memory.clearSession,
     deleteSession: memory.deleteSession,
   }
@@ -346,6 +350,8 @@ test("AgentSession rejects acceptance without invoking the provider or diverging
     appendMessage: () => {
       throw persistenceFailure
     },
+    getCompactionCheckpoint: memory.getCompactionCheckpoint,
+    saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
     clearSession: memory.clearSession,
     deleteSession: memory.deleteSession,
   }
@@ -624,6 +630,135 @@ test("AgentSession dispose times out and unsubscribes from a non-cooperative mod
   expect(() => session.subscribe(() => {})).toThrow("AgentSession is disposed")
 })
 
+test("AgentSession compacts durable history and projects only summary plus tail", async () => {
+  const manager = new InMemorySessionManager()
+  manager.createSession(sessionInfo("session-1", "test-agent", "Compaction"))
+  seedConversation(manager, 3)
+  const original = manager.getMessages("session-1")
+  const requests: IAgentModelRequest[] = []
+  const model: IAgentModel = {
+    async *stream(request) {
+      requests.push(request)
+      if (request.runId.startsWith("compaction-")) {
+        yield { type: "text-start", id: "summary" }
+        yield { type: "text-delta", id: "summary", delta: "Earlier context" }
+        yield { type: "text-end", id: "summary" }
+        yield {
+          type: "finish",
+          reason: "stop",
+          usage: { inputTokens: 30, outputTokens: 4, totalTokens: 34 },
+        }
+        return
+      }
+      yield { type: "text-start", id: "answer" }
+      yield { type: "text-delta", id: "answer", delta: "New answer" }
+      yield { type: "text-end", id: "answer" }
+      yield {
+        type: "finish",
+        reason: "stop",
+        usage: { inputTokens: 12, outputTokens: 3, totalTokens: 15 },
+      }
+    },
+  }
+  let id = 0
+  const session = new AgentSession({
+    agentId: "test-agent",
+    sessionId: "session-1",
+    manager,
+    systemPrompt: "System",
+    resolveRunConfiguration: () => ({
+      model,
+      modelProfile: {
+        providerId: "test",
+        modelId: "model-1",
+        contextWindowTokens: 1_000,
+      },
+      reasoningEffort: "medium",
+    }),
+    tools: [],
+    now: () => 100 + id,
+    generateId: () => `generated-${++id}`,
+  })
+
+  const checkpoint = await session.compact()
+  expect(checkpoint).toMatchObject({
+    reason: "manual",
+    compactedMessageCount: 2,
+    throughMessageId: original[1]!.id,
+    summary: "Earlier context",
+  })
+  expect(manager.getMessages("session-1")).toEqual(original)
+
+  const run = session.prompt("Continue")
+  await run.settled
+  const promptRequest = requests.find(
+    (request) => !request.runId.startsWith("compaction-"),
+  )
+  expect(promptRequest?.contextSummary).toBe("Earlier context")
+  expect(promptRequest?.messages.slice(0, -1)).toEqual(original.slice(2))
+  expect(manager.getMessages("session-1").slice(0, 6)).toEqual([...original])
+  expect(manager.getMessages("session-1").at(-1)).toMatchObject({
+    role: "assistant",
+    model: {
+      providerId: "test",
+      modelId: "model-1",
+      contextWindowTokens: 1_000,
+    },
+    usage: { inputTokens: 12, outputTokens: 3, totalTokens: 15 },
+  })
+
+  await session.dispose()
+})
+
+test("AgentSession automatically compacts only with explicit context metadata", async () => {
+  const manager = new InMemorySessionManager()
+  manager.createSession(sessionInfo("session-1", "test-agent", "Automatic"))
+  seedConversation(manager, 3)
+  let compactionRequests = 0
+  const model: IAgentModel = {
+    async *stream(request) {
+      if (request.runId.startsWith("compaction-")) {
+        compactionRequests += 1
+        yield { type: "text-start", id: "summary" }
+        yield { type: "text-delta", id: "summary", delta: "Auto summary" }
+        yield { type: "text-end", id: "summary" }
+        yield { type: "finish", reason: "stop" }
+        return
+      }
+      yield { type: "finish", reason: "stop", usage: { totalTokens: 9 } }
+    },
+  }
+  const session = new AgentSession({
+    agentId: "test-agent",
+    sessionId: "session-1",
+    manager,
+    systemPrompt: "System",
+    resolveRunConfiguration: () => ({
+      model,
+      modelProfile: {
+        providerId: "test",
+        modelId: "tiny",
+        contextWindowTokens: 10,
+      },
+      reasoningEffort: "none",
+    }),
+    tools: [],
+  })
+
+  const run = session.prompt("Trigger automatic compaction")
+  await run.settled
+  await session.waitForIdle()
+
+  expect(compactionRequests).toBe(1)
+  expect(manager.getCompactionCheckpoint("session-1")).toMatchObject({
+    reason: "automatic",
+    summary: "Auto summary",
+  })
+  expect(manager.getMessages("session-1")).toHaveLength(8)
+
+  await session.dispose()
+})
+
 function sessionInfo(id: string, agentId: string, title: string) {
   return {
     id,
@@ -631,6 +766,28 @@ function sessionInfo(id: string, agentId: string, title: string) {
     title,
     createdAt: 1,
     updatedAt: 1,
+  }
+}
+
+function seedConversation(
+  manager: InMemorySessionManager,
+  turns: number,
+): void {
+  for (let index = 0; index < turns; index += 1) {
+    const runId = `seed-run-${index}`
+    manager.appendMessage(userMessage(
+      `Question ${index}`,
+      "session-1",
+      `seed-user-${index}`,
+      runId,
+      index * 2 + 1,
+    ))
+    manager.appendMessage(textAssistantMessage(
+      `seed-assistant-${index}`,
+      runId,
+      `Answer ${index}`,
+      index * 2 + 2,
+    ))
   }
 }
 

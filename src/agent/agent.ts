@@ -6,6 +6,7 @@ import type {
     IAgentState,
     IAgentTool,
     TAgentEventListener,
+    TAgentContextProjector,
     TAgentCriticalEventSink,
     TAgentRunConfigurationResolver,
     TAgentRunEndReason,
@@ -23,6 +24,7 @@ interface IAgentOptions {
     readonly resolveRunConfiguration: TAgentRunConfigurationResolver
     readonly tools: readonly IAgentTool[]
     readonly initialMessages?: readonly TAgentMessage[]
+    readonly projectContext?: TAgentContextProjector
     readonly criticalEventSink?: TAgentCriticalEventSink
     readonly onObserverError?: (error: unknown) => void
     readonly maxProviderIterations?: number
@@ -59,6 +61,7 @@ export class Agent {
     private readonly maxProviderIterations: number | undefined
     private readonly now: () => number
     private readonly generateId: () => string
+    private readonly projectContext: TAgentContextProjector | undefined
     private steeringQueue: IUserMessage[] = []
     private followUpQueue: IUserMessage[] = []
     private activeRun: IActiveAgentRun | undefined
@@ -70,6 +73,7 @@ export class Agent {
         this.maxProviderIterations = options.maxProviderIterations
         this.now = options.now ?? Date.now
         this.generateId = options.generateId ?? generateRandomId
+        this.projectContext = options.projectContext
         this.stateValue = {
             sessionId: options.sessionId,
             systemPrompt: options.systemPrompt,
@@ -113,6 +117,9 @@ export class Agent {
         }
 
         const runConfiguration: IAgentRunConfiguration = this.resolveRunConfiguration()
+        const context = this.projectContext?.(this.stateValue.messages) ?? {
+            messages: this.stateValue.messages,
+        }
         const runId = this.generateId()
         const prompt = this.createUserMessage(text, runId, "prompt")
         const abortController = new AbortController()
@@ -145,7 +152,7 @@ export class Agent {
             lastRunReason: undefined,
         }
 
-        void this.executeRun(activeRun, prompt, runConfiguration)
+        void this.executeRun(activeRun, prompt, runConfiguration, context)
 
         return {
             runId,
@@ -230,6 +237,7 @@ export class Agent {
         activeRun: IActiveAgentRun,
         prompt: IUserMessage,
         runConfiguration: IAgentRunConfiguration,
+        context: ReturnType<TAgentContextProjector>,
     ): Promise<void> {
         let reason: TAgentRunEndReason = "internal-error"
         let failed = false
@@ -240,9 +248,15 @@ export class Agent {
                 sessionId: this.stateValue.sessionId,
                 runId: activeRun.runId,
                 systemPrompt: this.stateValue.systemPrompt,
-                messages: this.stateValue.messages,
+                messages: context.messages,
+                ...(context.contextSummary === undefined
+                    ? {}
+                    : { contextSummary: context.contextSummary }),
                 prompt,
                 model: runConfiguration.model,
+                ...(runConfiguration.modelProfile === undefined
+                    ? {}
+                    : { modelProfile: runConfiguration.modelProfile }),
                 reasoningEffort: runConfiguration.reasoningEffort,
                 tools: this.stateValue.tools,
                 signal: activeRun.abortController.signal,
@@ -459,6 +473,7 @@ export class Agent {
                 }
                 return
             case "agent_settled":
+            case "tool_execution_update":
             case "turn_start":
                 return
         }

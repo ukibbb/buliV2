@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { Buffer } from "node:buffer"
 
 import type {
   IAgentEvent,
@@ -593,6 +594,213 @@ test("gives abort precedence over a provider error during turn_end", async () =>
   })
 
   expect(result.reason).toBe("aborted")
+})
+
+test("rejects duplicate tool names before starting the model", async () => {
+  const model = new ScriptedModel([{ type: "finish", reason: "stop" }])
+  const duplicate: IAgentTool = {
+    name: "read_file",
+    description: "Read",
+    inputSchema: { type: "object" },
+    execute: async () => "unused",
+  }
+  const events: IAgentEvent[] = []
+
+  await expect(runAgentLoop({
+    sessionId: "session-1",
+    runId: RUN_ID,
+    systemPrompt: "System",
+    messages: [],
+    prompt: userMessage("Question"),
+    model,
+    reasoningEffort: "medium",
+    tools: [duplicate, { ...duplicate }],
+    signal: new AbortController().signal,
+    emit: (event) => {
+      events.push(event)
+    },
+  })).rejects.toThrow("Duplicate tool: read_file")
+
+  expect(model.requests).toHaveLength(0)
+  expect(events).toHaveLength(0)
+})
+
+test("turns invalid tool input into a model-visible result without executing", async () => {
+  const model = new ScriptedModel((iteration) => iteration === 0
+    ? [
+        {
+          type: "tool-call",
+          toolCallId: "invalid-read",
+          toolName: "read_file",
+          input: { path: 42, extra: true },
+        },
+        { type: "finish", reason: "tool-calls" },
+      ]
+    : [{ type: "finish", reason: "stop" }])
+  let executionCount = 0
+  const tool: IAgentTool = {
+    name: "read_file",
+    description: "Read",
+    inputSchema: {
+      type: "object",
+      properties: { path: { type: "string", minLength: 1 } },
+      required: ["path"],
+      additionalProperties: false,
+    },
+    execute: async () => {
+      executionCount += 1
+      return "unused"
+    },
+  }
+
+  const result = await runAgentLoop({
+    sessionId: "session-1",
+    runId: RUN_ID,
+    systemPrompt: "System",
+    messages: [],
+    prompt: userMessage("Read"),
+    model,
+    reasoningEffort: "medium",
+    tools: [tool],
+    signal: new AbortController().signal,
+    emit: () => {},
+    now: timeGenerator(),
+    generateId: idGenerator(),
+  })
+
+  const toolResult = result.messages.find((message) => message.role === "toolResult")
+  expect(executionCount).toBe(0)
+  expect(toolResult).toMatchObject({
+    role: "toolResult",
+    toolCallId: "invalid-read",
+    isError: true,
+    content: expect.stringContaining('Invalid input for tool "read_file"'),
+  })
+  expect(model.requests[1]?.messages).toContainEqual(toolResult)
+})
+
+test("serializes tool progress before the final result and ignores late updates", async () => {
+  const model = new ScriptedModel((iteration) => iteration === 0
+    ? [
+        {
+          type: "tool-call",
+          toolCallId: "progress-call",
+          toolName: "scan",
+          input: {},
+        },
+        { type: "finish", reason: "tool-calls" },
+      ]
+    : [{ type: "finish", reason: "stop" }])
+  let lateProgress: ((progress: string) => void) | undefined
+  const tool: IAgentTool = {
+    name: "scan",
+    description: "Scan",
+    inputSchema: { type: "object", additionalProperties: false },
+    execute: async (_input, context) => {
+      lateProgress = context.reportProgress
+      context.reportProgress?.("first")
+      await Promise.resolve()
+      context.reportProgress?.("second")
+      return "complete"
+    },
+  }
+  const events: IAgentEvent[] = []
+
+  await runAgentLoop({
+    sessionId: "session-1",
+    runId: RUN_ID,
+    systemPrompt: "System",
+    messages: [],
+    prompt: userMessage("Scan"),
+    model,
+    reasoningEffort: "medium",
+    tools: [tool],
+    signal: new AbortController().signal,
+    emit: async (event) => {
+      await Promise.resolve()
+      events.push(structuredClone(event))
+    },
+    now: timeGenerator(),
+    generateId: idGenerator(),
+  })
+  lateProgress?.("late")
+  await Promise.resolve()
+
+  expect(events.filter((event) => event.type.startsWith("tool_execution")))
+    .toEqual([
+      {
+        type: "tool_execution_start",
+        runId: RUN_ID,
+        toolCallId: "progress-call",
+        toolName: "scan",
+        input: {},
+      },
+      {
+        type: "tool_execution_update",
+        runId: RUN_ID,
+        toolCallId: "progress-call",
+        toolName: "scan",
+        progress: "first",
+      },
+      {
+        type: "tool_execution_update",
+        runId: RUN_ID,
+        toolCallId: "progress-call",
+        toolName: "scan",
+        progress: "second",
+      },
+      expect.objectContaining({
+        type: "tool_execution_end",
+        toolCallId: "progress-call",
+      }),
+    ])
+})
+
+test("truncates custom tool output before persistence and model continuation", async () => {
+  const model = new ScriptedModel((iteration) => iteration === 0
+    ? [
+        {
+          type: "tool-call",
+          toolCallId: "large-call",
+          toolName: "large",
+          input: {},
+        },
+        { type: "finish", reason: "tool-calls" },
+      ]
+    : [{ type: "finish", reason: "stop" }])
+  const tool: IAgentTool = {
+    name: "large",
+    description: "Large output",
+    inputSchema: { type: "object", additionalProperties: false },
+    execute: async () => "x".repeat(100_001),
+  }
+
+  const result = await runAgentLoop({
+    sessionId: "session-1",
+    runId: RUN_ID,
+    systemPrompt: "System",
+    messages: [],
+    prompt: userMessage("Run"),
+    model,
+    reasoningEffort: "medium",
+    tools: [tool],
+    signal: new AbortController().signal,
+    emit: () => {},
+    now: timeGenerator(),
+    generateId: idGenerator(),
+  })
+
+  const persisted = result.messages.find((message) => message.role === "toolResult")
+  const continued = model.requests[1]?.messages.find(
+    (message) => message.role === "toolResult",
+  )
+  if (persisted?.role !== "toolResult") throw new Error("Expected tool result")
+  if (continued?.role !== "toolResult") throw new Error("Expected continued result")
+  expect(persisted).toEqual(continued)
+  expect(persisted.content).toEndWith("... output truncated")
+  expect(Buffer.byteLength(persisted.content, "utf8")).toBeLessThanOrEqual(
+    100_000,
+  )
 })
 
 function userMessage(text: string) {

@@ -1,5 +1,7 @@
 import type {
     IAssistantMessage,
+    IModelProfile,
+    IModelUsage,
     IToolResultMessage,
     TAgentMessage,
     TAgentRunEndReason,
@@ -37,6 +39,9 @@ export interface IAgentToolExecutionContext {
     readonly toolCallId: string
     readonly runId: string
     readonly signal: AbortSignal
+    // Postęp jest przejściowym snapshotem dla UI. Nie trafia do trwałej historii;
+    // tylko finalny wynik narzędzia staje się wiadomością `toolResult`.
+    readonly reportProgress?: (progress: string) => void
 }
 
 export interface IAgentTool extends IAgentToolDescriptor {
@@ -50,19 +55,31 @@ export interface IAgentTool extends IAgentToolDescriptor {
 // To niezależny od providera komplet danych dla jednego wywołania `model.stream`.
 // Jeden prompt może utworzyć kilka takich requestów, gdy model wywołuje narzędzia.
 // `sessionId` identyfikuje sesję, `systemPrompt` zawiera instrukcje, a `messages`
-// jest snapshotem pełnego kontekstu tej iteracji. `tools` zawiera tylko opisy
-// dostępnych narzędzi, `signal` służy do anulowania, a `reasoningEffort` wybiera
-// poziom rozumowania. `readonly` blokuje przypisanie w TypeScript, ale nie zamraża
-// obiektu w runtime ani nie zatrzymuje zmiany stanu `AbortSignal`.
+// jest snapshotem zachowanego ogona tej iteracji. Opcjonalne `contextSummary`
+// zastępuje starszy prefix po kompaktowaniu. `tools` zawiera tylko opisy narzędzi,
+// `signal` służy do anulowania, a `reasoningEffort` wybiera poziom rozumowania.
+// `readonly` blokuje przypisanie w TypeScript, ale nie zamraża obiektu w runtime
+// ani nie zatrzymuje zmiany stanu `AbortSignal`.
 export interface IAgentModelRequest {
     readonly sessionId: string
     readonly runId: string
     readonly systemPrompt: string
+    readonly contextSummary?: string
     readonly messages: readonly TAgentMessage[]
     readonly tools: readonly IAgentToolDescriptor[]
     readonly signal: AbortSignal
     readonly reasoningEffort: TReasoningEffort
+    readonly maxOutputTokens?: number
 }
+
+export interface IAgentContextProjection {
+    readonly messages: readonly TAgentMessage[]
+    readonly contextSummary?: string
+}
+
+export type TAgentContextProjector = (
+    messages: readonly TAgentMessage[],
+) => IAgentContextProjection
 
 export type IAgentModelEvent =
     | { readonly type: "text-start"; readonly id: string }
@@ -81,7 +98,11 @@ export type IAgentModelEvent =
         readonly toolName: string
         readonly input: Record<string, unknown>
     }
-    | { readonly type: "finish"; readonly reason: string }
+    | {
+        readonly type: "finish"
+        readonly reason: string
+        readonly usage?: IModelUsage
+    }
     | { readonly type: "abort"; readonly reason?: string }
     | { readonly type: "error"; readonly error: unknown }
 
@@ -93,6 +114,7 @@ export interface IAgentModel {
 
 export interface IAgentRunConfiguration {
     readonly model: IAgentModel
+    readonly modelProfile?: IModelProfile
     readonly reasoningEffort: TReasoningEffort
 }
 
@@ -131,6 +153,12 @@ type TAgentEventPayload =
         readonly toolCallId: string
         readonly toolName: string
         readonly input: Record<string, unknown>
+    }
+    | {
+        readonly type: "tool_execution_update"
+        readonly toolCallId: string
+        readonly toolName: string
+        readonly progress: string
     }
     | {
         readonly type: "tool_execution_end"

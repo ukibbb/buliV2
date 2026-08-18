@@ -1,4 +1,5 @@
 import { Agent } from "@/agent/agent"
+import { projectAgentContext } from "@/agent/context-projector"
 import type {
     IAgentEvent,
     IAgentRunHandle,
@@ -6,7 +7,13 @@ import type {
     IAgentTool,
     TAgentRunConfigurationResolver,
 } from "@/agent/agent-types"
-import type { ISessionSnapshot, TAgentMessage } from "@/domain"
+import { generateRandomId } from "@/common"
+import type {
+    ICompactionCheckpoint,
+    ISessionSnapshot,
+    TAgentMessage,
+} from "@/domain"
+import { compactSessionMessages } from "@/session/session-compactor"
 import {
     createInterruptedToolResults,
     freezeSessionSnapshot,
@@ -24,6 +31,7 @@ interface IAgentSessionOptions {
     readonly now?: () => number
     readonly generateId?: () => string
     readonly disposeTimeoutMs?: number
+    readonly autoCompactionThreshold?: number
 }
 
 interface IQueuedSessionMessages {
@@ -33,6 +41,7 @@ interface IQueuedSessionMessages {
 
 type TSessionListener = () => void
 const DEFAULT_DISPOSE_TIMEOUT_MS = 5_000
+const DEFAULT_AUTO_COMPACTION_THRESHOLD = 0.8
 
 /** Connects one live Agent to durable history and UI subscriptions. */
 export class AgentSession {
@@ -43,16 +52,34 @@ export class AgentSession {
     private readonly listeners = new Set<TSessionListener>()
     private readonly unsubscribeAgent: () => void
     private readonly disposeTimeoutMs: number
+    private readonly resolveRunConfiguration: TAgentRunConfigurationResolver
+    private readonly now: () => number
+    private readonly generateId: () => string
+    private readonly autoCompactionThreshold: number
     private snapshot: ISessionSnapshot
     private disposed = false
     private disposeTask: Promise<void> | undefined
     private persistenceError: unknown
     private acceptCriticalEvents = true
+    private compactionController: AbortController | undefined
+    private compactionTask: Promise<ICompactionCheckpoint | undefined> | undefined
 
     constructor(options: IAgentSessionOptions) {
         this.agentId = options.agentId
         this.id = options.sessionId
         this.manager = options.manager
+        this.resolveRunConfiguration = options.resolveRunConfiguration
+        this.now = options.now ?? Date.now
+        this.generateId = options.generateId ?? generateRandomId
+        this.autoCompactionThreshold = options.autoCompactionThreshold
+            ?? DEFAULT_AUTO_COMPACTION_THRESHOLD
+        if (
+            !Number.isFinite(this.autoCompactionThreshold)
+            || this.autoCompactionThreshold <= 0
+            || this.autoCompactionThreshold >= 1
+        ) {
+            throw new Error("autoCompactionThreshold must be between 0 and 1")
+        }
         this.disposeTimeoutMs = options.disposeTimeoutMs ?? DEFAULT_DISPOSE_TIMEOUT_MS
         if (!Number.isFinite(this.disposeTimeoutMs) || this.disposeTimeoutMs <= 0) {
             throw new Error("disposeTimeoutMs must be a positive finite number")
@@ -88,6 +115,12 @@ export class AgentSession {
             // bieżący prompt ani aktualnie streamowaną odpowiedź. Agent klonuje tę
             // historię do swojego stanu i używa jej jako kontekstu kolejnych requestów.
             initialMessages,
+            // Projekcja jest liczona dopiero przy nowym promptcie. Agent zachowuje
+            // pełny stan dla UI/persistence, a model dostaje summary i nowszy ogon.
+            projectContext: (messages) => projectAgentContext(
+                messages,
+                this.manager.getCompactionCheckpoint(this.id),
+            ),
             ...(options.maxProviderIterations === undefined
                 ? {}
                 : { maxProviderIterations: options.maxProviderIterations }),
@@ -116,6 +149,9 @@ export class AgentSession {
 
     prompt(text: string): IAgentRunHandle {
         if (this.disposed) throw new Error("AgentSession is disposed")
+        if (this.compactionTask) {
+            throw new Error("Cannot submit a prompt while compacting the session")
+        }
         if (this.persistenceError !== undefined) {
             throw new Error(
                 "Session persistence failed. Clear or reopen the session before submitting another prompt.",
@@ -163,17 +199,74 @@ export class AgentSession {
 
     async abort(): Promise<void> {
         if (this.disposed) return
-        await this.agent.abort()
+        const compactionController = this.compactionController
+        compactionController?.abort("Buli interaction was aborted")
+        await Promise.all([
+            this.agent.abort(),
+            this.compactionTask?.catch((error: unknown) => {
+                if (!compactionController?.signal.aborted) throw error
+            }),
+        ])
     }
 
-    waitForIdle(): Promise<void> {
-        return this.agent.waitForIdle()
+    async waitForIdle(): Promise<void> {
+        // Auto-compaction może rozpocząć się w listenerze settlementu, dlatego
+        // odczytujemy task dopiero po zakończeniu runu, a nie równolegle przed nim.
+        await this.agent.waitForIdle()
+        await this.compactionTask
+    }
+
+    compact(
+        reason: ICompactionCheckpoint["reason"] = "manual",
+    ): Promise<ICompactionCheckpoint | undefined> {
+        if (this.disposed) throw new Error("AgentSession is disposed")
+        if (this.persistenceError !== undefined) {
+            throw new Error(
+                "Session persistence failed. Reopen the session before compacting it.",
+                { cause: this.persistenceError },
+            )
+        }
+        if (this.agent.state.isRunning) {
+            throw new Error("Cannot compact while AgentSession is running")
+        }
+        if (this.compactionTask) {
+            throw new Error("AgentSession is already compacting")
+        }
+
+        const controller = new AbortController()
+        this.compactionController = controller
+        const previousCheckpoint = this.manager.getCompactionCheckpoint(this.id)
+        const task = compactSessionMessages({
+            sessionId: this.id,
+            messages: this.manager.getMessages(this.id),
+            ...(previousCheckpoint === undefined
+                ? {}
+                : { previousCheckpoint }),
+            runConfiguration: this.resolveRunConfiguration(),
+            reason,
+            signal: controller.signal,
+            now: this.now,
+            generateId: this.generateId,
+        }).then((checkpoint) => {
+            if (checkpoint) this.manager.saveCompactionCheckpoint(checkpoint)
+            return checkpoint
+        }).finally(() => {
+            if (this.compactionTask === task) {
+                this.compactionTask = undefined
+                this.compactionController = undefined
+            }
+        })
+        this.compactionTask = task
+        return task
     }
 
     clear(): void {
         if (this.disposed) throw new Error("AgentSession is disposed")
         if (this.agent.state.isRunning) {
             throw new Error("Cannot clear while AgentSession is running")
+        }
+        if (this.compactionTask) {
+            throw new Error("Cannot clear while AgentSession is compacting")
         }
 
         this.manager.clearSession(this.id)
@@ -190,9 +283,16 @@ export class AgentSession {
     private async disposeInternal(): Promise<void> {
         if (this.disposed) return
         this.disposed = true
+        const compactionController = this.compactionController
+        compactionController?.abort("AgentSession is shutting down")
         try {
             await withTimeout(
-                this.agent.abort(),
+                Promise.all([
+                    this.agent.abort(),
+                    this.compactionTask?.catch((error: unknown) => {
+                        if (!compactionController?.signal.aborted) throw error
+                    }),
+                ]).then(() => undefined),
                 this.disposeTimeoutMs,
                 "Timed out waiting for AgentSession to stop",
             )
@@ -212,7 +312,34 @@ export class AgentSession {
                 this.persistenceError = error
             }
         }
+        if (
+            event.type === "agent_settled"
+            && (
+                event.reason === "completed"
+                || event.reason === "max-iterations"
+            )
+            && this.shouldCompactAutomatically()
+        ) {
+            // Auto-compaction nie opóźnia settlementu ukończonego runu. Nowy prompt
+            // zostanie jednak odrzucony przez guard, dopóki checkpoint nie będzie trwały.
+            void this.compact("automatic").catch((error: unknown) => {
+                console.error("Automatic session compaction failed", error)
+            })
+        }
         this.publishSnapshot()
+    }
+
+    private shouldCompactAutomatically(): boolean {
+        const latestAssistant = this.agent.state.messages.findLast(
+            (message) => message.role === "assistant",
+        )
+        const contextWindow = latestAssistant?.model?.contextWindowTokens
+        if (!contextWindow) return false
+
+        const usage = latestAssistant.usage
+        const usedTokens = usage?.totalTokens
+            ?? ((usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0))
+        return usedTokens >= contextWindow * this.autoCompactionThreshold
     }
 
     private loadDurableHistory(): readonly TAgentMessage[] {

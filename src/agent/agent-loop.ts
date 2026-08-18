@@ -1,4 +1,7 @@
+import { Value } from "typebox/value"
+
 import { AssistantMessageBuilder } from "@/agent/assistant-message-builder"
+import { truncateToolOutput } from "@/agent/tool-output"
 import type {
     IAgentEvent,
     IAgentLoopResult,
@@ -10,6 +13,7 @@ import type {
 } from "@/agent/agent-types"
 import type {
     IAssistantMessage,
+    IModelProfile,
     IToolCallContent,
     IToolResultMessage,
     IUserMessage,
@@ -23,8 +27,10 @@ interface IRunAgentLoopOptions {
     readonly runId: string
     readonly systemPrompt: string
     readonly messages: readonly TAgentMessage[]
+    readonly contextSummary?: string
     readonly prompt: TAgentMessage
     readonly model: IAgentModel
+    readonly modelProfile?: IModelProfile
     readonly tools: readonly IAgentTool[]
     readonly reasoningEffort: TReasoningEffort
     readonly signal: AbortSignal
@@ -48,6 +54,10 @@ export async function runAgentLoop(
     const generateId = options.generateId ?? (() => crypto.randomUUID())
     const maximumIterations = options.maxProviderIterations
         ?? DEFAULT_MAX_PROVIDER_ITERATIONS
+    // Jedna mapa jest wspólnym źródłem descriptorów i lokalnych executorów.
+    // Odrzucenie duplikatu zapobiega sytuacji, w której model widzi inny tool
+    // niż ten znaleziony później przez hosta.
+    const toolsByName = indexTools(options.tools)
     const messages = structuredClone([...options.messages, options.prompt])
     const newMessages: TAgentMessage[] = [structuredClone(options.prompt)]
 
@@ -104,6 +114,7 @@ export async function runAgentLoop(
         const assistant = await streamAssistantMessage(
             messages,
             options,
+            toolsByName,
             now,
             generateId,
         )
@@ -142,6 +153,7 @@ export async function runAgentLoop(
         const toolResults = await executeToolCallsSequentially(
             toolCalls,
             options,
+            toolsByName,
             now,
             generateId,
         )
@@ -201,6 +213,7 @@ export async function runAgentLoop(
 async function streamAssistantMessage(
     messages: readonly TAgentMessage[],
     options: IRunAgentLoopOptions,
+    toolsByName: ReadonlyMap<string, IAgentTool>,
     now: () => number,
     generateId: () => string,
 ): Promise<IAssistantMessage> {
@@ -209,6 +222,9 @@ async function streamAssistantMessage(
         runId: options.runId,
         now,
         generateId,
+        ...(options.modelProfile === undefined
+            ? {}
+            : { modelProfile: options.modelProfile }),
     })
     await options.emit({
         type: "message_start",
@@ -217,7 +233,7 @@ async function streamAssistantMessage(
     })
 
     try {
-        const tools: IAgentToolDescriptor[] = options.tools.map((agentTool) => ({
+        const tools: IAgentToolDescriptor[] = [...toolsByName.values()].map((agentTool) => ({
             name: agentTool.name,
             description: agentTool.description,
             inputSchema: structuredClone(agentTool.inputSchema),
@@ -226,6 +242,9 @@ async function streamAssistantMessage(
             sessionId: options.sessionId,
             runId: options.runId,
             systemPrompt: options.systemPrompt,
+            ...(options.contextSummary === undefined
+                ? {}
+                : { contextSummary: options.contextSummary }),
             messages: structuredClone(messages),
             tools,
             reasoningEffort: options.reasoningEffort,
@@ -274,6 +293,7 @@ async function streamAssistantMessage(
 async function executeToolCallsSequentially(
     toolCalls: readonly IToolCallContent[],
     options: IRunAgentLoopOptions,
+    toolsByName: ReadonlyMap<string, IAgentTool>,
     now: () => number,
     generateId: () => string,
 ): Promise<IToolResultMessage[]> {
@@ -288,7 +308,13 @@ async function executeToolCallsSequentially(
             input: structuredClone(toolCall.input),
         })
 
-        const result = await executeToolCall(toolCall, options, now, generateId)
+        const result = await executeToolCall(
+            toolCall,
+            options,
+            toolsByName,
+            now,
+            generateId,
+        )
         await options.emit({
             type: "tool_execution_end",
             runId: options.runId,
@@ -306,14 +332,13 @@ async function executeToolCallsSequentially(
 async function executeToolCall(
     toolCall: IToolCallContent,
     options: IRunAgentLoopOptions,
+    toolsByName: ReadonlyMap<string, IAgentTool>,
     now: () => number,
     generateId: () => string,
 ): Promise<IToolResultMessage> {
     let content: string
     let isError: boolean
-    const tool = options.tools.find(
-        (candidate) => candidate.name === toolCall.toolName,
-    )
+    const tool = toolsByName.get(toolCall.toolName)
 
     if (options.signal.aborted) {
         content = abortReason(options.signal)
@@ -322,12 +347,35 @@ async function executeToolCall(
         content = `Unknown tool: ${toolCall.toolName}`
         isError = true
     } else {
+        let acceptingProgress = true
+        let progressTask: Promise<void> = Promise.resolve()
+        const reportProgress = (progress: string): void => {
+            if (!acceptingProgress) return
+            // Aktualizacje są kolejkowane, aby zachować kolejność nawet wtedy, gdy
+            // observer wykonuje pracę asynchroniczną. Błąd `emit` pozostaje błędem
+            // infrastruktury runu, a nie zwykłym niepowodzeniem narzędzia.
+            progressTask = progressTask.then(async () => options.emit({
+                type: "tool_execution_update",
+                runId: options.runId,
+                toolCallId: toolCall.toolCallId,
+                toolName: toolCall.toolName,
+                progress,
+            }))
+            void progressTask.catch(() => {})
+        }
+
         try {
-            content = await tool.execute(structuredClone(toolCall.input), {
+            const input = structuredClone(toolCall.input)
+            assertToolInput(tool, input)
+            content = await tool.execute(input, {
                 toolCallId: toolCall.toolCallId,
                 runId: options.runId,
                 signal: options.signal,
+                reportProgress,
             })
+            if (typeof content !== "string") {
+                throw new TypeError(`Tool "${tool.name}" must return a string`)
+            }
             options.signal.throwIfAborted()
             isError = false
         } catch (error) {
@@ -335,8 +383,15 @@ async function executeToolCall(
                 ? abortReason(options.signal)
                 : errorMessage(error)
             isError = true
+        } finally {
+            acceptingProgress = false
         }
+        await progressTask
     }
+
+    // Limit jest stosowany centralnie, więc obejmuje także custom tools i błędy.
+    // Do modelu, eventu końcowego i persistence trafia dokładnie ta sama treść.
+    content = truncateToolOutput(content)
 
     return {
         id: generateId(),
@@ -349,6 +404,30 @@ async function executeToolCall(
         isError,
         createdAt: now(),
     }
+}
+
+function indexTools(tools: readonly IAgentTool[]): ReadonlyMap<string, IAgentTool> {
+    const toolsByName = new Map<string, IAgentTool>()
+    for (const tool of tools) {
+        if (toolsByName.has(tool.name)) throw new Error(`Duplicate tool: ${tool.name}`)
+        toolsByName.set(tool.name, tool)
+    }
+    return toolsByName
+}
+
+function assertToolInput(
+    tool: IAgentTool,
+    input: Record<string, unknown>,
+): void {
+    if (Value.Check(tool.inputSchema, input)) return
+
+    const details = Value.Errors(tool.inputSchema, input)
+        .slice(0, 3)
+        .map((error) => `${error.instancePath || "/"}: ${error.message}`)
+        .join("; ")
+    throw new TypeError(
+        `Invalid input for tool "${tool.name}": ${details || "schema validation failed"}`,
+    )
 }
 
 async function emitCompletedMessage(

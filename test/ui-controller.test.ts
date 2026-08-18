@@ -55,6 +55,7 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
   const steering: Array<{ sessionId: string; text: string }> = []
   const followUps: Array<{ sessionId: string; text: string }> = []
   const clearedQueues: string[] = []
+  const compacted: string[] = []
   let createdCount = 0
   let runCount = 0
 
@@ -131,6 +132,10 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
     clearSession: (sessionId) => {
       cleared.push(sessionId)
     },
+    compactSession: async (sessionId) => {
+      compacted.push(sessionId)
+      return undefined
+    },
     abort: async (sessionId) => {
       aborted.push(sessionId)
     },
@@ -149,6 +154,7 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
     steering,
     followUps,
     clearedQueues,
+    compacted,
   }
 }
 
@@ -172,6 +178,7 @@ test("publishes all command suggestions from slash input", () => {
     "sessions",
     "login",
     "logout",
+    "compact",
   ])
   expect(notifications).toBe(1)
 })
@@ -595,6 +602,15 @@ test("handles clear and abort against only the active session", async () => {
 
   expect(spy.cleared).toEqual(["session-2"])
   expect(spy.aborted).toEqual(["session-2"])
+})
+
+test("compact command targets the active session", async () => {
+  const spy = applicationSpy()
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+
+  expect(await controller.submitInput("/compact")).toBe("consumed")
+  expect(spy.compacted).toEqual(["session-1"])
 })
 
 test("Escape restores queued steering before the current draft and aborts", () => {

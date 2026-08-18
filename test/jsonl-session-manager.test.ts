@@ -15,6 +15,7 @@ import { dirname, join } from "node:path"
 import type { IAgentModelRequest } from "@/agent/agent-types"
 import type {
   IAssistantMessage,
+  ICompactionCheckpoint,
   ISessionInfo,
   TAgentMessage,
   IUserMessage,
@@ -633,8 +634,104 @@ test("restores completed turns into the next Agent model request", async () => {
   }
 })
 
+test("holds one stable writer lock until dispose", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-lock-"))
+  const filePath = join(directory, "sessions.jsonl")
+
+  try {
+    const first = new JsonlSessionManager({ filePath })
+    first.createSession(sessionInfo())
+    first.appendMessage(userMessage("First"))
+
+    // append i atomic rename nie zmieniają kotwicy locka.
+    expect(() => new JsonlSessionManager({ filePath })).toThrow()
+
+    first.clearSession("session-1")
+    expect(() => new JsonlSessionManager({ filePath })).toThrow()
+
+    first.dispose()
+    const reopened = new JsonlSessionManager({ filePath })
+    expect(reopened.getSessionInfo("session-1")).toBeDefined()
+    reopened.dispose()
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test("persists only the latest compaction checkpoint without deleting history", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-compaction-"))
+  const filePath = join(directory, "sessions.jsonl")
+
+  try {
+    const manager = jsonlManager(filePath)
+    const user = userMessage("Question", { id: "user-1" })
+    const assistant = assistantMessage("Answer", {
+      id: "assistant-1",
+      completed: true,
+    })
+    manager.createSession(sessionInfo())
+    manager.appendMessage(user)
+    manager.appendMessage(assistant)
+
+    const first: ICompactionCheckpoint = {
+      id: "checkpoint-1",
+      sessionId: "session-1",
+      createdAt: 3,
+      reason: "manual",
+      compactedMessageCount: 1,
+      throughMessageId: user.id,
+      summary: "The user asked a question.",
+    }
+    const latest: ICompactionCheckpoint = {
+      id: "checkpoint-2",
+      sessionId: "session-1",
+      createdAt: 4,
+      reason: "automatic",
+      compactedMessageCount: 2,
+      throughMessageId: assistant.id,
+      summary: "The user asked a question and received an answer.",
+      model: { providerId: "test", modelId: "model-1" },
+      usage: { inputTokens: 12, outputTokens: 4, totalTokens: 16 },
+    }
+    manager.saveCompactionCheckpoint(first)
+    manager.saveCompactionCheckpoint(latest)
+
+    expect((await jsonlRecords(filePath)).filter((record) => (
+      record as { recordType?: string }
+    ).recordType === "compaction")).toHaveLength(2)
+    const restored = jsonlManager(filePath)
+    expect(restored.getMessages("session-1")).toEqual([user, assistant])
+    expect(restored.getCompactionCheckpoint("session-1")).toEqual(latest)
+
+    restored.clearSession("session-1")
+    const cleared = jsonlManager(filePath)
+    expect(cleared.getMessages("session-1")).toEqual([])
+    expect(cleared.getCompactionCheckpoint("session-1")).toBeUndefined()
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test("releases the writer lock when initial load fails", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-lock-"))
+  const filePath = join(directory, "sessions.jsonl")
+
+  try {
+    await writeFile(filePath, "not-json\n", "utf8")
+    expect(() => new JsonlSessionManager({ filePath })).toThrow(
+      "Invalid session JSONL record on line 1",
+    )
+
+    await writeFile(filePath, "", "utf8")
+    const manager = new JsonlSessionManager({ filePath })
+    manager.dispose()
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 function jsonlManager(filePath: string): JsonlSessionManager {
-  return new JsonlSessionManager({ filePath })
+  return new JsonlSessionManager({ filePath, acquireLock: false })
 }
 
 async function jsonlRecords(filePath: string): Promise<unknown[]> {

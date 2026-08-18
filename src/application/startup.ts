@@ -15,6 +15,7 @@ import {
     DEFAULT_OPENAI_MODEL_ID,
     OpenAiAgentModel,
 } from "@/providers/openai/openai-agent-model"
+import { OPENAI_PROVIDER_ID } from "@/providers/openai/openai-auth"
 import {
     defaultSessionFilePath,
     JsonlSessionManager,
@@ -52,8 +53,9 @@ export async function createBuliApplication(
     // Od tego miejsca startup posiada auth. Jeśli późniejszy etap rzuci, rollback
     // nie zostawi częściowo utworzonej usługi bez właściciela.
     let runtime: BuliApplicationRuntime | undefined
+    let manager: ISessionManager | undefined
     try {
-        const manager: ISessionManager = options.manager ?? new JsonlSessionManager({
+        manager = options.manager ?? new JsonlSessionManager({
             filePath: defaultSessionFilePath(workspaceRoot),
         })
         const model: IAgentModel = options.model ?? new OpenAiAgentModel({
@@ -63,6 +65,10 @@ export async function createBuliApplication(
             id: DEFAULT_OPENAI_MODEL_ID,
             name: "GPT-5.6 Sol",
             model,
+            modelProfile: {
+                providerId: OPENAI_PROVIDER_ID,
+                modelId: DEFAULT_OPENAI_MODEL_ID,
+            },
             reasoningEfforts: [
                 "none",
                 "low",
@@ -107,7 +113,9 @@ export async function createBuliApplication(
         // allSettled zawsze próbuje obu cleanupów. Gdy rollback też zawiedzie,
         // AggregateError zachowuje błąd startupu jako pierwszy i nie ukrywa reszty.
         const rollbackResults = await Promise.allSettled([
-            runtime?.dispose(),
+            // Runtime posiada manager po udanej konstrukcji; wcześniej startup musi
+            // zwolnić go sam, szczególnie gdy trzyma wyłączny lock pliku sesji.
+            runtime?.dispose() ?? manager?.dispose?.(),
             authentication.dispose?.(startupError),
         ])
         const rollbackErrors = rollbackResults.flatMap((result) =>

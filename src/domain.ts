@@ -35,11 +35,44 @@ export type TAssistantContent =
     | IReasoningContent
     | IToolCallContent
 
+export interface IModelProfile {
+    readonly providerId: string
+    readonly modelId: string
+    // Brak wartości oznacza, że provider nie ma jeszcze zweryfikowanego limitu.
+    // Manualna kompaktacja nadal działa, ale auto-trigger pozostaje wyłączony.
+    readonly contextWindowTokens?: number
+}
+
+export interface IModelUsage {
+    readonly inputTokens?: number
+    readonly outputTokens?: number
+    readonly totalTokens?: number
+    readonly cacheReadTokens?: number
+    readonly cacheWriteTokens?: number
+    readonly reasoningTokens?: number
+}
+
+export interface ICompactionCheckpoint {
+    readonly id: string
+    readonly sessionId: string
+    readonly createdAt: number
+    readonly reason: "manual" | "automatic"
+    readonly compactedMessageCount: number
+    readonly throughMessageId: string
+    readonly summary: string
+    readonly model?: IModelProfile
+    readonly usage?: IModelUsage
+}
+
 export interface IAssistantMessage extends IMessageBase {
     readonly role: "assistant"
     readonly content: readonly TAssistantContent[]
     readonly stopReason: string
     readonly errorMessage?: string
+    // To neutralne dane domenowe, nie typy AI SDK. Są trwałe i później zasilają
+    // decyzję o projekcji/kompaktowaniu kontekstu.
+    readonly model?: IModelProfile
+    readonly usage?: IModelUsage
 }
 
 export interface IToolResultMessage extends IMessageBase {

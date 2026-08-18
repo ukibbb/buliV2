@@ -1,5 +1,6 @@
 import type {
     IAssistantMessage,
+    ICompactionCheckpoint,
     ISessionInfo,
     ISessionSnapshot,
     IToolResultMessage,
@@ -12,8 +13,17 @@ export interface ISessionManager {
     readonly listSessions: () => readonly ISessionInfo[]
     readonly getMessages: (sessionId: string) => readonly TAgentMessage[]
     readonly appendMessage: (message: TAgentMessage) => void
+    readonly getCompactionCheckpoint: (
+        sessionId: string,
+    ) => ICompactionCheckpoint | undefined
+    readonly saveCompactionCheckpoint: (
+        checkpoint: ICompactionCheckpoint,
+    ) => void
     readonly clearSession: (sessionId: string) => void
     readonly deleteSession: (sessionId: string) => void
+    // Manager może posiadać lock lub uchwyt storage. Runtime zwalnia go dopiero
+    // po zamknięciu wszystkich sesji, które nadal mogą wykonywać ostatnie zapisy.
+    readonly dispose?: () => void | Promise<void>
 }
 
 type TSessionId = string
@@ -24,6 +34,10 @@ export class InMemorySessionManager implements ISessionManager {
     private readonly messagesBySession = new Map<
         TSessionId,
         readonly TAgentMessage[]
+    >()
+    private readonly checkpointsBySession = new Map<
+        TSessionId,
+        ICompactionCheckpoint
     >()
 
     readonly createSession = (info: ISessionInfo): void => {
@@ -72,18 +86,128 @@ export class InMemorySessionManager implements ISessionManager {
         })
     }
 
+    readonly getCompactionCheckpoint = (
+        sessionId: string,
+    ): ICompactionCheckpoint | undefined => {
+        const checkpoint = this.checkpointsBySession.get(sessionId)
+        return checkpoint === undefined
+            ? undefined
+            : structuredClone(checkpoint)
+    }
+
+    readonly saveCompactionCheckpoint = (
+        checkpoint: ICompactionCheckpoint,
+    ): void => {
+        assertCompactionCheckpoint(checkpoint)
+        if (!this.sessionsById.has(checkpoint.sessionId)) {
+            throw new Error(`Session does not exist: ${checkpoint.sessionId}`)
+        }
+        assertCheckpointAnchor(
+            checkpoint,
+            this.messagesBySession.get(checkpoint.sessionId) ?? [],
+        )
+        this.checkpointsBySession.set(
+            checkpoint.sessionId,
+            structuredClone(checkpoint),
+        )
+    }
+
     readonly clearSession = (sessionId: string): void => {
         this.messagesBySession.delete(sessionId)
+        this.checkpointsBySession.delete(sessionId)
     }
 
     readonly deleteSession = (sessionId: string): void => {
         this.sessionsById.delete(sessionId)
         this.messagesBySession.delete(sessionId)
+        this.checkpointsBySession.delete(sessionId)
     }
 
     getAllMessages(): readonly TAgentMessage[] {
         return structuredClone([...this.messagesBySession.values()].flat())
     }
+}
+
+export function assertCompactionCheckpoint(
+    value: unknown,
+): asserts value is ICompactionCheckpoint {
+    if (
+        !isRecord(value)
+        || !hasExactKeys(value, [
+            "id",
+            "sessionId",
+            "createdAt",
+            "reason",
+            "compactedMessageCount",
+            "throughMessageId",
+            "summary",
+            ...(value.model === undefined ? [] : ["model"]),
+            ...(value.usage === undefined ? [] : ["usage"]),
+        ])
+        || typeof value.id !== "string"
+        || value.id.trim().length === 0
+        || typeof value.sessionId !== "string"
+        || value.sessionId.trim().length === 0
+        || typeof value.createdAt !== "number"
+        || !Number.isFinite(value.createdAt)
+        || (value.reason !== "manual" && value.reason !== "automatic")
+        || !isNonNegativeInteger(value.compactedMessageCount, false)
+        || typeof value.throughMessageId !== "string"
+        || value.throughMessageId.trim().length === 0
+        || typeof value.summary !== "string"
+        || value.summary.trim().length === 0
+    ) {
+        throw new Error("Invalid compaction checkpoint")
+    }
+    if (value.model !== undefined) assertModelProfile(value.model)
+    if (value.usage !== undefined) assertModelUsage(value.usage)
+}
+
+export function assertCheckpointAnchor(
+    checkpoint: ICompactionCheckpoint,
+    messages: readonly TAgentMessage[],
+): void {
+    const anchor = messages[checkpoint.compactedMessageCount - 1]
+    if (
+        anchor?.id !== checkpoint.throughMessageId
+        || !hasCompleteToolSequence(
+            messages.slice(0, checkpoint.compactedMessageCount),
+        )
+    ) {
+        throw new Error(
+            `Compaction checkpoint does not match session ${checkpoint.sessionId}`,
+        )
+    }
+}
+
+function hasCompleteToolSequence(messages: readonly TAgentMessage[]): boolean {
+    let pendingToolCallIds: Set<string> | undefined
+    for (const message of messages) {
+        if (pendingToolCallIds) {
+            if (
+                message.role !== "toolResult"
+                || !pendingToolCallIds.delete(message.toolCallId)
+            ) {
+                return false
+            }
+            if (pendingToolCallIds.size === 0) pendingToolCallIds = undefined
+            continue
+        }
+        if (message.role === "toolResult") return false
+        if (
+            message.role !== "assistant"
+            || message.stopReason === "aborted"
+            || message.stopReason === "error"
+        ) {
+            continue
+        }
+
+        const toolCallIds = message.content.flatMap((content) =>
+            content.type === "toolCall" ? [content.toolCallId] : []
+        )
+        if (toolCallIds.length > 0) pendingToolCallIds = new Set(toolCallIds)
+    }
+    return pendingToolCallIds === undefined
 }
 
 export function assertSessionInfo(
@@ -145,6 +269,8 @@ export function assertDurableSessionMessage(
                 "stopReason",
                 "createdAt",
                 ...(value.errorMessage === undefined ? [] : ["errorMessage"]),
+                ...(value.model === undefined ? [] : ["model"]),
+                ...(value.usage === undefined ? [] : ["usage"]),
             ])) {
                 throw new Error("Invalid assistant message")
             }
@@ -279,6 +405,8 @@ function assertAssistantMessage(
     ) {
         throw new Error("Invalid assistant error")
     }
+    if (message.model !== undefined) assertModelProfile(message.model)
+    if (message.usage !== undefined) assertModelUsage(message.usage)
 
     const toolCallIds = new Set<string>()
     for (const content of message.content) {
@@ -311,6 +439,58 @@ function assertAssistantMessage(
         }
         toolCallIds.add(content.toolCallId)
     }
+}
+
+function assertModelProfile(value: unknown): void {
+    if (
+        !isRecord(value)
+        || !hasExactKeys(value, [
+            "providerId",
+            "modelId",
+            ...(value.contextWindowTokens === undefined
+                ? []
+                : ["contextWindowTokens"]),
+        ])
+        || typeof value.providerId !== "string"
+        || value.providerId.trim().length === 0
+        || typeof value.modelId !== "string"
+        || value.modelId.trim().length === 0
+        || (
+            value.contextWindowTokens !== undefined
+            && !isNonNegativeInteger(value.contextWindowTokens, false)
+        )
+    ) {
+        throw new Error("Invalid assistant model profile")
+    }
+}
+
+function assertModelUsage(value: unknown): void {
+    const usageKeys = [
+        "inputTokens",
+        "outputTokens",
+        "totalTokens",
+        "cacheReadTokens",
+        "cacheWriteTokens",
+        "reasoningTokens",
+    ] as const
+    if (
+        !isRecord(value)
+        || Object.keys(value).length === 0
+        || Object.keys(value).some((key) => !usageKeys.includes(
+            key as typeof usageKeys[number],
+        ))
+        || Object.values(value).some((tokens) =>
+            !isNonNegativeInteger(tokens, true)
+        )
+    ) {
+        throw new Error("Invalid assistant model usage")
+    }
+}
+
+function isNonNegativeInteger(value: unknown, allowZero: boolean): boolean {
+    return typeof value === "number"
+        && Number.isSafeInteger(value)
+        && (allowZero ? value >= 0 : value > 0)
 }
 
 function isMessageBase(value: unknown): value is Record<string, unknown> & {

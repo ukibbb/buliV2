@@ -216,6 +216,17 @@ export const BULI_COMMANDS: readonly TBuliCommand[] = [
             context.openAuthentication("logout")
         },
     },
+    {
+        kind: "action",
+        name: "compact",
+        description: "Summarize older context without deleting history",
+        handler: async (_args, context) => {
+            if (!context.sessionId) {
+                throw new Error("Compaction requires an active session")
+            }
+            await context.application.compactSession(context.sessionId)
+        },
+    },
 ]
 
 export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {

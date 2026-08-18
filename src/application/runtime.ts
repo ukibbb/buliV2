@@ -15,7 +15,11 @@ import type {
     ISnapshotSource,
 } from "@/application/contracts"
 import { generateRandomId } from "@/common"
-import type { ISessionInfo, ISessionSnapshot } from "@/domain"
+import type {
+    IModelProfile,
+    ISessionInfo,
+    ISessionSnapshot,
+} from "@/domain"
 import { AgentSession } from "@/session/agent-session"
 import type { ISessionManager } from "@/session/session-manager"
 
@@ -28,6 +32,7 @@ export interface IBuliAgentRegistration extends IBuliAgentInfo {
 // konkretny adapter modelu
 export interface IBuliModelRegistration extends IBuliModelInfo {
     readonly model: IAgentModel
+    readonly modelProfile?: IModelProfile
 }
 
 export interface IBuliRuntimeOptions {
@@ -86,6 +91,9 @@ export class BuliApplicationRuntime implements IBuliApplication {
         this.models = options.models.map((registration) => ({
             ...registration,
             reasoningEfforts: [...registration.reasoningEfforts],
+            ...(registration.modelProfile === undefined
+                ? {}
+                : { modelProfile: structuredClone(registration.modelProfile) }),
         }))
         this.selection = { ...options.selection }
         this.now = options.now ?? Date.now
@@ -192,6 +200,13 @@ export class BuliApplicationRuntime implements IBuliApplication {
         this.getOrOpenAgentSession(sessionId).clear()
     }
 
+    readonly compactSession = (
+        sessionId: string,
+    ): ReturnType<AgentSession["compact"]> => {
+        if (this.disposed) throw new Error("Buli runtime is disposed")
+        return this.getOrOpenAgentSession(sessionId).compact("manual")
+    }
+
     readonly steer = (sessionId: string, text: string): void => {
         if (this.disposed) throw new Error("Buli runtime is disposed")
         this.getOrOpenAgentSession(sessionId).steer(text)
@@ -271,11 +286,18 @@ export class BuliApplicationRuntime implements IBuliApplication {
         const results = await Promise.allSettled(
             sessions.map(async (session) => session.dispose()),
         )
-        const errors = results.flatMap((result) =>
+        const errors: unknown[] = results.flatMap((result) =>
             result.status === "rejected" ? [result.reason] : []
         )
+        // Manager jest właścicielem storage/locka. Zwalniamy go po sesjach i także
+        // wtedy, gdy któraś sesja zgłosiła błąd, aby shutdown nie zostawił locka.
+        try {
+            await this.manager.dispose?.()
+        } catch (error) {
+            errors.push(error)
+        }
         if (errors.length > 0) {
-            throw new AggregateError(errors, "Failed to dispose Buli sessions")
+            throw new AggregateError(errors, "Failed to dispose Buli runtime")
         }
     }
 
@@ -399,6 +421,13 @@ export class BuliApplicationRuntime implements IBuliApplication {
 
                 return {
                     model: registration.model,
+                    ...(registration.modelProfile === undefined
+                        ? {}
+                        : {
+                            modelProfile: structuredClone(
+                                registration.modelProfile,
+                            ),
+                        }),
                     reasoningEffort: this.selection.reasoningEffort,
                 }
             },

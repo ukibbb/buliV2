@@ -318,8 +318,23 @@ test("a pre-aborted 401 retry does not start a background refresh", async () => 
 test("dispose waits for an active browser login to abort and clean up", async () => {
   await withStore(async (store) => {
     const authorizationShown = Promise.withResolvers<void>()
+    const shutdownReason = new Error("test shutdown")
+    let beginOperationCount = 0
+    const countingStore: IAuthStore = {
+      get: (...args) => store.get(...args),
+      set: (...args) => store.set(...args),
+      remove: (...args) => store.remove(...args),
+      modify: (...args) => store.modify(...args),
+      beginOperation: (...args) => {
+        beginOperationCount += 1
+        return store.beginOperation(...args)
+      },
+      commitOperation: (...args) => store.commitOperation(...args),
+    }
     let promptSignal: AbortSignal | undefined
-    const auth = new OpenAiAuth({ store, oauth: loginOAuth() })
+    let reentrantDispose: Promise<void> | undefined
+    let reentrantLoginFailure: Promise<unknown> | undefined
+    const auth = new OpenAiAuth({ store: countingStore, oauth: loginOAuth() })
     const login = auth.login("browser", {
       signal: new AbortController().signal,
       notify: (event) => {
@@ -329,6 +344,12 @@ test("dispose waits for an active browser login to abort and clean up", async ()
         promptSignal = request.signal
         return new Promise<string>((_resolve, reject) => {
           request.signal.addEventListener("abort", () => {
+            reentrantDispose = auth.dispose(new Error("reentrant shutdown"))
+            reentrantLoginFailure = auth.login("browser", {
+              signal: new AbortController().signal,
+              notify: () => {},
+              prompt: async () => "unused",
+            }).catch((error: unknown) => error)
             reject(request.signal.reason)
           }, { once: true })
         })
@@ -338,7 +359,17 @@ test("dispose waits for an active browser login to abort and clean up", async ()
 
     await authorizationShown.promise
     while (!promptSignal) await Promise.resolve()
-    await auth.dispose(new Error("test shutdown"))
+    const firstDispose = auth.dispose(shutdownReason)
+    const secondDispose = auth.dispose(new Error("ignored shutdown"))
+
+    expect(reentrantDispose).toBe(firstDispose)
+    expect(secondDispose).toBe(firstDispose)
+    await firstDispose
+    expect(auth.dispose()).toBe(firstDispose)
+    if (!reentrantLoginFailure) throw new Error("Reentrant login was not attempted")
+    expect(await reentrantLoginFailure).toBe(shutdownReason)
+    // Abort zamyka bramkę przed callbackiem, więc reentrant login nie dotyka store.
+    expect(beginOperationCount).toBe(1)
 
     expect(promptSignal?.aborted).toBe(true)
     await expect(loginFailure).resolves.toMatchObject({ message: "test shutdown" })

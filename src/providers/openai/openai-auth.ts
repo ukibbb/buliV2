@@ -71,6 +71,9 @@ export class OpenAiAuth implements IOpenAiAuth {
     private activeLogin: AbortController | undefined
     private readonly activeLoginTasks = new Set<Promise<void>>()
     private loginGeneration = 0
+    // Root AbortSignal i cleanup aplikacji mogą wywołać dispose równocześnie.
+    // Jeden Promise gwarantuje jeden abort, jeden snapshot tasków i pierwszy reason.
+    private disposePromise: Promise<void> | undefined
 
     constructor(options: IOpenAiAuthOptions = {}) {
         this.store = options.store ?? new FileAuthStore()
@@ -220,16 +223,36 @@ export class OpenAiAuth implements IOpenAiAuth {
         return credential
     }
 
-    readonly dispose = async (
+    // Metoda nie jest async, aby każdy caller dostał dokładnie ten sam Promise.
+    readonly dispose = (
         reason: unknown = abortError("OpenAI authentication is shutting down"),
     ): Promise<void> => {
+        if (this.disposePromise) return this.disposePromise
+
+        // Pole ustawiamy przed disposeInternal(), bo abort synchronicznie wywołuje
+        // obcy kod, który może reentrantnie poprosić o ten sam disposal.
+        const disposeCompletion = Promise.withResolvers<void>()
+        this.disposePromise = disposeCompletion.promise
+        void this.disposeInternal(reason).then(
+            disposeCompletion.resolve,
+            disposeCompletion.reject,
+        )
+        return this.disposePromise
+    }
+
+    private async disposeInternal(reason: unknown): Promise<void> {
+        this.loginGeneration += 1
+        // Najpierw zamykamy bramkę dla nowej pracy. Listenery abort mogą wywołać
+        // publiczne metody synchronicznie, ale zobaczą już anulowany lifetime.
+        if (!this.lifetime.signal.aborted) this.lifetime.abort(reason)
+        this.activeLogin?.abort(reason)
+        this.activeLogin = undefined
+
+        // Snapshot powstaje po abort, więc obejmuje także pracę rozpoczętą
+        // reentrantnie przez listener tuż przed zamknięciem bramki.
         const loginTasks = [...this.activeLoginTasks]
         const refreshFlight = this.refreshFlight
         const requestFlights = [...this.requestFlights]
-        this.loginGeneration += 1
-        this.activeLogin?.abort(reason)
-        this.activeLogin = undefined
-        if (!this.lifetime.signal.aborted) this.lifetime.abort(reason)
         await Promise.allSettled([
             ...loginTasks,
             ...(refreshFlight ? [refreshFlight] : []),

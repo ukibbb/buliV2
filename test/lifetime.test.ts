@@ -122,3 +122,60 @@ test("does not deadlock when a cleanup waits for shutdown", async () => {
 
   expect(cleanupFinished).toBe(true)
 })
+
+test("unregisters a cleanup before shutdown and remains idempotent", async () => {
+  const lifetime = new Lifetime()
+  let cleanupCount = 0
+  const unregister = lifetime.addCleanup(() => {
+    cleanupCount += 1
+  })
+
+  unregister()
+  unregister()
+  await lifetime.close()
+
+  expect(cleanupCount).toBe(0)
+})
+
+test("rejects cleanup registration after shutdown starts", async () => {
+  const lifetime = new Lifetime()
+  const cleanup = Promise.withResolvers<void>()
+  lifetime.addCleanup(() => cleanup.promise)
+
+  const closing = lifetime.close()
+  expect(() => lifetime.addCleanup(() => {})).toThrow(
+    "Cannot register cleanup after shutdown has started",
+  )
+
+  cleanup.resolve()
+  await closing
+})
+
+test("waitForClose waits when called before shutdown and through cleanup", async () => {
+  const lifetime = new Lifetime()
+  const cleanup = Promise.withResolvers<void>()
+  lifetime.addCleanup(() => cleanup.promise)
+  let waitFinished = false
+  const waiting = lifetime.waitForClose().then(() => {
+    waitFinished = true
+  })
+
+  await Promise.resolve()
+  expect(waitFinished).toBe(false)
+
+  const closing = lifetime.close()
+  await Promise.resolve()
+  expect(waitFinished).toBe(false)
+
+  cleanup.resolve()
+  await Promise.all([closing, waiting])
+  expect(waitFinished).toBe(true)
+})
+
+test("uses a descriptive default shutdown reason", async () => {
+  const lifetime = new Lifetime()
+
+  await lifetime.close()
+
+  expect(lifetime.signal.reason).toEqual(new Error("Buli is shutting down"))
+})

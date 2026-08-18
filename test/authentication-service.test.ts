@@ -31,6 +31,41 @@ test("rejects duplicate provider IDs", () => {
   )
 })
 
+test("shares one provider disposal and keeps the first reason", async () => {
+  const disposeFinished = Promise.withResolvers<void>()
+  const firstReason = new Error("first shutdown")
+  let disposeCount = 0
+  let didReenter = false
+  let observedReason: unknown
+  let reentrantDispose: Promise<void> | undefined
+  let service: AuthenticationService
+  const provider = authenticationProvider({
+    dispose: async (reason) => {
+      disposeCount += 1
+      observedReason = reason
+      if (!didReenter) {
+        didReenter = true
+        reentrantDispose = service.dispose(new Error("reentrant shutdown"))
+      }
+      await disposeFinished.promise
+    },
+  })
+  service = new AuthenticationService([provider])
+
+  const firstDispose = service.dispose(firstReason)
+  const secondDispose = service.dispose(new Error("ignored shutdown"))
+
+  expect(reentrantDispose).toBe(firstDispose)
+  expect(secondDispose).toBe(firstDispose)
+  expect(disposeCount).toBe(1)
+  expect(observedReason).toBe(firstReason)
+
+  disposeFinished.resolve()
+  await firstDispose
+  expect(service.dispose()).toBe(firstDispose)
+  expect(disposeCount).toBe(1)
+})
+
 function authenticationProvider(
   overrides: Partial<IAuthenticationProvider> = {},
 ): IAuthenticationProvider {

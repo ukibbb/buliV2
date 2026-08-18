@@ -8,6 +8,8 @@ import type { IAuthenticationProvider } from "@/auth/types"
 
 export class AuthenticationService implements IAuthenticationService {
     private readonly providers: ReadonlyMap<string, IAuthenticationProvider>
+    // Wielu właścicieli może poprosić o shutdown, ale providery sprzątamy tylko raz.
+    private disposePromise: Promise<void> | undefined
 
     constructor(providers: readonly IAuthenticationProvider[]) {
         const entries = providers.map((provider) => [provider.id, provider] as const)
@@ -59,7 +61,22 @@ export class AuthenticationService implements IAuthenticationService {
         signal: AbortSignal,
     ): Promise<boolean> => this.requireProvider(providerId).logout(signal)
 
-    readonly dispose = async (reason?: unknown): Promise<void> => {
+    // Wspólny Promise zachowuje idempotencję i pozwala wszystkim czekać na ten sam wynik.
+    readonly dispose = (reason?: unknown): Promise<void> => {
+        if (this.disposePromise) return this.disposePromise
+
+        // Najpierw publikujemy Promise, dopiero potem wywołujemy providery. Provider
+        // może synchronicznie wejść ponownie w dispose() i musi dostać ten sam Promise.
+        const disposeCompletion = Promise.withResolvers<void>()
+        this.disposePromise = disposeCompletion.promise
+        void this.disposeInternal(reason).then(
+            disposeCompletion.resolve,
+            disposeCompletion.reject,
+        )
+        return this.disposePromise
+    }
+
+    private async disposeInternal(reason?: unknown): Promise<void> {
         const results = await Promise.allSettled(
             [...this.providers.values()].map(async (provider) => {
                 await provider.dispose?.(reason)

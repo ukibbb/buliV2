@@ -23,7 +23,7 @@ export function BuliUiControllerProvider(props: IBuliUiControllerProviderProps):
 }
 
 export function useBuliUiController(): BuliUiController {
-    const controller = useContext(BuliUiControllerContext)
+    const controller: BuliUiController | undefined = useContext(BuliUiControllerContext)
     if (!controller) {
         throw new Error("Buli UI controller not available")
     }
@@ -31,6 +31,6 @@ export function useBuliUiController(): BuliUiController {
 }
 
 export function useBuliUiSnapshot(): IBuliUiSnapshot {
-    const controller = useBuliUiController()
+    const controller: BuliUiController = useBuliUiController()
     return useSyncExternalStore(controller.subscribe, controller.getSnapshot)
 }

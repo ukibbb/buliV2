@@ -15,6 +15,7 @@ export async function authenticationMain(
     mode: TAuthenticationMode,
 ): Promise<TAuthenticationOutcome> {
     let outcome: TAuthenticationOutcome = "cancelled"
+
     await runTuiRenderer((lifetime) => {
         const authentication = createAuthentication({ signal: lifetime.signal })
         lifetime.addCleanup(async () => {
@@ -26,7 +27,7 @@ export async function authenticationMain(
                 authentication={authentication.service}
                 onClose={(result) => {
                     outcome = result
-                    void lifetime.close().catch(() => {})
+                    void lifetime.close().catch(() => { })
                 }}
             />
         )

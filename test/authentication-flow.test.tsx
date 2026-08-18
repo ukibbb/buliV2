@@ -6,9 +6,9 @@ import { act, type ReactNode } from "react"
 import type {
     IAuthProviderInfo,
     IAuthenticationService,
-    TAuthenticationOutcome,
 } from "@/auth/contracts"
-import { AuthenticationFlow } from "@/tui/AuthenticationFlow"
+import { AuthenticationFlow } from "@/tui/authentication/AuthenticationFlow"
+import type { TAuthenticationOutcome } from "@/tui/authentication/types"
 
 const LOGIN_PROVIDER: IAuthProviderInfo = {
   providerId: "cloud",
@@ -54,6 +54,7 @@ test("selects provider and method before showing progress and manual input", asy
       }
     },
     logout: async () => false,
+    dispose: async () => {},
   }
   const setup = await renderAuthenticationFlow(
     <AuthenticationFlow
@@ -103,6 +104,7 @@ test("selects provider and method before showing progress and manual input", asy
     })
     frame = await setup.waitForFrame((value) =>
       value.includes("Paste the callback URL:")
+      && value.includes("Could not open the browser automatically")
     )
     expect(frame).toContain("Complete authorization in your browser.")
     expect(frame).toContain("https://auth.example.test/authorize")
@@ -157,6 +159,7 @@ test("Escape aborts an active login and returns to method selection", async () =
       return { providerId, connected: true }
     },
     logout: async () => false,
+    dispose: async () => {},
   }
   const setup = await renderAuthenticationFlow(
     <AuthenticationFlow
@@ -232,6 +235,7 @@ test("logout prioritizes connected providers and asks for confirmation", async (
       logoutCalls.push(providerId)
       return true
     },
+    dispose: async () => {},
   }
   const setup = await renderAuthenticationFlow(
     <AuthenticationFlow
@@ -283,6 +287,7 @@ test("an empty provider picker closes cleanly on Enter", async () => {
       throw new Error("Unexpected login")
     },
     logout: async () => false,
+    dispose: async () => {},
   }
   const setup = await renderAuthenticationFlow(
     <AuthenticationFlow

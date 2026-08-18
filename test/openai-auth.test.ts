@@ -134,6 +134,60 @@ test("backfills an account ID from a valid stored access token", async () => {
   })
 })
 
+test("account backfill preserves a concurrently rotated credential", async () => {
+  await withStore(async (store) => {
+    const access = jwt({
+      "https://api.openai.com/auth": {
+        chatgpt_account_id: "jwt-account",
+      },
+    })
+    await store.set("openai", {
+      type: "oauth",
+      access,
+      refresh: "old-refresh",
+      expires: 1_000_000,
+    })
+    let injectConcurrentRotation = true
+    const racingStore: IAuthStore = {
+      get: (...args) => store.get(...args),
+      set: (...args) => store.set(...args),
+      remove: (...args) => store.remove(...args),
+      modify: (providerId, update, signal) => store.modify(
+        providerId,
+        async (current) => {
+          if (
+            injectConcurrentRotation
+            && current?.type === "oauth"
+          ) {
+            injectConcurrentRotation = false
+            return update({
+              ...current,
+              refresh: "rotated-refresh",
+              expires: 2_000_000,
+            })
+          }
+          return update(current)
+        },
+        signal,
+      ),
+      beginOperation: (...args) => store.beginOperation(...args),
+      commitOperation: (...args) => store.commitOperation(...args),
+    }
+    const auth = new OpenAiAuth({ store: racingStore, now: () => 100 })
+
+    expect(await auth.requireCredential()).toMatchObject({
+      accountId: "jwt-account",
+      refresh: "rotated-refresh",
+      expires: 2_000_000,
+    })
+    expect(await store.get("openai")).toMatchObject({
+      accountId: "jwt-account",
+      refresh: "rotated-refresh",
+      expires: 2_000_000,
+    })
+  })
+})
+
 test("OpenAI rejects an API key credential stored under its provider ID", async () => {
   await withStore(async (store) => {
     await store.set("openai", { type: "api_key", key: "platform-key" })
@@ -315,6 +369,68 @@ test("a pre-aborted 401 retry does not start a background refresh", async () => 
   })
 })
 
+test("serializes refresh-token rotation across authentication instances", async () => {
+  await withStore(async (store, path) => {
+    await store.set("openai", {
+      type: "oauth",
+      access: "old-access",
+      refresh: "old-refresh",
+      expires: 200,
+      accountId: "account-id",
+    })
+    let requests = 0
+    const firstRequestStarted = Promise.withResolvers<void>()
+    const finishRequest = Promise.withResolvers<void>()
+    const rotatingFetch = fetchImplementation(async () => {
+        requests += 1
+        firstRequestStarted.resolve()
+        await finishRequest.promise
+        return Response.json({
+          access_token: "new-access",
+          refresh_token: "new-refresh",
+          expires_in: 3600,
+        })
+    })
+    const first = new OpenAiAuth({
+      store,
+      now: () => 100,
+      fetch: rotatingFetch,
+    })
+    const second = new OpenAiAuth({
+      store: new FileAuthStore(path),
+      now: () => 100,
+      fetch: rotatingFetch,
+    })
+
+    const firstCredential = first.requireCredential()
+    await firstRequestStarted.promise
+    const secondCredential = second.requireCredential()
+    await Bun.sleep(75)
+    expect(requests).toBe(1)
+
+    finishRequest.resolve()
+    expect((await firstCredential).access).toBe("new-access")
+    expect((await secondCredential).access).toBe("new-access")
+    expect(requests).toBe(1)
+  })
+})
+
+test("an aborted login cannot enter the credential commit", async () => {
+  const store = new LoginGateStore()
+  const auth = new OpenAiAuth({ store, oauth: loginOAuth() })
+  const controller = new AbortController()
+  const login = startBrowserLogin(auth, controller.signal)
+
+  await store.modifyStarted.promise
+  const cancellation = new Error("login cancelled before commit")
+  controller.abort(cancellation)
+  store.allowModify.resolve()
+
+  await expect(login).rejects.toBe(cancellation)
+  expect(store.commitSignal?.aborted).toBe(true)
+  expect(await store.get("openai")).toBeUndefined()
+})
+
 test("dispose waits for an active browser login to abort and clean up", async () => {
   await withStore(async (store) => {
     const authorizationShown = Promise.withResolvers<void>()
@@ -373,6 +489,92 @@ test("dispose waits for an active browser login to abort and clean up", async ()
 
     expect(promptSignal?.aborted).toBe(true)
     await expect(loginFailure).resolves.toMatchObject({ message: "test shutdown" })
+  })
+})
+
+test("dispose aborts and waits for a direct logout store operation", async () => {
+  await withStore(async (store) => {
+    const removeStarted = Promise.withResolvers<AbortSignal | undefined>()
+    const finishRemove = Promise.withResolvers<void>()
+    const trackedStore: IAuthStore = {
+      get: (...args) => store.get(...args),
+      set: (...args) => store.set(...args),
+      remove: async (...args) => {
+        removeStarted.resolve(args[1])
+        await finishRemove.promise
+        args[1]?.throwIfAborted()
+        return store.remove(...args)
+      },
+      modify: (...args) => store.modify(...args),
+      beginOperation: (...args) => store.beginOperation(...args),
+      commitOperation: (...args) => store.commitOperation(...args),
+    }
+    const auth = new OpenAiAuth({ store: trackedStore })
+    const logoutFailure = auth.logout(
+      new AbortController().signal,
+    ).catch((error: unknown) => error)
+    const operationSignal = await removeStarted.promise
+    const shutdownReason = new Error("provider shutdown")
+    let disposeFinished = false
+    const disposal = auth.dispose(shutdownReason).then(() => {
+      disposeFinished = true
+    })
+
+    expect(operationSignal?.aborted).toBe(true)
+    await Promise.resolve()
+    expect(disposeFinished).toBe(false)
+
+    finishRemove.resolve()
+    await disposal
+    expect(await logoutFailure).toBe(shutdownReason)
+  })
+})
+
+test("dispose waits for an account-ID backfill operation", async () => {
+  await withStore(async (store) => {
+    await store.set("openai", {
+      type: "oauth",
+      access: jwt({
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: "jwt-account",
+        },
+      }),
+      refresh: "refresh-token",
+      expires: 1_000_000,
+    })
+    const modifyStarted = Promise.withResolvers<AbortSignal | undefined>()
+    const finishModify = Promise.withResolvers<void>()
+    const trackedStore: IAuthStore = {
+      get: (...args) => store.get(...args),
+      set: (...args) => store.set(...args),
+      remove: (...args) => store.remove(...args),
+      modify: async (providerId, update, signal) => {
+        modifyStarted.resolve(signal)
+        await finishModify.promise
+        signal?.throwIfAborted()
+        return store.modify(providerId, update, signal)
+      },
+      beginOperation: (...args) => store.beginOperation(...args),
+      commitOperation: (...args) => store.commitOperation(...args),
+    }
+    const auth = new OpenAiAuth({ store: trackedStore, now: () => 100 })
+    const credentialFailure = auth.requireCredential().catch(
+      (error: unknown) => error,
+    )
+    const operationSignal = await modifyStarted.promise
+    const shutdownReason = new Error("backfill shutdown")
+    let disposeFinished = false
+    const disposal = auth.dispose(shutdownReason).then(() => {
+      disposeFinished = true
+    })
+
+    expect(operationSignal?.aborted).toBe(true)
+    await Promise.resolve()
+    expect(disposeFinished).toBe(false)
+
+    finishModify.resolve()
+    await disposal
+    expect(await credentialFailure).toBe(shutdownReason)
   })
 })
 
@@ -446,10 +648,13 @@ function loginOAuth(): OpenAiOAuth {
   })
 }
 
-function startBrowserLogin(auth: OpenAiAuth): ReturnType<OpenAiAuth["login"]> {
+function startBrowserLogin(
+  auth: OpenAiAuth,
+  signal: AbortSignal = new AbortController().signal,
+): ReturnType<OpenAiAuth["login"]> {
   let authorizationUrl: string | undefined
   return auth.login("browser", {
-    signal: new AbortController().signal,
+    signal,
     notify: (event) => {
       if (event.type === "authorization") authorizationUrl = event.url
     },
@@ -463,6 +668,7 @@ function startBrowserLogin(auth: OpenAiAuth): ReturnType<OpenAiAuth["login"]> {
 class LoginGateStore implements IAuthStore {
   readonly modifyStarted = Promise.withResolvers<void>()
   readonly allowModify = Promise.withResolvers<void>()
+  commitSignal: AbortSignal | undefined
   private credential: TAuthCredential | undefined
   private operation = 0
 
@@ -506,9 +712,12 @@ class LoginGateStore implements IAuthStore {
     _providerId: string,
     operation: number,
     credential: TAuthCredential,
+    signal?: AbortSignal,
   ): Promise<boolean> {
+    this.commitSignal = signal
     this.modifyStarted.resolve()
     await this.allowModify.promise
+    signal?.throwIfAborted()
     if (operation !== this.operation) return false
     this.credential = credential
     return true

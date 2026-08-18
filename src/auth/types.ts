@@ -49,6 +49,7 @@ export interface IAuthStore {
         providerId: string,
         operation: number,
         credential: TAuthCredential,
+        signal?: AbortSignal,
     ) => Promise<boolean>
 }
 

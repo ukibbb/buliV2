@@ -1,18 +1,19 @@
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 
 import type { IAuthenticationService } from "@/auth/contracts"
-import { AuthenticationFlow } from "@/tui/AuthenticationFlow"
+import { AuthenticationFlow } from "@/tui/authentication/AuthenticationFlow"
 import { Layout } from "@/tui/components/Layout"
 import { Home } from "@/tui/components/Home"
 import { SessionScreen } from "@/tui/components/Session"
-import { buliKeyboardController } from "@/tui/keyboard-controller"
+import { buliKeyboardShortcuts } from "@/tui/app/keyboard-shortcuts"
 import {
     useBuliUiController,
     useBuliUiSnapshot,
-} from "@/tui/ui-controller-state"
+} from "@/tui/app/ui-controller-context"
 
 interface IBuliTuiProps {
     readonly authentication: IAuthenticationService
+    readonly openUrl: (url: string) => unknown | Promise<unknown>
 }
 
 export function BuliTui(props: IBuliTuiProps) {
@@ -22,7 +23,7 @@ export function BuliTui(props: IBuliTuiProps) {
     const { width, height } = useTerminalDimensions()
 
     useKeyboard((key) => {
-        const action = buliKeyboardController.resolve("global", key)
+        const action = buliKeyboardShortcuts.resolve("global", key)
 
         if (action === "cancel") {
             if (ui.authenticationMode) return
@@ -39,9 +40,11 @@ export function BuliTui(props: IBuliTuiProps) {
         <Layout width={width} height={height}>
             {ui.authenticationMode ? (
                 <AuthenticationFlow
+                    key={ui.authenticationMode}
                     mode={ui.authenticationMode}
                     authentication={props.authentication}
                     onClose={() => controller.closeAuthentication()}
+                    openUrl={props.openUrl}
                 />
             ) : ui.route.type === "home" ? (
                 <Home />

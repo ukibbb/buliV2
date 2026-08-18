@@ -1,12 +1,7 @@
-export interface IBuliKey {
-    readonly name: string
-    readonly ctrl?: boolean
-    readonly shift?: boolean
-    readonly option?: boolean
-    readonly meta?: boolean
-    readonly super?: boolean
-    readonly hyper?: boolean
-}
+import {
+    KeyboardShortcutResolver,
+    type IKeyboardShortcut,
+} from "@/tui/keyboard/shortcut-resolver"
 
 export type TBuliKeyboardScope = "global" | "input" | "menu"
 
@@ -18,13 +13,12 @@ export type TBuliKeyboardAction =
     | "menu.next"
     | "menu.activate"
 
-interface IBuliKeyboardShortcut {
-    readonly scope: TBuliKeyboardScope
-    readonly key: IBuliKey
-    readonly action: TBuliKeyboardAction
-}
+type TBuliKeyboardShortcut = IKeyboardShortcut<
+    TBuliKeyboardScope,
+    TBuliKeyboardAction
+>
 
-const SHORTCUTS: readonly IBuliKeyboardShortcut[] = [
+const SHORTCUTS: readonly TBuliKeyboardShortcut[] = [
     { scope: "global", key: { name: "escape" }, action: "cancel" },
     { scope: "global", key: { name: "d", ctrl: true }, action: "console.toggle" },
     // Raw terminals encode Alt as `meta`; Kitty additionally marks `option`.
@@ -60,22 +54,7 @@ const SHORTCUTS: readonly IBuliKeyboardShortcut[] = [
     { scope: "menu", key: { name: "linefeed" }, action: "menu.activate" },
 ]
 
-export class BuliKeyboardController {
-    readonly resolve = (
-        scope: TBuliKeyboardScope,
-        key: IBuliKey,
-    ): TBuliKeyboardAction | undefined => {
-        return SHORTCUTS.find((shortcut) =>
-            shortcut.scope === scope
-            && shortcut.key.name === key.name
-            && Boolean(shortcut.key.ctrl) === Boolean(key.ctrl)
-            && Boolean(shortcut.key.shift) === Boolean(key.shift)
-            && Boolean(shortcut.key.option) === Boolean(key.option)
-            && Boolean(shortcut.key.meta) === Boolean(key.meta)
-            && Boolean(shortcut.key.super) === Boolean(key.super)
-            && Boolean(shortcut.key.hyper) === Boolean(key.hyper)
-        )?.action
-    }
-}
-
-export const buliKeyboardController = new BuliKeyboardController()
+export const buliKeyboardShortcuts = new KeyboardShortcutResolver<
+    TBuliKeyboardScope,
+    TBuliKeyboardAction
+>(SHORTCUTS)

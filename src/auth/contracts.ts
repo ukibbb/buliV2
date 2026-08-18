@@ -1,6 +1,3 @@
-export type TAuthenticationMode = "login" | "logout"
-export type TAuthenticationOutcome = "success" | "cancelled" | "failure"
-
 export interface IAuthMethodInfo {
     readonly id: string
     readonly name: string
@@ -63,5 +60,7 @@ export interface IAuthenticationService {
         providerId: string,
         signal: AbortSignal,
     ) => Promise<boolean>
-    readonly dispose?: (reason?: unknown) => Promise<void>
+    // Serwis jest ownerem providerów, więc każdy composition root ma jeden
+    // wymagany i oczekiwalny punkt zakończenia całej warstwy authentication.
+    readonly dispose: (reason?: unknown) => Promise<void>
 }

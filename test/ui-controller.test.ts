@@ -9,7 +9,7 @@ import type {
 } from "@/application/contracts"
 import type { TReasoningEffort } from "@/agent/agent-types"
 import type { ISessionInfo, ISessionSnapshot } from "@/domain"
-import { BuliUiController } from "@/tui/ui-controller"
+import { BuliUiController } from "@/tui/app/ui-controller"
 
 const APPLICATION_SNAPSHOT: IBuliApplicationSnapshot = {
   agents: [{ id: "test-agent", name: "Test Agent" }],
@@ -42,6 +42,7 @@ interface IApplicationSpyOptions {
   readonly steer?: (sessionId: string, text: string) => void
   readonly followUp?: (sessionId: string, text: string) => void
   readonly clearQueuedMessages?: (sessionId: string) => IBuliQueuedMessages
+  readonly compactSession?: IBuliApplication["compactSession"]
 }
 
 function applicationSpy(options: IApplicationSpyOptions = {}) {
@@ -134,7 +135,7 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
     },
     compactSession: async (sessionId) => {
       compacted.push(sessionId)
-      return undefined
+      return options.compactSession?.(sessionId)
     },
     abort: async (sessionId) => {
       aborted.push(sessionId)
@@ -611,6 +612,42 @@ test("compact command targets the active session", async () => {
 
   expect(await controller.submitInput("/compact")).toBe("consumed")
   expect(spy.compacted).toEqual(["session-1"])
+})
+
+test("menu activation is single-flight and preserves a newer draft", async () => {
+  const compactFinished = Promise.withResolvers<void>()
+  const spy = applicationSpy({
+    compactSession: async () => {
+      await compactFinished.promise
+      return undefined
+    },
+  })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+  controller.updateInput("/compact")
+
+  const firstActivation = controller.activateSelectedMenuItem()
+  const secondActivation = controller.activateSelectedMenuItem()
+  await Promise.resolve()
+  controller.updateInput("Draft typed while compacting")
+
+  expect(spy.compacted).toEqual(["session-1"])
+  compactFinished.resolve()
+  await Promise.all([firstActivation, secondActivation])
+  expect(controller.getSnapshot().input).toBe("Draft typed while compacting")
+})
+
+test("successful command-menu activation consumes its original slash input", async () => {
+  const spy = applicationSpy()
+  const controller = new BuliUiController({ application: spy.application })
+  controller.updateInput("/login")
+
+  await controller.activateSelectedMenuItem()
+
+  expect(controller.getSnapshot()).toMatchObject({
+    authenticationMode: "login",
+    input: "",
+  })
 })
 
 test("Escape restores queued steering before the current draft and aborts", () => {

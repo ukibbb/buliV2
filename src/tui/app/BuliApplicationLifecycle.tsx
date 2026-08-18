@@ -1,13 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react"
 
-import type { IBuliApplication } from "@/application"
-import type { IBuliApplicationStartup } from "@/application/startup"
-import { BuliRuntimeProvider } from "@/application-state"
+import type { IBuliApplication } from "@/application/contracts"
+import { BuliRuntimeProvider } from "@/tui/app/application-context"
 import type { IAuthenticationService } from "@/auth/contracts"
-import { BuliTui } from "@/tui/Buli"
+import { BuliTui } from "@/tui/app/BuliTui"
 import { theme } from "@/tui/theme"
-import { BuliUiController } from "@/tui/ui-controller"
-import { BuliUiControllerProvider } from "@/tui/ui-controller-state"
+import { BuliUiController } from "@/tui/app/ui-controller"
+import { BuliUiControllerProvider } from "@/tui/app/ui-controller-context"
 
 type TBuliLifecycleState =
     | { type: "startup" }
@@ -20,7 +19,13 @@ type TBuliLifecycleState =
     | { type: "error"; message: string }
 
 interface IBuliApplicationLifecycleProps {
-    runtimeTask: Promise<IBuliApplicationStartup>
+    // Widok zna tylko pożyczane porty potrzebne do renderowania. Ownership i
+    // dispose kompletnego startupu pozostają w zewnętrznym entrypoincie.
+    runtimeTask: Promise<{
+        runtime: IBuliApplication
+        authentication: IAuthenticationService
+    }>
+    openUrl: (url: string) => unknown | Promise<unknown>
 }
 
 /** Renders startup, application, and startup-failure states. */
@@ -31,15 +36,17 @@ export function BuliApplicationLifecycle(
 
     useEffect(() => {
         let mounted = true
+        let uiController: BuliUiController | undefined
 
         void props.runtimeTask.then(
             ({ runtime, authentication }) => {
                 if (!mounted) return
+                uiController = new BuliUiController({ application: runtime })
                 setState({
                     type: "ready",
                     runtime,
                     authentication,
-                    uiController: new BuliUiController({ application: runtime }),
+                    uiController,
                 })
             },
             (error: unknown) => {
@@ -51,6 +58,9 @@ export function BuliApplicationLifecycle(
 
         return () => {
             mounted = false
+            // Controller pożycza runtime, ale posiada własne async UI operations
+            // i subskrypcje. Lifecycle zamyka je przed usunięciem providerów React.
+            uiController?.dispose()
         }
     }, [props.runtimeTask])
 
@@ -68,7 +78,10 @@ export function BuliApplicationLifecycle(
     return (
         <BuliRuntimeProvider runtime={state.runtime}>
             <BuliUiControllerProvider controller={state.uiController}>
-                <BuliTui authentication={state.authentication} />
+                <BuliTui
+                    authentication={state.authentication}
+                    openUrl={props.openUrl}
+                />
             </BuliUiControllerProvider>
         </BuliRuntimeProvider>
     )

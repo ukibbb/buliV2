@@ -8,6 +8,10 @@ import type { IAuthenticationProvider } from "@/auth/types"
 
 export class AuthenticationService implements IAuthenticationService {
     private readonly providers: ReadonlyMap<string, IAuthenticationProvider>
+    // Serwis jest właścicielem wszystkich operacji wywołanych przez jego fasadę.
+    // Dzięki temu dispose zamyka bramkę dla nowej pracy i może zaczekać na starą.
+    private readonly lifetime = new AbortController()
+    private readonly activeOperations = new Set<Promise<unknown>>()
     // Wielu właścicieli może poprosić o shutdown, ale providery sprzątamy tylko raz.
     private disposePromise: Promise<void> | undefined
 
@@ -21,45 +25,58 @@ export class AuthenticationService implements IAuthenticationService {
 
     readonly listProviders = async (
         signal?: AbortSignal,
-    ): Promise<readonly IAuthProviderInfo[]> => {
-        signal?.throwIfAborted()
-        return Promise.all([...this.providers.values()].map(async (provider) => {
-            let status: IAuthStatus
-            let statusFailed = false
-            try {
-                status = await provider.status(signal)
-            } catch {
-                signal?.throwIfAborted()
-                status = { providerId: provider.id, connected: false }
-                statusFailed = true
-            }
-            return {
-                ...status,
-                name: provider.name,
-                methods: provider.methods.map((method) => ({ ...method })),
-                ...(statusFailed
-                    ? { statusError: "Authentication status is unavailable" }
-                    : {}),
-            }
-        }))
-    }
+    ): Promise<readonly IAuthProviderInfo[]> => this.runOperation(
+        signal,
+        async (operationSignal) => Promise.all(
+            [...this.providers.values()].map(async (provider) => {
+                let status: IAuthStatus
+                let statusFailed = false
+                try {
+                    status = await provider.status(operationSignal)
+                } catch {
+                    operationSignal.throwIfAborted()
+                    status = { providerId: provider.id, connected: false }
+                    statusFailed = true
+                }
+                return {
+                    ...status,
+                    name: provider.name,
+                    methods: provider.methods.map((method) => ({ ...method })),
+                    ...(statusFailed
+                        ? { statusError: "Authentication status is unavailable" }
+                        : {}),
+                }
+            }),
+        ),
+    )
 
     readonly login = async (
         providerId: string,
         methodId: string,
         interaction: IAuthInteraction,
-    ): Promise<IAuthStatus> => {
-        const provider = this.requireProvider(providerId)
-        if (!provider.methods.some((method) => method.id === methodId)) {
-            throw new Error(`Unsupported ${provider.name} login method: ${methodId}`)
-        }
-        return provider.login(methodId, interaction)
-    }
+    ): Promise<IAuthStatus> => this.runOperation(
+        interaction.signal,
+        async (operationSignal) => {
+            const provider = this.requireProvider(providerId)
+            if (!provider.methods.some((method) => method.id === methodId)) {
+                throw new Error(`Unsupported ${provider.name} login method: ${methodId}`)
+            }
+            return provider.login(methodId, {
+                ...interaction,
+                signal: operationSignal,
+            })
+        },
+    )
 
     readonly logout = (
         providerId: string,
         signal: AbortSignal,
-    ): Promise<boolean> => this.requireProvider(providerId).logout(signal)
+    ): Promise<boolean> => this.runOperation(
+        signal,
+        async (operationSignal) => this.requireProvider(providerId).logout(
+            operationSignal,
+        ),
+    )
 
     // Wspólny Promise zachowuje idempotencję i pozwala wszystkim czekać na ten sam wynik.
     readonly dispose = (reason?: unknown): Promise<void> => {
@@ -77,12 +94,23 @@ export class AuthenticationService implements IAuthenticationService {
     }
 
     private async disposeInternal(reason?: unknown): Promise<void> {
-        const results = await Promise.allSettled(
-            [...this.providers.values()].map(async (provider) => {
-                await provider.dispose?.(reason)
-            }),
+        const shutdownReason = reason ?? abortError(
+            "Authentication service is shutting down",
         )
-        const errors = results.flatMap((result) =>
+        // Abort jest synchroniczną bramką. Snapshot wykonujemy po nim, aby objąć
+        // także operacje dodane reentrantnie przez listenery abort.
+        if (!this.lifetime.signal.aborted) this.lifetime.abort(shutdownReason)
+        const activeOperations = [...this.activeOperations]
+        const providerDisposals = [...this.providers.values()].map(
+            async (provider) => provider.dispose?.(shutdownReason),
+        )
+        const [providerResults] = await Promise.all([
+            Promise.allSettled(providerDisposals),
+            // Błędy operacji należą do ich callerów; dispose ma tylko zaczekać,
+            // aż operacje zareagują na anulowanie i zwolnią swoje zasoby.
+            Promise.allSettled(activeOperations),
+        ])
+        const errors = providerResults.flatMap((result) =>
             result.status === "rejected" ? [result.reason] : []
         )
         if (errors.length > 0) {
@@ -90,9 +118,37 @@ export class AuthenticationService implements IAuthenticationService {
         }
     }
 
+    private runOperation<TResult>(
+        callerSignal: AbortSignal | undefined,
+        run: (signal: AbortSignal) => Promise<TResult>,
+    ): Promise<TResult> {
+        // Rejestrujemy Promise przed pierwszym await. Równoczesny dispose zawsze
+        // zobaczy operację, nawet gdy nie zdążyła jeszcze wejść do providera.
+        const operation = Promise.resolve().then(async () => {
+            this.lifetime.signal.throwIfAborted()
+            callerSignal?.throwIfAborted()
+            const signal = callerSignal
+                ? AbortSignal.any([callerSignal, this.lifetime.signal])
+                : this.lifetime.signal
+            return run(signal)
+        })
+        this.activeOperations.add(operation)
+        void operation.then(
+            () => this.activeOperations.delete(operation),
+            () => this.activeOperations.delete(operation),
+        )
+        return operation
+    }
+
     private requireProvider(providerId: string): IAuthenticationProvider {
         const provider = this.providers.get(providerId)
         if (!provider) throw new Error(`Unknown authentication provider: ${providerId}`)
         return provider
     }
+}
+
+function abortError(message: string): Error {
+    const error = new Error(message)
+    error.name = "AbortError"
+    return error
 }

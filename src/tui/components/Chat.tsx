@@ -5,14 +5,14 @@ import {
 } from "@opentui/core"
 import { useEffect, useRef } from "react"
 
-import { useBuliApplicationSnapshot } from "@/application-state"
+import { useBuliApplicationSnapshot } from "@/tui/app/application-context"
 import type { IUserMessage, TAgentRunEndReason } from "@/domain"
 import {
     useBuliUiController,
     useBuliUiSnapshot,
-} from "@/tui/ui-controller-state"
-import type { TBuliInputDelivery } from "@/tui/ui-controller"
-import { buliKeyboardController } from "@/tui/keyboard-controller"
+} from "@/tui/app/ui-controller-context"
+import type { TBuliInputDelivery } from "@/tui/app/ui-controller"
+import { buliKeyboardShortcuts } from "@/tui/app/keyboard-shortcuts"
 import { theme } from "@/tui/theme"
 
 const CHAT_MIN_ROW_COUNT = 3
@@ -74,14 +74,15 @@ export function Chat(props: IChatProps) {
     }
 
     const activateSelectedMenuItem = (): void => {
-        const activationTask = controller.activateSelectedMenuItem()
-        void activationTask.then(clearInput).catch((error: unknown) => {
+        // Kontroler zna snapshot inputu, który uruchomił komendę, więc tylko on
+        // może bezpiecznie zdecydować, czy po async completion wyczyścić draft.
+        void controller.activateSelectedMenuItem().catch((error: unknown) => {
             console.error("Failed to activate menu item", error)
         })
     }
 
     const handleKeyDown = (key: KeyEvent): void => {
-        const inputAction = buliKeyboardController.resolve("input", key)
+        const inputAction = buliKeyboardShortcuts.resolve("input", key)
         if (inputAction === "input.followUp") {
             key.preventDefault()
             key.stopPropagation()
@@ -91,7 +92,7 @@ export function Chat(props: IChatProps) {
 
         if (!ui.menu) return
 
-        const action = buliKeyboardController.resolve("menu", key)
+        const action = buliKeyboardShortcuts.resolve("menu", key)
         if (!action) return
 
         key.preventDefault()

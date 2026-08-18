@@ -18,10 +18,7 @@ import type {
     IAgentToolDescriptor,
 } from "@/agent/agent-types"
 import type { IModelUsage, TAgentMessage } from "@/domain"
-import {
-    OpenAiAuth,
-    type IOpenAiAuth,
-} from "@/providers/openai/openai-auth"
+import type { IOpenAiAuth } from "@/providers/openai/openai-auth"
 import {
     OPENAI_CODEX_BASE_URL,
     OPENAI_OAUTH_DUMMY_API_KEY,
@@ -30,7 +27,8 @@ import {
 export const DEFAULT_OPENAI_MODEL_ID = "gpt-5.6-sol"
 
 export interface IOpenAiAgentModelOptions {
-    readonly auth?: IOpenAiAuth
+    // Model pożycza auth od composition root i nigdy nie tworzy zasobu bez ownera.
+    readonly auth: IOpenAiAuth
     readonly modelId?: string
 }
 
@@ -58,8 +56,8 @@ export class OpenAiAgentModel implements IAgentModel {
     private readonly auth: IOpenAiAuth
     private readonly modelId: string
 
-    constructor(options: IOpenAiAgentModelOptions = {}) {
-        this.auth = options.auth ?? new OpenAiAuth()
+    constructor(options: IOpenAiAgentModelOptions) {
+        this.auth = options.auth
         this.modelId = options.modelId ?? DEFAULT_OPENAI_MODEL_ID
     }
 

@@ -17,13 +17,13 @@ import type {
 } from "@/application/contracts"
 import type { IAuthenticationService } from "@/auth/contracts"
 import { BuliApplicationRuntime } from "@/application/runtime"
-import { BuliRuntimeProvider } from "@/application-state"
+import { BuliRuntimeProvider } from "@/tui/app/application-context"
 import type { IAgentModel } from "@/agent/agent-types"
 import type { ISessionSnapshot } from "@/domain"
 import { InMemorySessionManager } from "@/session/session-manager"
-import { BuliTui } from "@/tui/Buli"
-import { BuliUiController } from "@/tui/ui-controller"
-import { BuliUiControllerProvider } from "@/tui/ui-controller-state"
+import { BuliTui } from "@/tui/app/BuliTui"
+import { BuliUiController } from "@/tui/app/ui-controller"
+import { BuliUiControllerProvider } from "@/tui/app/ui-controller-context"
 
 const WORKSPACE_ROOT = "/workspace"
 const TEST_AGENT_ID = "test-agent"
@@ -54,6 +54,7 @@ const AUTHENTICATION: IAuthenticationService = {
     throw new Error("No authentication provider configured for this test")
   },
   logout: async () => false,
+  dispose: async () => {},
 }
 
 function codeRenderables(root: Renderable): CodeRenderable[] {
@@ -183,18 +184,22 @@ function buliElementWithController(
     runtime,
     children: createElement(BuliUiControllerProvider, {
       controller,
-      children: createElement(BuliTui, { authentication: AUTHENTICATION }),
+      children: createElement(BuliTui, {
+        authentication: AUTHENTICATION,
+        openUrl: () => {},
+      }),
     }),
   })
 }
 
 test("provides the runtime above Buli", async () => {
-  const { runtime } = await createBuliApplication({
+  const startup = await createBuliApplication({
     signal: new AbortController().signal,
     manager: new InMemorySessionManager(),
     model: { async *stream() {} },
     tools: [],
   })
+  const { runtime } = startup
   const setup = await testRender(
     buliElement(runtime),
     { width: 80, height: 24 },
@@ -216,7 +221,7 @@ test("provides the runtime above Buli", async () => {
     expect(frame).toContain("____")
     expect(runtime.listSessions()).toEqual([])
   } finally {
-    await runtime.dispose()
+    await startup.dispose()
     act(() => {
       setup.renderer.destroy()
     })

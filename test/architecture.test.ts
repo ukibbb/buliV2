@@ -41,6 +41,26 @@ test("keeps TUI code behind application and domain contracts", async () => {
   expect(violations).toEqual([])
 })
 
+test("keeps authentication core independent from providers and UI", async () => {
+  const violations: string[] = []
+  const files = new Bun.Glob("src/auth/**/*.{ts,tsx}")
+
+  for await (const path of files.scan({ onlyFiles: true })) {
+    const source = await Bun.file(path).text()
+    // Concrete providers are wired in composition; auth core exposes only ports,
+    // credential storage and provider-independent orchestration.
+    if (
+      /from\s+["']@\/(?:providers|tui|composition|entrypoints)(?:\/|["'])/.test(
+        source,
+      )
+    ) {
+      violations.push(`${path}: outer-layer import`)
+    }
+  }
+
+  expect(violations).toEqual([])
+})
+
 test("uses Agent ownership instead of the old engine-store-view stack", async () => {
   const violations: string[] = []
   const files = new Bun.Glob("src/**/*.{ts,tsx}")

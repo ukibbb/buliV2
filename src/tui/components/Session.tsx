@@ -1,6 +1,6 @@
 import type { ReactNode } from "react"
 
-import { useSession } from "@/application-state"
+import { useSession } from "@/tui/app/application-context"
 import { Chat } from "@/tui/components/Chat"
 import { Transcript } from "@/tui/components/Transcript"
 

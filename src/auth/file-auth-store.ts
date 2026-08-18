@@ -212,7 +212,9 @@ async function prepareAuthDirectory(filePath: string): Promise<void> {
 async function writeAuthObject(
     filePath: string,
     value: Record<string, unknown>,
+    signal?: AbortSignal,
 ): Promise<void> {
+    signal?.throwIfAborted()
     const temporaryPath = join(
         dirname(filePath),
         `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`,
@@ -223,10 +225,15 @@ async function writeAuthObject(
             encoding: "utf8",
             flag: "wx",
             mode: 0o600,
+            signal,
         })
         await chmod(temporaryPath, 0o600)
+        // Atomowy rename jest punktem commit. Anulowanie respektujemy tuż przed
+        // nim; po rozpoczęciu rename zapis jest już traktowany jako wykonany.
+        signal?.throwIfAborted()
         await rename(temporaryPath, filePath)
     } catch (cause) {
+        signal?.throwIfAborted()
         throw new Error(`Unable to write authentication to ${filePath}`, { cause })
     } finally {
         await rm(temporaryPath, { force: true }).catch(() => undefined)
@@ -320,7 +327,7 @@ export class FileAuthStore implements IAuthStore {
                 providerId,
                 nextOperationRevision(source, providerId),
             )
-            await writeAuthObject(this.path, source)
+            await writeAuthObject(this.path, source, signal)
         })
     }
 
@@ -340,7 +347,7 @@ export class FileAuthStore implements IAuthStore {
                 providerId,
                 nextOperationRevision(source, providerId),
             )
-            await writeAuthObject(this.path, source)
+            await writeAuthObject(this.path, source, signal)
             return existed
         })
     }
@@ -380,7 +387,7 @@ export class FileAuthStore implements IAuthStore {
             if (!malformed && credentialsEqual(before, next)) return next
             if (next === undefined) delete source[providerId]
             else source[providerId] = next
-            await writeAuthObject(this.path, source)
+            await writeAuthObject(this.path, source, signal)
             return next
         })
     }
@@ -396,7 +403,7 @@ export class FileAuthStore implements IAuthStore {
             const source = await readAuthObject(this.path, signal)
             const operation = nextOperationRevision(source, providerId)
             setOperationRevision(source, providerId, operation)
-            await writeAuthObject(this.path, source)
+            await writeAuthObject(this.path, source, signal)
             return operation
         })
     }
@@ -405,18 +412,20 @@ export class FileAuthStore implements IAuthStore {
         providerId: string,
         operation: number,
         credential: TAuthCredential,
+        signal?: AbortSignal,
     ): Promise<boolean> {
+        signal?.throwIfAborted()
         validateProviderId(providerId)
         if (!Number.isSafeInteger(operation) || operation <= 0) {
             throw new TypeError("Invalid authentication operation revision")
         }
         const next = parseCredential(providerId, credential)
 
-        return this.withLock(undefined, async () => {
-            const source = await readAuthObject(this.path)
+        return this.withLock(signal, async () => {
+            const source = await readAuthObject(this.path, signal)
             if (operationRevision(source, providerId) !== operation) return false
             source[providerId] = next
-            await writeAuthObject(this.path, source)
+            await writeAuthObject(this.path, source, signal)
             return true
         })
     }

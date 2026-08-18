@@ -2,32 +2,13 @@ import type {
     IBuliApplication,
     ISnapshotSource,
 } from "@/application/contracts"
-import type { TAuthenticationMode } from "@/auth/contracts"
-
-export interface IBuliCommandInfo {
-    readonly name: string
-    readonly description: string
-}
-
-export interface IBuliCommandContext {
-    readonly application: IBuliApplication
-    readonly sessionId: string | null
-    readonly activateSession: (sessionId: string) => void
-    readonly goHome: () => void
-    readonly openAuthentication: (mode: TAuthenticationMode) => void
-}
-
-export interface IBuliMenuItem {
-    readonly id: string
-    readonly label: string
-    readonly description?: string
-}
-
-export interface IBuliPickerContent {
-    readonly items: readonly IBuliMenuItem[]
-    readonly selectedItemId?: string
-    readonly emptyMessage?: string
-}
+import {
+    BULI_COMMANDS,
+    type IBuliCommandContext,
+    type IBuliCommandInfo,
+    type IBuliMenuItem,
+} from "@/tui/app/commands"
+import type { TAuthenticationMode } from "@/tui/authentication/types"
 
 interface IBuliMenuBase {
     // Store the index of the currently highlighted item.
@@ -55,28 +36,6 @@ export type TBuliRoute =
     | { readonly type: "home" }
     | { readonly type: "session"; readonly sessionId: string }
 
-type TBuliCommandHandler = (
-    args: string,
-    context: IBuliCommandContext,
-) => void | Promise<void>
-
-export type TBuliCommand = IBuliCommandInfo & (
-    | {
-        readonly kind: "action"
-        readonly handler: TBuliCommandHandler
-    }
-    | {
-        readonly kind: "picker"
-        readonly load: (
-            context: IBuliCommandContext,
-        ) => IBuliPickerContent | Promise<IBuliPickerContent>
-        readonly select: (
-            itemId: string,
-            context: IBuliCommandContext,
-        ) => void | Promise<void>
-    }
-)
-
 export interface IBuliUiSnapshot {
     readonly route: TBuliRoute
     readonly authenticationMode: TAuthenticationMode | null
@@ -95,140 +54,6 @@ interface IBuliUiControllerOptions {
 
 type TTuiListener = () => void
 
-export const BULI_COMMANDS: readonly TBuliCommand[] = [
-    {
-        kind: "action",
-        name: "clear",
-        description: "Clear the current session",
-        handler: (_args, context) => {
-            if (context.sessionId) {
-                context.application.clearSession(context.sessionId)
-            }
-        },
-    },
-    {
-        kind: "picker",
-        name: "model",
-        description: "Select the model used for new prompts",
-        load: ({ application }) => {
-            const snapshot = application.getSnapshot()
-
-            return {
-                items: snapshot.models.map((model) => ({
-                    id: model.id,
-                    label: model.name,
-                    description: model.id,
-                })),
-                selectedItemId: snapshot.selection.modelId,
-            }
-        },
-        select: (modelId, { application }) => {
-            application.selectModel(modelId)
-        },
-    },
-    {
-        kind: "picker",
-        name: "reasoning",
-        description: "Select the reasoning effort used for new prompts",
-        load: ({ application }) => {
-            const snapshot = application.getSnapshot()
-            const model = snapshot.models.find(
-                (candidate) => candidate.id === snapshot.selection.modelId,
-            )
-            if (!model) {
-                throw new Error(`Unknown model: ${snapshot.selection.modelId}`)
-            }
-
-            return {
-                items: model.reasoningEfforts.map((effort) => ({
-                    id: effort,
-                    label: effort,
-                })),
-                selectedItemId: snapshot.selection.reasoningEffort,
-            }
-        },
-        select: (itemId, { application }) => {
-            const snapshot = application.getSnapshot()
-            const model = snapshot.models.find(
-                (candidate) => candidate.id === snapshot.selection.modelId,
-            )
-            const effort = model?.reasoningEfforts.find(
-                (candidate) => candidate === itemId,
-            )
-            if (!effort) {
-                throw new Error(`Unsupported reasoning effort: ${itemId}`)
-            }
-
-            application.selectReasoningEffort(effort)
-        },
-    },
-    {
-        kind: "action",
-        name: "new",
-        description: "Start a new session",
-        handler: (_args, context) => {
-            context.goHome()
-        },
-    },
-    {
-        kind: "picker",
-        name: "sessions",
-        description: "Open a saved session",
-        load: ({ application, sessionId }) => {
-            const agents = new Map(
-                application.getSnapshot().agents.map((agent) => [
-                    agent.id,
-                    agent.name,
-                ]),
-            )
-
-            return {
-                items: application.listSessions().map((session) => ({
-                    id: session.id,
-                    label: session.title,
-                    description: [
-                        shortSessionId(session.id),
-                        agents.get(session.agentId) ?? session.agentId,
-                        formatSessionTime(session.updatedAt),
-                    ].join(" | "),
-                })),
-                ...(sessionId ? { selectedItemId: sessionId } : {}),
-                emptyMessage: "No saved sessions",
-            }
-        },
-        select: (sessionId, context) => {
-            context.activateSession(sessionId)
-        },
-    },
-    {
-        kind: "action",
-        name: "login",
-        description: "Connect an authentication provider",
-        handler: (_args, context) => {
-            context.openAuthentication("login")
-        },
-    },
-    {
-        kind: "action",
-        name: "logout",
-        description: "Disconnect an authentication provider",
-        handler: (_args, context) => {
-            context.openAuthentication("logout")
-        },
-    },
-    {
-        kind: "action",
-        name: "compact",
-        description: "Summarize older context without deleting history",
-        handler: async (_args, context) => {
-            if (!context.sessionId) {
-                throw new Error("Compaction requires an active session")
-            }
-            await context.application.compactSession(context.sessionId)
-        },
-    },
-]
-
 export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     readonly workspaceRoot: string
     readonly commands: readonly IBuliCommandInfo[] = BULI_COMMANDS.map(
@@ -239,6 +64,8 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
 
     private readonly listeners = new Set<TTuiListener>()
     private inputSubmissionPending = false
+    private menuActivationPending = false
+    private disposed = false
 
     private snapshot: IBuliUiSnapshot = {
         route: { type: "home" },
@@ -256,11 +83,21 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     readonly getSnapshot = (): IBuliUiSnapshot => this.snapshot
 
     readonly subscribe = (listener: TTuiListener): (() => void) => {
+        if (this.disposed) return () => {}
         this.listeners.add(listener)
         return () => this.listeners.delete(listener)
     }
 
+    readonly dispose = (): void => {
+        if (this.disposed) return
+        // Zakończone później komendy mogą nadal domknąć własny Promise, ale nie
+        // opublikują już snapshotu do odmontowanego drzewa React.
+        this.disposed = true
+        this.listeners.clear()
+    }
+
     readonly updateInput = (input: string): void => {
+        if (this.disposed) return
         if (
             input === ""
             && (
@@ -299,6 +136,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     }
 
     readonly moveMenuSelection = (direction: -1 | 1): void => {
+        if (this.disposed) return
         const menu = this.snapshot.menu
         // Read the currently active menu.
 
@@ -326,6 +164,16 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     }
 
     readonly activateSelectedMenuItem = async (): Promise<void> => {
+        if (this.disposed || this.menuActivationPending) return
+        this.menuActivationPending = true
+        try {
+            await this.activateSelectedMenuItemOnce()
+        } finally {
+            this.menuActivationPending = false
+        }
+    }
+
+    private async activateSelectedMenuItemOnce(): Promise<void> {
         const menu = this.snapshot.menu
         // Read the currently active menu.
 
@@ -337,6 +185,10 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
 
         if (!selected) return
         // Stop if the index does not point to an item.
+
+        // Konsumujemy tylko tekst, który otworzył ten konkretny element menu.
+        // Draft wpisany podczas oczekiwania na async command musi pozostać.
+        const activatedInput = this.snapshot.input
 
         if (menu.mode === "commands") {
             try {
@@ -352,6 +204,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
             }
 
             if (this.snapshot.menu === menu) this.setMenu(null)
+            this.consumeInput(activatedInput)
             return
         }
 
@@ -381,12 +234,14 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
         }
 
         if (this.snapshot.menu === menu) this.setMenu(null)
+        this.consumeInput(activatedInput)
     }
 
     readonly submitInput = async (
         input: string,
         delivery: TBuliInputDelivery = "auto",
     ): Promise<TBuliInputSubmitResult> => {
+        if (this.disposed) return "retained"
         const text = input.trim()
         if (!text) return "retained"
         if (this.inputSubmissionPending) {
@@ -495,6 +350,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     }
 
     readonly escape = (): void => {
+        if (this.disposed) return
         if (this.snapshot.authenticationMode) {
             this.closeAuthentication()
             return
@@ -542,6 +398,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     }
 
     readonly goHome = (): void => {
+        if (this.disposed) return
         if (this.snapshot.route.type === "home") {
             this.setMenu(null)
             return
@@ -557,6 +414,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     }
 
     readonly openAuthentication = (mode: TAuthenticationMode): void => {
+        if (this.disposed) return
         this.setSnapshot({
             ...this.snapshot,
             authenticationMode: mode,
@@ -566,6 +424,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     }
 
     readonly closeAuthentication = (): void => {
+        if (this.disposed) return
         if (!this.snapshot.authenticationMode) return
         this.setSnapshot({
             ...this.snapshot,
@@ -574,6 +433,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     }
 
     readonly activateSession = (sessionId: string): void => {
+        if (this.disposed) return
         if (
             this.snapshot.route.type === "session"
             && this.snapshot.route.sessionId === sessionId
@@ -659,6 +519,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     }
 
     private setSnapshot(snapshot: IBuliUiSnapshot): void {
+        if (this.disposed) return
         this.snapshot = snapshot
         // Replace the UI snapshot with the new menu state.
         for (const listener of this.listeners) listener()
@@ -680,16 +541,6 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
             inputError: null,
         })
     }
-}
-
-function shortSessionId(sessionId: string): string {
-    return [...sessionId].slice(0, 8).join("")
-}
-
-function formatSessionTime(timestamp: number): string {
-    const date = new Date(timestamp)
-    if (Number.isNaN(date.getTime())) return String(timestamp)
-    return date.toISOString().slice(0, 16).replace("T", " ")
 }
 
 function errorMessage(error: unknown): string {

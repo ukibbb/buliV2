@@ -171,6 +171,37 @@ test("logout invalidates an in-flight login across store instances", async () =>
   })
 })
 
+test("an aborted operation never reaches the atomic credential commit", async () => {
+  await withAuthPath(async (path) => {
+    const lockOwner = new FileAuthStore(path)
+    const loginStore = new FileAuthStore(path)
+    const operation = await loginStore.beginOperation("openai")
+    const lockAcquired = Promise.withResolvers<void>()
+    const releaseLock = Promise.withResolvers<void>()
+    const heldLock = lockOwner.modify("openai", async (current) => {
+      lockAcquired.resolve()
+      await releaseLock.promise
+      return current
+    })
+    await lockAcquired.promise
+
+    const controller = new AbortController()
+    const commit = loginStore.commitOperation(
+      "openai",
+      operation,
+      oauthCredential("cancelled-login"),
+      controller.signal,
+    )
+    const cancellation = new Error("commit cancelled")
+    controller.abort(cancellation)
+    releaseLock.resolve()
+
+    await expect(commit).rejects.toBe(cancellation)
+    await heldLock
+    expect(await loginStore.get("openai")).toBeUndefined()
+  })
+})
+
 test("never overwrites malformed or non-object top-level JSON", async () => {
   await withAuthPath(async (path) => {
     await mkdir(dirname(path), { recursive: true })

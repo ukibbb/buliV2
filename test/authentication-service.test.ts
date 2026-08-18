@@ -66,6 +66,56 @@ test("shares one provider disposal and keeps the first reason", async () => {
   expect(disposeCount).toBe(1)
 })
 
+test("dispose aborts and waits for an active service operation", async () => {
+  const logoutStarted = Promise.withResolvers<AbortSignal>()
+  const finishLogout = Promise.withResolvers<void>()
+  const shutdownReason = new Error("service shutdown")
+  const provider = authenticationProvider({
+    logout: async (signal) => {
+      logoutStarted.resolve(signal)
+      await finishLogout.promise
+      signal.throwIfAborted()
+      return true
+    },
+  })
+  const service = new AuthenticationService([provider])
+  const logoutFailure = service.logout(
+    "openai",
+    new AbortController().signal,
+  ).catch((error: unknown) => error)
+
+  const operationSignal = await logoutStarted.promise
+  let disposeFinished = false
+  const disposal = service.dispose(shutdownReason).then(() => {
+    disposeFinished = true
+  })
+
+  expect(operationSignal.aborted).toBe(true)
+  expect(operationSignal.reason).toBe(shutdownReason)
+  await Promise.resolve()
+  expect(disposeFinished).toBe(false)
+
+  finishLogout.resolve()
+  await disposal
+  expect(await logoutFailure).toBe(shutdownReason)
+})
+
+test("disposed service rejects new work before touching a provider", async () => {
+  const shutdownReason = new Error("service disposed")
+  let statusCalls = 0
+  const service = new AuthenticationService([authenticationProvider({
+    status: async () => {
+      statusCalls += 1
+      return { providerId: "openai", connected: false }
+    },
+  })])
+
+  await service.dispose(shutdownReason)
+
+  await expect(service.listProviders()).rejects.toBe(shutdownReason)
+  expect(statusCalls).toBe(0)
+})
+
 function authenticationProvider(
   overrides: Partial<IAuthenticationProvider> = {},
 ): IAuthenticationProvider {

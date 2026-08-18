@@ -67,6 +67,9 @@ export class OpenAiAuth implements IOpenAiAuth {
     private readonly now: () => number
     private readonly lifetime = new AbortController()
     private readonly requestFlights = new Set<Promise<Response>>()
+    // Operacje store wywoływane bezpośrednio przez model także należą do providera,
+    // nie tylko wywołania przechodzące przez AuthenticationService.
+    private readonly activeOperations = new Set<Promise<unknown>>()
     private refreshFlight: Promise<IOAuthCredential> | undefined
     private activeLogin: AbortController | undefined
     private readonly activeLoginTasks = new Set<Promise<void>>()
@@ -74,6 +77,7 @@ export class OpenAiAuth implements IOpenAiAuth {
     // Root AbortSignal i cleanup aplikacji mogą wywołać dispose równocześnie.
     // Jeden Promise gwarantuje jeden abort, jeden snapshot tasków i pierwszy reason.
     private disposePromise: Promise<void> | undefined
+    private removeRootAbortListener: (() => void) | undefined
 
     constructor(options: IOpenAiAuthOptions = {}) {
         this.store = options.store ?? new FileAuthStore()
@@ -104,11 +108,15 @@ export class OpenAiAuth implements IOpenAiAuth {
         })
 
         if (options.signal) {
+            const rootSignal = options.signal
             const dispose = (): void => {
-                void this.dispose(options.signal?.reason).catch(() => {})
+                void this.dispose(rootSignal.reason).catch(() => {})
             }
-            options.signal.addEventListener("abort", dispose, { once: true })
-            if (options.signal.aborted) dispose()
+            rootSignal.addEventListener("abort", dispose, { once: true })
+            this.removeRootAbortListener = () => {
+                rootSignal.removeEventListener("abort", dispose)
+            }
+            if (rootSignal.aborted) dispose()
         }
     }
 
@@ -152,8 +160,23 @@ export class OpenAiAuth implements IOpenAiAuth {
                 throw abortError("OpenAI login was replaced")
             }
 
-            const committed = generation === this.loginGeneration
-                && await this.store.commitOperation(this.id, operation, credential)
+            let committed = false
+            try {
+                committed = generation === this.loginGeneration
+                    && await this.store.commitOperation(
+                        this.id,
+                        operation,
+                        credential,
+                        signal,
+                    )
+            } catch (error) {
+                // Logout i nowszy login zmieniają generation. Zachowujemy dla nich
+                // stabilny komunikat niezależnie od miejsca, w którym commit przerwał.
+                if (generation !== this.loginGeneration) {
+                    throw abortError("OpenAI login was replaced")
+                }
+                throw error
+            }
             if (
                 generation !== this.loginGeneration
                 || !committed
@@ -168,52 +191,66 @@ export class OpenAiAuth implements IOpenAiAuth {
         }
     }
 
-    readonly logout = async (signal: AbortSignal): Promise<boolean> => {
-        signal.throwIfAborted()
-        this.loginGeneration += 1
-        this.activeLogin?.abort(abortError("OpenAI login was cancelled by logout"))
-        this.activeLogin = undefined
-        return this.store.remove(this.id, signal)
-    }
+    readonly logout = async (signal: AbortSignal): Promise<boolean> => this.trackOperation(
+        async () => {
+            const operationSignal = this.operationSignal(signal)
+            this.loginGeneration += 1
+            this.activeLogin?.abort(abortError("OpenAI login was cancelled by logout"))
+            this.activeLogin = undefined
+            return this.store.remove(this.id, operationSignal)
+        },
+    )
 
     readonly getCredential = async (
         signal?: AbortSignal,
-    ): Promise<IOAuthCredential | undefined> => {
-        const credential = await this.store.get(this.id, signal)
-        return credential
-            ? requireOpenAiOAuthCredential(credential)
-            : undefined
-    }
+    ): Promise<IOAuthCredential | undefined> => this.trackOperation(async () => {
+        const operationSignal = this.operationSignal(signal)
+        return this.readCredential(operationSignal)
+    })
 
     readonly requireCredential = async (
         signal?: AbortSignal,
-    ): Promise<IOAuthCredential> => {
-        this.lifetime.signal.throwIfAborted()
-        signal?.throwIfAborted()
-        const credential = await this.getCredential(signal)
-        if (!credential) throw missingAuthError()
+    ): Promise<IOAuthCredential> => this.trackOperation(async () => {
+        const operationSignal = this.operationSignal(signal)
+        while (true) {
+            const credential = await this.readCredential(operationSignal)
+            if (!credential) throw missingAuthError()
 
-        const normalized = normalizeStoredAccount(credential)
-        if (
-            normalized.accountId
-            && normalized.expires > this.now() + OPENAI_REFRESH_SKEW_MS
-        ) {
-            if (normalized !== credential) {
-                await this.persistNormalizedCredential(credential.access, normalized)
+            const normalized = normalizeStoredAccount(credential)
+            if (
+                normalized.accountId
+                && normalized.expires > this.now() + OPENAI_REFRESH_SKEW_MS
+            ) {
+                if (normalized === credential) return normalized
+                const persisted = await this.persistNormalizedCredential(
+                    credential,
+                    normalized,
+                    operationSignal,
+                )
+                if (oauthCredentialsEqual(persisted, normalized)) return persisted
+                // Credential zmienił się przed CAS. Oceniamy najnowszą wartość
+                // od początku, zamiast zwracać potencjalnie nieaktualny snapshot.
+                continue
             }
-            return normalized
+            return this.refreshCredential(undefined, operationSignal)
         }
-        return this.refreshCredential(undefined, signal)
-    }
+    })
 
     readonly refreshAfterUnauthorized = async (
         observedAccessToken: string,
         observedAccountId: string,
         signal?: AbortSignal,
-    ): Promise<IOAuthCredential> => {
-        let credential = await this.refreshCredential(observedAccessToken, signal)
+    ): Promise<IOAuthCredential> => this.trackOperation(async () => {
+        const operationSignal = this.operationSignal(signal)
+        let credential = await this.refreshCredential(
+            observedAccessToken,
+            operationSignal,
+        )
         if (credential.access === observedAccessToken) {
-            credential = await this.refreshCredential(observedAccessToken, signal)
+            credential = await this.refreshCredential(
+                observedAccessToken,
+                operationSignal,
+            )
         }
         if (credential.accountId !== observedAccountId) {
             throw new Error(
@@ -221,7 +258,7 @@ export class OpenAiAuth implements IOpenAiAuth {
             )
         }
         return credential
-    }
+    })
 
     // Metoda nie jest async, aby każdy caller dostał dokładnie ten sam Promise.
     readonly dispose = (
@@ -241,6 +278,8 @@ export class OpenAiAuth implements IOpenAiAuth {
     }
 
     private async disposeInternal(reason: unknown): Promise<void> {
+        this.removeRootAbortListener?.()
+        this.removeRootAbortListener = undefined
         this.loginGeneration += 1
         // Najpierw zamykamy bramkę dla nowej pracy. Listenery abort mogą wywołać
         // publiczne metody synchronicznie, ale zobaczą już anulowany lifetime.
@@ -253,10 +292,12 @@ export class OpenAiAuth implements IOpenAiAuth {
         const loginTasks = [...this.activeLoginTasks]
         const refreshFlight = this.refreshFlight
         const requestFlights = [...this.requestFlights]
+        const activeOperations = [...this.activeOperations]
         await Promise.allSettled([
             ...loginTasks,
             ...(refreshFlight ? [refreshFlight] : []),
             ...requestFlights,
+            ...activeOperations,
         ])
     }
 
@@ -266,14 +307,14 @@ export class OpenAiAuth implements IOpenAiAuth {
     ): Promise<IOAuthCredential> {
         signal?.throwIfAborted()
         this.lifetime.signal.throwIfAborted()
-        this.refreshFlight ??= this.refreshUnderLock(observedAccessToken)
+        this.refreshFlight ??= this.refreshUnderStoreLock(observedAccessToken)
             .finally(() => {
                 this.refreshFlight = undefined
             })
         return waitWithSignal(this.refreshFlight, signal)
     }
 
-    private async refreshUnderLock(
+    private async refreshUnderStoreLock(
         observedAccessToken: string | undefined,
     ): Promise<IOAuthCredential> {
         const credential = await this.store.modify(
@@ -299,6 +340,9 @@ export class OpenAiAuth implements IOpenAiAuth {
                     return normalized
                 }
 
+                // Refresh token może być rotowany i unieważniany przez serwer.
+                // Request pozostaje w cross-process locku store, aby dwa procesy
+                // nie zużyły równocześnie tego samego jednorazowego tokena.
                 const refreshed = await this.oauth.refresh(
                     normalized,
                     this.lifetime.signal,
@@ -317,17 +361,56 @@ export class OpenAiAuth implements IOpenAiAuth {
     }
 
     private async persistNormalizedCredential(
-        observedAccessToken: string,
+        observed: IOAuthCredential,
         normalized: IOAuthCredential,
-    ): Promise<void> {
-        await this.store.modify(this.id, async (current) => {
-            if (
-                !current
-                || current.type !== "oauth"
-                || current.access !== observedAccessToken
-            ) return current
+        signal: AbortSignal,
+    ): Promise<IOAuthCredential> {
+        const persisted = await this.store.modify(this.id, async (current) => {
+            if (!current) return undefined
+            const currentOAuth = requireOpenAiOAuthCredential(current)
+            if (!oauthCredentialsEqual(currentOAuth, observed)) return currentOAuth
             return normalized
-        }, this.lifetime.signal)
+        }, signal)
+        if (!persisted) throw missingAuthError()
+        return requireOpenAiOAuthCredential(persisted)
+    }
+
+    private async readCredential(
+        signal: AbortSignal,
+    ): Promise<IOAuthCredential | undefined> {
+        const credential = await this.store.get(this.id, signal)
+        return credential
+            ? requireOpenAiOAuthCredential(credential)
+            : undefined
+    }
+
+    private operationSignal(signal?: AbortSignal): AbortSignal {
+        this.lifetime.signal.throwIfAborted()
+        signal?.throwIfAborted()
+        return signal
+            ? AbortSignal.any([signal, this.lifetime.signal])
+            : this.lifetime.signal
+    }
+
+    private trackOperation<TResult>(
+        run: () => Promise<TResult>,
+    ): Promise<TResult> {
+        this.lifetime.signal.throwIfAborted()
+        // Promise jest publikowany przed wejściem do obcego store. Gdy store
+        // reentrantnie uruchomi dispose, shutdown zobaczy już tę operację.
+        const completion = Promise.withResolvers<TResult>()
+        const operation = completion.promise
+        this.activeOperations.add(operation)
+        try {
+            void run().then(completion.resolve, completion.reject)
+        } catch (error) {
+            completion.reject(error)
+        }
+        void operation.then(
+            () => this.activeOperations.delete(operation),
+            () => this.activeOperations.delete(operation),
+        )
+        return operation
     }
 }
 
@@ -355,6 +438,17 @@ function normalizeStoredAccount(
     }
     if (credential.accountId || !extracted) return credential
     return { ...credential, accountId: extracted }
+}
+
+function oauthCredentialsEqual(
+    left: IOAuthCredential,
+    right: IOAuthCredential,
+): boolean {
+    return left.access === right.access
+        && left.refresh === right.refresh
+        && left.expires === right.expires
+        && left.accountId === right.accountId
+        && left.enterpriseUrl === right.enterpriseUrl
 }
 
 function statusFromCredential(

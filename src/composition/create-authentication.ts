@@ -11,6 +11,7 @@ export interface IAuthenticationComposition {
     readonly openAi: IOpenAiAuth
 }
 
+/** Wires concrete providers at the outer composition boundary. */
 export function createAuthentication(
     options: IOpenAiAuthOptions = {},
 ): IAuthenticationComposition {

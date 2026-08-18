@@ -5,7 +5,7 @@ import {
     type ReactNode,
 } from "react"
 
-import { BuliUiController, type IBuliUiSnapshot } from "@/tui/ui-controller"
+import { BuliUiController, type IBuliUiSnapshot } from "@/tui/app/ui-controller"
 
 const BuliUiControllerContext = createContext<BuliUiController | undefined>(undefined)
 

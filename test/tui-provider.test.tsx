@@ -3,16 +3,17 @@ import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
 
 import { createBuliApplication } from "@/application"
-import { BuliRuntimeProvider } from "@/application-state"
+import { BuliRuntimeProvider } from "@/tui/app/application-context"
 import { InMemorySessionManager } from "@/session/session-manager"
 
 test("renders provider children without creating root-level text", async () => {
-  const { runtime } = await createBuliApplication({
+  const startup = await createBuliApplication({
     signal: new AbortController().signal,
     manager: new InMemorySessionManager(),
     model: { async *stream() {} },
     tools: [],
   })
+  const { runtime } = startup
   const setup = await testRender(
     <BuliRuntimeProvider runtime={runtime}>
       <box>
@@ -29,7 +30,9 @@ test("renders provider children without creating root-level text", async () => {
 
     expect(setup.captureCharFrame()).toContain("ready")
   } finally {
-    runtime.dispose()
+    const disposal = startup.dispose()
+    expect(startup.dispose()).toBe(disposal)
+    await disposal
     act(() => {
       setup.renderer.destroy()
     })

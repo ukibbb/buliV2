@@ -1,5 +1,7 @@
 import type {
   IAssistantMessage,
+  IModelProfile,
+  IModelUsage,
   IReasoningContent,
   ITextContent,
   IToolCallContent,
@@ -12,6 +14,7 @@ interface IAssistantMessageBuilderOptions {
   readonly runId: string
   readonly now: () => number
   readonly generateId: () => string
+  readonly modelProfile?: IModelProfile
 }
 
 /** Reduces one provider stream into one assistant message. */
@@ -23,6 +26,7 @@ export class AssistantMessageBuilder {
   private readonly reasoningContent = new Map<string, IReasoningContent>()
   private stopReason = "pending"
   private errorMessage: string | undefined
+  private usage: IModelUsage | undefined
 
   constructor(private readonly options: IAssistantMessageBuilderOptions) {
     this.messageId = options.generateId()
@@ -59,7 +63,7 @@ export class AssistantMessageBuilder {
         this.addToolCall(event)
         return
       case "finish":
-        this.finish(event.reason)
+        this.finish(event.reason, undefined, event.usage)
         return
       case "abort":
         this.abort(event.reason ?? "Buli interaction was aborted")
@@ -69,10 +73,11 @@ export class AssistantMessageBuilder {
     }
   }
 
-  finish(reason = "stop", error?: string): void {
+  finish(reason = "stop", error?: string, usage?: IModelUsage): void {
     if (this.completed) return
     this.stopReason = reason
     this.errorMessage = error
+    this.usage = usage === undefined ? undefined : structuredClone(usage)
     this.textContent.clear()
     this.reasoningContent.clear()
   }
@@ -93,6 +98,10 @@ export class AssistantMessageBuilder {
       content: this.content,
       stopReason: this.stopReason,
       ...(this.errorMessage ? { errorMessage: this.errorMessage } : {}),
+      ...(this.options.modelProfile
+        ? { model: structuredClone(this.options.modelProfile) }
+        : {}),
+      ...(this.usage ? { usage: structuredClone(this.usage) } : {}),
       createdAt: this.createdAt,
     })
   }

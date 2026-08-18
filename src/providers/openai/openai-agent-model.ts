@@ -17,7 +17,7 @@ import type {
     IAgentModelRequest,
     IAgentToolDescriptor,
 } from "@/agent/agent-types"
-import type { TAgentMessage } from "@/domain"
+import type { IModelUsage, TAgentMessage } from "@/domain"
 import {
     OpenAiAuth,
     type IOpenAiAuth,
@@ -77,7 +77,10 @@ export class OpenAiAgentModel implements IAgentModel {
         })
         const result = streamText({
             model: provider.responses(this.modelId),
-            messages: toModelMessages(request.messages),
+            messages: toModelMessages(
+                request.messages,
+                request.contextSummary,
+            ),
             tools: toAiTools(request.tools),
             abortSignal: request.signal,
             providerOptions: {
@@ -93,6 +96,9 @@ export class OpenAiAgentModel implements IAgentModel {
             },
             stopWhen: isStepCount(1),
             maxRetries: 0,
+            ...(request.maxOutputTokens === undefined
+                ? {}
+                : { maxOutputTokens: request.maxOutputTokens }),
         })
 
         for await (const event of result.stream) {
@@ -117,8 +123,11 @@ function toAiTools(
     ])) as ToolSet
 }
 
-function toModelMessages(messages: readonly TAgentMessage[]): ModelMessage[] {
-    return messages.flatMap((message): ModelMessage[] => {
+function toModelMessages(
+    messages: readonly TAgentMessage[],
+    contextSummary?: string,
+): ModelMessage[] {
+    const projected = messages.flatMap((message): ModelMessage[] => {
         switch (message.role) {
             case "user":
                 return [{ role: "user", content: message.content }]
@@ -159,6 +168,14 @@ function toModelMessages(messages: readonly TAgentMessage[]): ModelMessage[] {
             }
         }
     })
+    if (!contextSummary) return projected
+
+    // Responses adapter nie zezwala na `system` w messages (instrukcje przekazuje
+    // osobno). `assistant` oznacza więc wcześniejszy stan rozmowy, nie nowy prompt.
+    return [{
+        role: "assistant",
+        content: `Conversation summary before the retained transcript:\n${contextSummary}`,
+    }, ...projected]
 }
 
 function toAgentModelEvent(
@@ -184,11 +201,14 @@ function toAgentModelEvent(
                 toolName: event.toolName,
                 input: toRecord(event.input),
             }
-        case "finish":
+        case "finish": {
+            const usage = toModelUsage(event.totalUsage)
             return {
                 type: "finish",
                 reason: event.rawFinishReason ?? event.finishReason,
+                ...(usage === undefined ? {} : { usage }),
             }
+        }
         case "abort":
             return {
                 type: "abort",
@@ -199,6 +219,33 @@ function toAgentModelEvent(
         default:
             return undefined
     }
+}
+
+function toModelUsage(usage: {
+    readonly inputTokens?: number | undefined
+    readonly outputTokens?: number | undefined
+    readonly totalTokens?: number | undefined
+    readonly cachedInputTokens?: number | undefined
+    readonly reasoningTokens?: number | undefined
+}): IModelUsage | undefined {
+    const result: IModelUsage = {
+        ...(usage.inputTokens === undefined
+            ? {}
+            : { inputTokens: usage.inputTokens }),
+        ...(usage.outputTokens === undefined
+            ? {}
+            : { outputTokens: usage.outputTokens }),
+        ...(usage.totalTokens === undefined
+            ? {}
+            : { totalTokens: usage.totalTokens }),
+        ...(usage.cachedInputTokens === undefined
+            ? {}
+            : { cacheReadTokens: usage.cachedInputTokens }),
+        ...(usage.reasoningTokens === undefined
+            ? {}
+            : { reasoningTokens: usage.reasoningTokens }),
+    }
+    return Object.keys(result).length === 0 ? undefined : result
 }
 
 function toRecord(value: unknown): Record<string, unknown> {

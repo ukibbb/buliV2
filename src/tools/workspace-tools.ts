@@ -2,8 +2,7 @@ import { realpath } from "node:fs/promises"
 import { isAbsolute, resolve, sep } from "node:path"
 
 import type { IAgentTool } from "@/agent/agent-types"
-
-const MAX_TOOL_OUTPUT_CHARACTERS = 100_000
+import { truncateToolOutput } from "@/agent/tool-output"
 
 export function createWorkspaceTools(
     workspaceRoot: string,
@@ -44,6 +43,9 @@ export function createWorkspaceTools(
             }
 
             // overall I can't return more than 100_000 chars
+            // Wspólny limiter liczy teraz 100 000 bajtów UTF-8 i 2000 linii.
+            // Nadal wywołujemy go tutaj, aby chronić także bezpośrednie użycie toola
+            // poza pętlą agenta; centralny limiter w pętli jest idempotentny.
             const contents = await Bun.file(file).text()
             context.signal.throwIfAborted()
             return limitToolOutput(contents)
@@ -210,11 +212,5 @@ function requireString(input: Record<string, unknown>, key: string): string {
 }
 
 function limitToolOutput(output: string): string {
-    if (output.length <= MAX_TOOL_OUTPUT_CHARACTERS) return output
-
-    return [
-        output.slice(0, MAX_TOOL_OUTPUT_CHARACTERS),
-        "",
-        "... output truncated",
-    ].join("\n")
+    return truncateToolOutput(output)
 }

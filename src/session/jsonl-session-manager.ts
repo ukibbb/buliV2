@@ -13,9 +13,16 @@ import {
 } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
+import { lockSync } from "proper-lockfile"
 
-import type { ISessionInfo, TAgentMessage } from "@/domain"
+import type {
+    ICompactionCheckpoint,
+    ISessionInfo,
+    TAgentMessage,
+} from "@/domain"
 import {
+    assertCheckpointAnchor,
+    assertCompactionCheckpoint,
     assertDurableSessionMessage,
     assertSessionInfo,
     InMemorySessionManager,
@@ -24,6 +31,9 @@ import {
 
 interface IJsonlSessionManagerOptions {
     readonly filePath: string
+    // Wyłączenie locka służy testom formatu, które otwierają ten sam plik wiele
+    // razy w jednym przypadku. Produkcyjny manager zawsze pozostawia wartość true.
+    readonly acquireLock?: boolean
 }
 
 interface ISessionRecord {
@@ -38,35 +48,68 @@ interface IMessageRecord {
     readonly message: TAgentMessage
 }
 
+interface ICompactionRecord {
+    readonly recordType: "compaction"
+    readonly version: 2
+    readonly checkpoint: ICompactionCheckpoint
+}
+
 /** Persists session metadata and direct Agent messages as JSONL records. */
 export class JsonlSessionManager implements ISessionManager {
     private readonly memory = new InMemorySessionManager()
     private readonly persistedSessionIds = new Set<string>()
     private readonly filePath: string
+    private releaseLock: (() => void) | undefined
+    private disposed = false
 
     constructor(options: IJsonlSessionManagerOptions) {
         this.filePath = options.filePath
         mkdirSync(dirname(this.filePath), { recursive: true, mode: 0o700 })
-        this.load()
+        if (options.acquireLock !== false) {
+            // Lock jest przywiązany do stabilnej ścieżki logicznej, a nie inode
+            // pliku zastępowanego przez atomic rename. Trzymamy go przez całe życie
+            // managera, aby stan w pamięci nie zestarzał się przez drugi proces.
+            this.releaseLock = lockSync(this.filePath, {
+                realpath: false,
+                retries: 0,
+                lockfilePath: `${this.filePath}.lock`,
+            })
+        }
+        try {
+            this.load()
+        } catch (error) {
+            this.releaseLock?.()
+            this.releaseLock = undefined
+            throw error
+        }
     }
 
     readonly createSession = (info: ISessionInfo): void => {
+        this.assertActive()
         this.memory.createSession(info)
     }
 
     readonly getSessionInfo = (
         sessionId: string,
-    ): ISessionInfo | undefined => this.memory.getSessionInfo(sessionId)
+    ): ISessionInfo | undefined => {
+        this.assertActive()
+        return this.memory.getSessionInfo(sessionId)
+    }
 
     readonly listSessions = (): readonly ISessionInfo[] => {
+        this.assertActive()
         return this.memory.listSessions()
     }
 
     readonly getMessages = (
         sessionId: string,
-    ): readonly TAgentMessage[] => this.memory.getMessages(sessionId)
+    ): readonly TAgentMessage[] => {
+        this.assertActive()
+        return this.memory.getMessages(sessionId)
+    }
 
     readonly appendMessage = (message: TAgentMessage): void => {
+        this.assertActive()
         assertDurableSessionMessage(message)
 
         const info = this.memory.getSessionInfo(message.sessionId)
@@ -85,7 +128,31 @@ export class JsonlSessionManager implements ISessionManager {
         this.persistedSessionIds.add(message.sessionId)
     }
 
+    readonly getCompactionCheckpoint = (
+        sessionId: string,
+    ): ICompactionCheckpoint | undefined => {
+        this.assertActive()
+        return this.memory.getCompactionCheckpoint(sessionId)
+    }
+
+    readonly saveCompactionCheckpoint = (
+        checkpoint: ICompactionCheckpoint,
+    ): void => {
+        this.assertActive()
+        assertCompactionCheckpoint(checkpoint)
+        assertCheckpointAnchor(
+            checkpoint,
+            this.memory.getMessages(checkpoint.sessionId),
+        )
+        // Checkpoint jest append-only jak wiadomości. Powtórne kompaktowanie dopisuje
+        // nowszy rekord, a load wybiera ostatni; rewrite przy clear usuwa stare wpisy.
+        this.appendRecords([compactionRecord(checkpoint)])
+        this.memory.saveCompactionCheckpoint(checkpoint)
+        this.persistedSessionIds.add(checkpoint.sessionId)
+    }
+
     readonly clearSession = (sessionId: string): void => {
+        this.assertActive()
         const records: unknown[] = []
         for (const info of this.memory.listSessions()) {
             if (!this.persistedSessionIds.has(info.id)) continue
@@ -95,6 +162,8 @@ export class JsonlSessionManager implements ISessionManager {
                 records.push(
                     ...this.memory.getMessages(info.id).map(messageRecord),
                 )
+                const checkpoint = this.memory.getCompactionCheckpoint(info.id)
+                if (checkpoint) records.push(compactionRecord(checkpoint))
             }
         }
 
@@ -105,6 +174,7 @@ export class JsonlSessionManager implements ISessionManager {
     }
 
     readonly deleteSession = (sessionId: string): void => {
+        this.assertActive()
         const wasPersisted = this.persistedSessionIds.has(sessionId)
         if (wasPersisted) {
             const records: unknown[] = []
@@ -116,11 +186,21 @@ export class JsonlSessionManager implements ISessionManager {
                 records.push(
                     ...this.memory.getMessages(info.id).map(messageRecord),
                 )
+                const checkpoint = this.memory.getCompactionCheckpoint(info.id)
+                if (checkpoint) records.push(compactionRecord(checkpoint))
             }
             this.replaceFile(serializeRecords(records))
         }
         this.memory.deleteSession(sessionId)
         this.persistedSessionIds.delete(sessionId)
+    }
+
+    readonly dispose = (): void => {
+        if (this.disposed) return
+        this.disposed = true
+        const releaseLock = this.releaseLock
+        this.releaseLock = undefined
+        releaseLock?.()
     }
 
     private load(): void {
@@ -132,6 +212,7 @@ export class JsonlSessionManager implements ISessionManager {
         const lastRecordIndex = lines.findLastIndex((line) => line.trim().length > 0)
         const infoBySession = new Map<string, ISessionInfo>()
         const messagesBySession = new Map<string, TAgentMessage[]>()
+        const checkpointsBySession = new Map<string, ICompactionCheckpoint>()
         const sessionOrder: string[] = []
         const seenSessionIds = new Set<string>()
 
@@ -190,6 +271,28 @@ export class JsonlSessionManager implements ISessionManager {
                 continue
             }
 
+            if (isRecord(value) && value.recordType === "compaction") {
+                try {
+                    assertCompactionRecord(value)
+                    if (!infoBySession.has(value.checkpoint.sessionId)) {
+                        throw new Error(
+                            `Missing session metadata: ${value.checkpoint.sessionId}`,
+                        )
+                    }
+                    assertCheckpointAnchor(
+                        value.checkpoint,
+                        messagesBySession.get(value.checkpoint.sessionId) ?? [],
+                    )
+                } catch (error) {
+                    throw invalidLineError(index, error)
+                }
+                checkpointsBySession.set(
+                    value.checkpoint.sessionId,
+                    value.checkpoint,
+                )
+                continue
+            }
+
             try {
                 assertMessageRecord(value)
             } catch (error) {
@@ -219,6 +322,8 @@ export class JsonlSessionManager implements ISessionManager {
 
             this.memory.createSession(info)
             for (const message of messages) this.memory.appendMessage(message)
+            const checkpoint = checkpointsBySession.get(sessionId)
+            if (checkpoint) this.memory.saveCompactionCheckpoint(checkpoint)
         }
     }
 
@@ -261,6 +366,10 @@ export class JsonlSessionManager implements ISessionManager {
             ? contents
             : `${contents}\n`
     }
+
+    private assertActive(): void {
+        if (this.disposed) throw new Error("JSONL session manager is disposed")
+    }
 }
 
 export function defaultSessionFilePath(
@@ -290,6 +399,16 @@ function messageRecord(message: TAgentMessage): IMessageRecord {
         recordType: "message",
         version: 2,
         message: structuredClone(message),
+    }
+}
+
+function compactionRecord(
+    checkpoint: ICompactionCheckpoint,
+): ICompactionRecord {
+    return {
+        recordType: "compaction",
+        version: 2,
+        checkpoint: structuredClone(checkpoint),
     }
 }
 
@@ -339,6 +458,20 @@ function assertMessageRecord(value: unknown): asserts value is IMessageRecord {
         throw new Error("Invalid message record")
     }
     assertDurableSessionMessage(value.message)
+}
+
+function assertCompactionRecord(
+    value: unknown,
+): asserts value is ICompactionRecord {
+    if (
+        !isRecord(value)
+        || !hasExactKeys(value, ["recordType", "version", "checkpoint"])
+        || value.recordType !== "compaction"
+        || value.version !== 2
+    ) {
+        throw new Error("Invalid compaction record")
+    }
+    assertCompactionCheckpoint(value.checkpoint)
 }
 
 function hasExactKeys(

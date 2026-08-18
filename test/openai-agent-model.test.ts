@@ -328,7 +328,11 @@ test("lowers direct assistant and text-only toolResult messages", async () => {
     },
   ], [toolDescriptor("read_file")])
 
-  expect(events).toContainEqual({ type: "finish", reason: "stop" })
+  expect(events).toContainEqual({
+    type: "finish",
+    reason: "stop",
+    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+  })
   expect(capturedRequests).toHaveLength(1)
   const request = capturedRequests[0]
   if (!request) throw new Error("Expected an OpenAI request")
@@ -354,6 +358,38 @@ test("lowers direct assistant and text-only toolResult messages", async () => {
       output: "README contents",
     },
   ])
+})
+
+test("sends projected context summaries and compaction output limits", async () => {
+  let capturedRequest: Request | undefined
+  const model = createModel(async (...args) => {
+    capturedRequest = new Request(...args)
+    return streamResponse()
+  })
+  const events: IAgentModelEvent[] = []
+
+  for await (const event of model.stream({
+    sessionId: "session-1",
+    runId: "compaction-1",
+    systemPrompt: "Summarize",
+    contextSummary: "Earlier durable context",
+    messages: [userMessage("New tail")],
+    tools: [],
+    reasoningEffort: "low",
+    maxOutputTokens: 321,
+    signal: new AbortController().signal,
+  })) {
+    events.push(event)
+  }
+
+  if (!capturedRequest) throw new Error("Expected one provider request")
+  const body = (await capturedRequest.json()) as Record<string, unknown>
+  expect(JSON.stringify(body)).toContain("Earlier durable context")
+  expect(body.max_output_tokens).toBe(321)
+  expect(events.at(-1)).toMatchObject({
+    type: "finish",
+    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+  })
 })
 
 test("emits every tool call from one provider response for the host loop", async () => {
@@ -390,7 +426,11 @@ test("emits every tool call from one provider response for the host loop", async
       input: { pattern: "toolCallId" },
     },
   ])
-  expect(events.at(-1)).toEqual({ type: "finish", reason: "tool-calls" })
+  expect(events.at(-1)).toEqual({
+    type: "finish",
+    reason: "tool-calls",
+    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+  })
 })
 
 test("forwards cancellation to the OpenAI request", async () => {

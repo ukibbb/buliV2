@@ -1,5 +1,9 @@
 import type { TReasoningEffort } from "@/agent/agent-types"
-import type { ISessionInfo, ISessionSnapshot } from "@/domain"
+import type {
+    ICompactionCheckpoint,
+    ISessionInfo,
+    ISessionSnapshot,
+} from "@/domain"
 
 export interface ISnapshotSource<Snapshot> {
     readonly subscribe: (listener: () => void) => () => void
@@ -68,6 +72,9 @@ export interface IBuliApplication
     readonly followUp: (sessionId: string, text: string) => void
     readonly clearQueuedMessages: (sessionId: string) => IBuliQueuedMessages
     readonly clearSession: (sessionId: string) => void
+    readonly compactSession: (
+        sessionId: string,
+    ) => Promise<ICompactionCheckpoint | undefined>
     readonly abort: (sessionId: string) => Promise<void>
     readonly dispose: () => Promise<void>
 

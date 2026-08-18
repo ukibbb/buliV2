@@ -146,6 +146,7 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
       }
     },
     clearSession: () => undefined,
+    compactSession: async () => undefined,
     abort: async (sessionId) => {
       aborted.push(sessionId)
     },

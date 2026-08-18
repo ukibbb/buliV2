@@ -500,6 +500,8 @@ test("submitPrompt rolls back a new session when its first prompt is not accepte
     appendMessage: () => {
       throw persistenceFailure
     },
+    getCompactionCheckpoint: memory.getCompactionCheckpoint,
+    saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
     clearSession: memory.clearSession,
     deleteSession: (sessionId) => {
       deletedSessionIds.push(sessionId)
@@ -544,6 +546,8 @@ test("new-session settled waits for rollback before exposing failure", async () 
     appendMessage: () => {
       throw persistenceFailure
     },
+    getCompactionCheckpoint: memory.getCompactionCheckpoint,
+    saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
     clearSession: memory.clearSession,
     deleteSession: memory.deleteSession,
   }

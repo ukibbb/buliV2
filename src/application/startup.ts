@@ -144,8 +144,8 @@ export async function createBuliApplication(
         // allSettled zawsze próbuje obu cleanupów. Gdy rollback też zawiedzie,
         // AggregateError zachowuje błąd startupu jako pierwszy i nie ukrywa reszty.
         const rollbackResults = await Promise.allSettled([
-            // Runtime posiada manager po udanej konstrukcji; wcześniej startup musi
-            // zwolnić go sam, szczególnie gdy trzyma wyłączny lock pliku sesji.
+            // Runtime posiada manager po udanej konstrukcji; wcześniej startup
+            // zwalnia go bezpośrednio.
             runtime?.dispose() ?? manager?.dispose?.(),
             authentication.dispose(startupError),
         ])

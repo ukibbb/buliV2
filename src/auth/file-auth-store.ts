@@ -9,8 +9,6 @@ import {
 } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import { homedir } from "node:os"
-import { setTimeout as delay } from "node:timers/promises"
-import { lock } from "proper-lockfile"
 
 import type {
     IAuthStore,
@@ -21,8 +19,6 @@ const PROVIDER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const RESERVED_PROVIDER_IDS = new Set(["__proto__", "constructor", "prototype"])
 const AUTH_METADATA_KEY = "$buli"
 const AUTH_OPERATIONS_KEY = "authOperations"
-const LOCK_MAX_ATTEMPTS = 601
-const LOCK_RETRY_DELAY_MS = 50
 
 export function defaultAuthFilePath(): string {
     return join(homedir(), ".buli", "auth.json")
@@ -215,6 +211,8 @@ async function writeAuthObject(
     signal?: AbortSignal,
 ): Promise<void> {
     signal?.throwIfAborted()
+    await prepareAuthDirectory(filePath)
+    signal?.throwIfAborted()
     const temporaryPath = join(
         dirname(filePath),
         `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`,
@@ -238,61 +236,6 @@ async function writeAuthObject(
     } finally {
         await rm(temporaryPath, { force: true }).catch(() => undefined)
     }
-}
-
-async function waitForLockRetry(signal?: AbortSignal): Promise<void> {
-    signal?.throwIfAborted()
-    if (signal === undefined) {
-        await delay(LOCK_RETRY_DELAY_MS)
-        return
-    }
-
-    try {
-        await delay(LOCK_RETRY_DELAY_MS, undefined, { signal })
-    } catch (cause) {
-        signal.throwIfAborted()
-        throw cause
-    }
-}
-
-async function acquireAuthLock(
-    filePath: string,
-    signal?: AbortSignal,
-): Promise<() => Promise<void>> {
-    for (let attempt = 0; attempt < LOCK_MAX_ATTEMPTS; attempt += 1) {
-        signal?.throwIfAborted()
-
-        let release: (() => Promise<void>) | undefined
-        try {
-            release = await lock(filePath, {
-                realpath: false,
-                retries: 0,
-            })
-        } catch (cause) {
-            signal?.throwIfAborted()
-            if (
-                !hasErrorCode(cause, "ELOCKED")
-                || attempt === LOCK_MAX_ATTEMPTS - 1
-            ) {
-                throw new Error(`Unable to lock authentication file ${filePath}`, {
-                    cause,
-                })
-            }
-            await waitForLockRetry(signal)
-            continue
-        }
-
-        if (signal?.aborted) {
-            try {
-                await release()
-            } finally {
-                signal.throwIfAborted()
-            }
-        }
-        return release
-    }
-
-    throw new Error(`Unable to lock authentication file ${filePath}`)
 }
 
 export class FileAuthStore implements IAuthStore {
@@ -319,16 +262,14 @@ export class FileAuthStore implements IAuthStore {
         validateProviderId(providerId)
         const next = parseCredential(providerId, credential)
 
-        await this.withLock(signal, async () => {
-            const source = await readAuthObject(this.path, signal)
-            source[providerId] = next
-            setOperationRevision(
-                source,
-                providerId,
-                nextOperationRevision(source, providerId),
-            )
-            await writeAuthObject(this.path, source, signal)
-        })
+        const source = await readAuthObject(this.path, signal)
+        source[providerId] = next
+        setOperationRevision(
+            source,
+            providerId,
+            nextOperationRevision(source, providerId),
+        )
+        await writeAuthObject(this.path, source, signal)
     }
 
     async remove(
@@ -338,18 +279,16 @@ export class FileAuthStore implements IAuthStore {
         signal?.throwIfAborted()
         validateProviderId(providerId)
 
-        return this.withLock(signal, async () => {
-            const source = await readAuthObject(this.path, signal)
-            const existed = Object.hasOwn(source, providerId)
-            delete source[providerId]
-            setOperationRevision(
-                source,
-                providerId,
-                nextOperationRevision(source, providerId),
-            )
-            await writeAuthObject(this.path, source, signal)
-            return existed
-        })
+        const source = await readAuthObject(this.path, signal)
+        const existed = Object.hasOwn(source, providerId)
+        delete source[providerId]
+        setOperationRevision(
+            source,
+            providerId,
+            nextOperationRevision(source, providerId),
+        )
+        await writeAuthObject(this.path, source, signal)
+        return existed
     }
 
     async modify(
@@ -362,34 +301,32 @@ export class FileAuthStore implements IAuthStore {
         signal?.throwIfAborted()
         validateProviderId(providerId)
 
-        return this.withLock(signal, async () => {
-            const source = await readAuthObject(this.path, signal)
-            let current: TAuthCredential | undefined
-            let malformed = false
-            if (Object.hasOwn(source, providerId)) {
-                try {
-                    current = parseCredential(providerId, source[providerId])
-                } catch {
-                    malformed = true
-                    current = undefined
-                }
+        const source = await readAuthObject(this.path, signal)
+        let current: TAuthCredential | undefined
+        let malformed = false
+        if (Object.hasOwn(source, providerId)) {
+            try {
+                current = parseCredential(providerId, source[providerId])
+            } catch {
+                malformed = true
+                current = undefined
             }
-            const before = current === undefined
-                ? undefined
-                : copyCredential(current)
+        }
+        const before = current === undefined
+            ? undefined
+            : copyCredential(current)
 
-            signal?.throwIfAborted()
-            const candidate = await update(current)
-            const next = candidate === undefined
-                ? undefined
-                : parseCredential(providerId, candidate)
+        signal?.throwIfAborted()
+        const candidate = await update(current)
+        const next = candidate === undefined
+            ? undefined
+            : parseCredential(providerId, candidate)
 
-            if (!malformed && credentialsEqual(before, next)) return next
-            if (next === undefined) delete source[providerId]
-            else source[providerId] = next
-            await writeAuthObject(this.path, source, signal)
-            return next
-        })
+        if (!malformed && credentialsEqual(before, next)) return next
+        if (next === undefined) delete source[providerId]
+        else source[providerId] = next
+        await writeAuthObject(this.path, source, signal)
+        return next
     }
 
     async beginOperation(
@@ -399,13 +336,11 @@ export class FileAuthStore implements IAuthStore {
         signal?.throwIfAborted()
         validateProviderId(providerId)
 
-        return this.withLock(signal, async () => {
-            const source = await readAuthObject(this.path, signal)
-            const operation = nextOperationRevision(source, providerId)
-            setOperationRevision(source, providerId, operation)
-            await writeAuthObject(this.path, source, signal)
-            return operation
-        })
+        const source = await readAuthObject(this.path, signal)
+        const operation = nextOperationRevision(source, providerId)
+        setOperationRevision(source, providerId, operation)
+        await writeAuthObject(this.path, source, signal)
+        return operation
     }
 
     async commitOperation(
@@ -421,30 +356,11 @@ export class FileAuthStore implements IAuthStore {
         }
         const next = parseCredential(providerId, credential)
 
-        return this.withLock(signal, async () => {
-            const source = await readAuthObject(this.path, signal)
-            if (operationRevision(source, providerId) !== operation) return false
-            source[providerId] = next
-            await writeAuthObject(this.path, source, signal)
-            return true
-        })
-    }
-
-    private async withLock<TResult>(
-        signal: AbortSignal | undefined,
-        operation: () => Promise<TResult>,
-    ): Promise<TResult> {
-        signal?.throwIfAborted()
-        await prepareAuthDirectory(this.path)
-        signal?.throwIfAborted()
-        const release = await acquireAuthLock(this.path, signal)
-
-        try {
-            signal?.throwIfAborted()
-            return await operation()
-        } finally {
-            await release()
-        }
+        const source = await readAuthObject(this.path, signal)
+        if (operationRevision(source, providerId) !== operation) return false
+        source[providerId] = next
+        await writeAuthObject(this.path, source, signal)
+        return true
     }
 }
 

@@ -289,8 +289,8 @@ export class BuliApplicationRuntime implements IBuliApplication {
         const errors: unknown[] = results.flatMap((result) =>
             result.status === "rejected" ? [result.reason] : []
         )
-        // Manager jest właścicielem storage/locka. Zwalniamy go po sesjach i także
-        // wtedy, gdy któraś sesja zgłosiła błąd, aby shutdown nie zostawił locka.
+        // Manager jest właścicielem zasobów storage. Zwalniamy je po sesjach także
+        // wtedy, gdy któraś sesja zgłosiła błąd.
         try {
             await this.manager.dispose?.()
         } catch (error) {

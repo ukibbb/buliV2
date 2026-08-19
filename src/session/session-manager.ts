@@ -21,8 +21,8 @@ export interface ISessionManager {
     ) => void
     readonly clearSession: (sessionId: string) => void
     readonly deleteSession: (sessionId: string) => void
-    // Manager może posiadać lock lub uchwyt storage. Runtime zwalnia go dopiero
-    // po zamknięciu wszystkich sesji, które nadal mogą wykonywać ostatnie zapisy.
+    // Manager może posiadać zasoby storage. Runtime zwalnia je dopiero po zamknięciu
+    // wszystkich sesji, które nadal mogą wykonywać ostatnie zapisy.
     readonly dispose?: () => void | Promise<void>
 }
 

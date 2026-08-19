@@ -369,52 +369,6 @@ test("a pre-aborted 401 retry does not start a background refresh", async () => 
   })
 })
 
-test("serializes refresh-token rotation across authentication instances", async () => {
-  await withStore(async (store, path) => {
-    await store.set("openai", {
-      type: "oauth",
-      access: "old-access",
-      refresh: "old-refresh",
-      expires: 200,
-      accountId: "account-id",
-    })
-    let requests = 0
-    const firstRequestStarted = Promise.withResolvers<void>()
-    const finishRequest = Promise.withResolvers<void>()
-    const rotatingFetch = fetchImplementation(async () => {
-        requests += 1
-        firstRequestStarted.resolve()
-        await finishRequest.promise
-        return Response.json({
-          access_token: "new-access",
-          refresh_token: "new-refresh",
-          expires_in: 3600,
-        })
-    })
-    const first = new OpenAiAuth({
-      store,
-      now: () => 100,
-      fetch: rotatingFetch,
-    })
-    const second = new OpenAiAuth({
-      store: new FileAuthStore(path),
-      now: () => 100,
-      fetch: rotatingFetch,
-    })
-
-    const firstCredential = first.requireCredential()
-    await firstRequestStarted.promise
-    const secondCredential = second.requireCredential()
-    await Bun.sleep(75)
-    expect(requests).toBe(1)
-
-    finishRequest.resolve()
-    expect((await firstCredential).access).toBe("new-access")
-    expect((await secondCredential).access).toBe("new-access")
-    expect(requests).toBe(1)
-  })
-})
-
 test("an aborted login cannot enter the credential commit", async () => {
   const store = new LoginGateStore()
   const auth = new OpenAiAuth({ store, oauth: loginOAuth() })

@@ -72,7 +72,8 @@ or revoke copies of the token stored elsewhere.
 
 Credentials are stored as plaintext JSON in `~/.buli/auth.json`. Buli protects
 the directory and file with `0700` and `0600` permissions on POSIX systems,
-uses atomic writes, and locks updates across processes.
+and uses atomic writes. Concurrent credential updates are not coordinated and
+may overwrite each other.
 The file is keyed by provider and supports OAuth and API-key credentials;
 the current OpenAI/ChatGPT integration accepts OAuth only.
 
@@ -84,7 +85,7 @@ On restart, saved sessions are available through `/sessions`. Opening one restor
 
 Pending steering and follow-up messages are also kept only in memory. `Escape` restores them to the editor before aborting, but exiting or crashing the process can discard them.
 
-Run only one Buli process per workspace. Concurrent writers are not currently supported for the shared workspace session log.
+Concurrent writers are not coordinated for the shared workspace session log. Running multiple Buli processes in one workspace may lose session updates.
 
 If a crash or watch restart leaves the terminal in a strange state, run:
 

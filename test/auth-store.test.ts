@@ -171,34 +171,29 @@ test("logout invalidates an in-flight login across store instances", async () =>
   })
 })
 
-test("an aborted operation never reaches the atomic credential commit", async () => {
+test("an aborted modify never reaches the atomic credential commit", async () => {
   await withAuthPath(async (path) => {
-    const lockOwner = new FileAuthStore(path)
-    const loginStore = new FileAuthStore(path)
-    const operation = await loginStore.beginOperation("openai")
-    const lockAcquired = Promise.withResolvers<void>()
-    const releaseLock = Promise.withResolvers<void>()
-    const heldLock = lockOwner.modify("openai", async (current) => {
-      lockAcquired.resolve()
-      await releaseLock.promise
-      return current
-    })
-    await lockAcquired.promise
-
+    const store = new FileAuthStore(path)
+    const updateStarted = Promise.withResolvers<void>()
+    const finishUpdate = Promise.withResolvers<void>()
     const controller = new AbortController()
-    const commit = loginStore.commitOperation(
+    const modification = store.modify(
       "openai",
-      operation,
-      oauthCredential("cancelled-login"),
+      async () => {
+        updateStarted.resolve()
+        await finishUpdate.promise
+        return oauthCredential("cancelled-login")
+      },
       controller.signal,
     )
+    await updateStarted.promise
+
     const cancellation = new Error("commit cancelled")
     controller.abort(cancellation)
-    releaseLock.resolve()
+    finishUpdate.resolve()
 
-    await expect(commit).rejects.toBe(cancellation)
-    await heldLock
-    expect(await loginStore.get("openai")).toBeUndefined()
+    await expect(modification).rejects.toBe(cancellation)
+    expect(await store.get("openai")).toBeUndefined()
   })
 })
 
@@ -217,53 +212,6 @@ test("never overwrites malformed or non-object top-level JSON", async () => {
       ).rejects.toThrow("Unable to read authentication")
       expect(await readFile(path, "utf8")).toBe(text)
     }
-  })
-})
-
-test("serializes concurrent stores without losing provider updates", async () => {
-  await withAuthPath(async (path) => {
-    const first = new FileAuthStore(path)
-    const second = new FileAuthStore(path)
-
-    await Promise.all([
-      first.set("provider-a", oauthCredential("access-a")),
-      second.set("provider-b", oauthCredential("access-b")),
-    ])
-
-    expect(await readAuth(path)).toEqual({
-      "provider-a": oauthCredential("access-a"),
-      "provider-b": oauthCredential("access-b"),
-      $buli: { authOperations: { "provider-a": 1, "provider-b": 1 } },
-    })
-  })
-})
-
-test("modify holds the lock and gives later updaters the latest credential", async () => {
-  await withAuthPath(async (path) => {
-    const first = new FileAuthStore(path)
-    const second = new FileAuthStore(path)
-    await first.set("openai", oauthCredential("original"))
-    const firstStarted = Promise.withResolvers<void>()
-    const finishFirst = Promise.withResolvers<void>()
-
-    const firstUpdate = first.modify("openai", async (current) => {
-      firstStarted.resolve()
-      await finishFirst.promise
-      if (!current) throw new Error("Expected an OpenAI credential")
-      return { ...requireOAuth(current), access: "first-update" }
-    })
-    await firstStarted.promise
-
-    let secondSaw: string | undefined
-    const secondUpdate = second.modify("openai", async (current) => {
-      secondSaw = current?.type === "oauth" ? current.access : undefined
-      return current
-    })
-    finishFirst.resolve()
-
-    await Promise.all([firstUpdate, secondUpdate])
-    expect(secondSaw).toBe("first-update")
-    expect(requireOAuth(await first.get("openai")).access).toBe("first-update")
   })
 })
 

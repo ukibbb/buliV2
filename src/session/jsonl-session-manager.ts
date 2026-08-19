@@ -13,8 +13,6 @@ import {
 } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
-import { lockSync } from "proper-lockfile"
-
 import type {
     ICompactionCheckpoint,
     ISessionInfo,
@@ -31,9 +29,6 @@ import {
 
 interface IJsonlSessionManagerOptions {
     readonly filePath: string
-    // Wyłączenie locka służy testom formatu, które otwierają ten sam plik wiele
-    // razy w jednym przypadku. Produkcyjny manager zawsze pozostawia wartość true.
-    readonly acquireLock?: boolean
 }
 
 interface ISessionRecord {
@@ -59,29 +54,12 @@ export class JsonlSessionManager implements ISessionManager {
     private readonly memory = new InMemorySessionManager()
     private readonly persistedSessionIds = new Set<string>()
     private readonly filePath: string
-    private releaseLock: (() => void) | undefined
     private disposed = false
 
     constructor(options: IJsonlSessionManagerOptions) {
         this.filePath = options.filePath
         mkdirSync(dirname(this.filePath), { recursive: true, mode: 0o700 })
-        if (options.acquireLock !== false) {
-            // Lock jest przywiązany do stabilnej ścieżki logicznej, a nie inode
-            // pliku zastępowanego przez atomic rename. Trzymamy go przez całe życie
-            // managera, aby stan w pamięci nie zestarzał się przez drugi proces.
-            this.releaseLock = lockSync(this.filePath, {
-                realpath: false,
-                retries: 0,
-                lockfilePath: `${this.filePath}.lock`,
-            })
-        }
-        try {
-            this.load()
-        } catch (error) {
-            this.releaseLock?.()
-            this.releaseLock = undefined
-            throw error
-        }
+        this.load()
     }
 
     readonly createSession = (info: ISessionInfo): void => {
@@ -198,9 +176,6 @@ export class JsonlSessionManager implements ISessionManager {
     readonly dispose = (): void => {
         if (this.disposed) return
         this.disposed = true
-        const releaseLock = this.releaseLock
-        this.releaseLock = undefined
-        releaseLock?.()
     }
 
     private load(): void {

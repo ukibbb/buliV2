@@ -307,14 +307,14 @@ export class OpenAiAuth implements IOpenAiAuth {
     ): Promise<IOAuthCredential> {
         signal?.throwIfAborted()
         this.lifetime.signal.throwIfAborted()
-        this.refreshFlight ??= this.refreshUnderStoreLock(observedAccessToken)
+        this.refreshFlight ??= this.refreshStoredCredential(observedAccessToken)
             .finally(() => {
                 this.refreshFlight = undefined
             })
         return waitWithSignal(this.refreshFlight, signal)
     }
 
-    private async refreshUnderStoreLock(
+    private async refreshStoredCredential(
         observedAccessToken: string | undefined,
     ): Promise<IOAuthCredential> {
         const credential = await this.store.modify(
@@ -341,8 +341,8 @@ export class OpenAiAuth implements IOpenAiAuth {
                 }
 
                 // Refresh token może być rotowany i unieważniany przez serwer.
-                // Request pozostaje w cross-process locku store, aby dwa procesy
-                // nie zużyły równocześnie tego samego jednorazowego tokena.
+                // Wspólny refreshFlight chroni tę instancję providera przed
+                // równoczesnym zużyciem tego samego jednorazowego tokena.
                 const refreshed = await this.oauth.refresh(
                     normalized,
                     this.lifetime.signal,

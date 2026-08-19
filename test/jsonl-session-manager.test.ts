@@ -634,30 +634,6 @@ test("restores completed turns into the next Agent model request", async () => {
   }
 })
 
-test("holds one stable writer lock until dispose", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-lock-"))
-  const filePath = join(directory, "sessions.jsonl")
-
-  try {
-    const first = new JsonlSessionManager({ filePath })
-    first.createSession(sessionInfo())
-    first.appendMessage(userMessage("First"))
-
-    // append i atomic rename nie zmieniają kotwicy locka.
-    expect(() => new JsonlSessionManager({ filePath })).toThrow()
-
-    first.clearSession("session-1")
-    expect(() => new JsonlSessionManager({ filePath })).toThrow()
-
-    first.dispose()
-    const reopened = new JsonlSessionManager({ filePath })
-    expect(reopened.getSessionInfo("session-1")).toBeDefined()
-    reopened.dispose()
-  } finally {
-    await rm(directory, { recursive: true, force: true })
-  }
-})
-
 test("persists only the latest compaction checkpoint without deleting history", async () => {
   const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-compaction-"))
   const filePath = join(directory, "sessions.jsonl")
@@ -712,26 +688,27 @@ test("persists only the latest compaction checkpoint without deleting history", 
   }
 })
 
-test("releases the writer lock when initial load fails", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-lock-"))
+test("opens a session log while another manager is active", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-shared-"))
   const filePath = join(directory, "sessions.jsonl")
 
   try {
-    await writeFile(filePath, "not-json\n", "utf8")
-    expect(() => new JsonlSessionManager({ filePath })).toThrow(
-      "Invalid session JSONL record on line 1",
-    )
+    const first = jsonlManager(filePath)
+    first.createSession(sessionInfo())
+    first.appendMessage(userMessage("First"))
 
-    await writeFile(filePath, "", "utf8")
-    const manager = new JsonlSessionManager({ filePath })
-    manager.dispose()
+    const second = jsonlManager(filePath)
+    expect(second.getMessages("session-1")).toHaveLength(1)
+
+    second.dispose()
+    first.dispose()
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
 })
 
 function jsonlManager(filePath: string): JsonlSessionManager {
-  return new JsonlSessionManager({ filePath, acquireLock: false })
+  return new JsonlSessionManager({ filePath })
 }
 
 async function jsonlRecords(filePath: string): Promise<unknown[]> {

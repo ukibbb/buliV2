@@ -15,6 +15,9 @@ import { generateRandomId } from "@/common"
 import type {
     IUserMessage,
     TAgentMessage,
+    TToolApprovalDecision,
+    TToolApprovalDraft,
+    TToolApprovalRequest,
     TUserMessageSource,
 } from "@/domain"
 
@@ -51,6 +54,13 @@ interface IQueuedAgentMessages {
     readonly followUp: readonly IUserMessage[]
 }
 
+interface IPendingToolApproval {
+    readonly activeRun: IActiveAgentRun
+    readonly request: TToolApprovalRequest
+    readonly resolve: (decision: TToolApprovalDecision) => void
+    readonly reject: (reason?: unknown) => void
+}
+
 /** Owns one session's live agent state and active run. */
 export class Agent {
     private stateValue: IAgentState
@@ -65,6 +75,8 @@ export class Agent {
     private steeringQueue: IUserMessage[] = []
     private followUpQueue: IUserMessage[] = []
     private activeRun: IActiveAgentRun | undefined
+    private pendingToolApproval: IPendingToolApproval | undefined
+    private readonly issuedToolApprovalIds = new Set<string>()
 
     constructor(options: IAgentOptions) {
         this.resolveRunConfiguration = options.resolveRunConfiguration
@@ -83,6 +95,7 @@ export class Agent {
             activeRunId: undefined,
             streamingMessage: undefined,
             pendingToolCallIds: new Set(),
+            pendingToolApproval: undefined,
             errorMessage: undefined,
             lastRunReason: undefined,
         }
@@ -148,6 +161,7 @@ export class Agent {
             activeRunId: runId,
             streamingMessage: undefined,
             pendingToolCallIds: new Set(),
+            pendingToolApproval: undefined,
             errorMessage: undefined,
             lastRunReason: undefined,
         }
@@ -179,6 +193,21 @@ export class Agent {
         this.steeringQueue = []
         this.followUpQueue = []
         return messages
+    }
+
+    resolveToolApproval(
+        approvalId: string,
+        decision: TToolApprovalDecision,
+    ): void {
+        const pending = this.pendingToolApproval
+        if (!pending) throw new Error("No tool approval is pending")
+        if (pending.request.id !== approvalId) {
+            throw new Error(
+                `Tool approval ID mismatch: expected "${pending.request.id}", received "${approvalId}"`,
+            )
+        }
+        assertToolApprovalDecision(pending.request, decision)
+        this.resolveToolApprovalRequest(pending, decision)
     }
 
     private enqueueQueuedMessage(
@@ -216,6 +245,7 @@ export class Agent {
             activeRunId: undefined,
             streamingMessage: undefined,
             pendingToolCallIds: new Set(),
+            pendingToolApproval: undefined,
             errorMessage: undefined,
             lastRunReason: undefined,
         }
@@ -230,6 +260,7 @@ export class Agent {
             messages: structuredClone(messages),
             streamingMessage: undefined,
             pendingToolCallIds: new Set(),
+            pendingToolApproval: undefined,
         }
     }
 
@@ -261,6 +292,21 @@ export class Agent {
                 tools: this.stateValue.tools,
                 signal: activeRun.abortController.signal,
                 emit: (event) => this.processEvent(event, activeRun),
+                requestApproval: (draft, approvalContext) => {
+                    if (
+                        approvalContext.sessionId !== this.stateValue.sessionId
+                        || approvalContext.runId !== activeRun.runId
+                    ) {
+                        throw new Error(
+                            "Tool approval context does not match the active run",
+                        )
+                    }
+                    return this.requestToolApproval(
+                        draft,
+                        approvalContext.toolCallId,
+                        activeRun,
+                    )
+                },
                 hasSteeringMessages: () =>
                     this.hasSteeringMessages(activeRun),
                 takeSteeringMessage: () =>
@@ -287,6 +333,7 @@ export class Agent {
                 activeRun.rejectAccepted(error)
             }
         } finally {
+            this.abortPendingToolApproval(activeRun)
             if (!activeRun.acceptedCompleted) {
                 const error = failed
                     ? failure
@@ -311,6 +358,7 @@ export class Agent {
                     activeRunId: undefined,
                     streamingMessage: undefined,
                     pendingToolCallIds: new Set(),
+                    pendingToolApproval: undefined,
                     errorMessage,
                     lastRunReason: reason,
                 }
@@ -338,6 +386,7 @@ export class Agent {
             if (abort) {
                 activeRun.acceptingQueuedInput = false
                 activeRun.abortController.abort("Buli interaction was aborted")
+                this.abortPendingToolApproval(activeRun)
             }
             try {
                 await activeRun.settled
@@ -421,6 +470,96 @@ export class Agent {
         if (this.activeRun === activeRun) activeRun.acceptingQueuedInput = false
     }
 
+    private requestToolApproval(
+        draft: TToolApprovalDraft,
+        toolCallId: string,
+        activeRun: IActiveAgentRun,
+    ): Promise<TToolApprovalDecision> {
+        if (this.activeRun !== activeRun) {
+            return Promise.reject(new Error("Agent run is no longer active"))
+        }
+        if (activeRun.abortController.signal.aborted) {
+            return Promise.reject(new Error("Buli interaction was aborted"))
+        }
+        if (this.pendingToolApproval) {
+            return Promise.reject(new Error(
+                `Tool approval already pending: ${this.pendingToolApproval.request.id}`,
+            ))
+        }
+
+        const request = createToolApprovalRequest(
+            draft,
+            this.generateToolApprovalId(),
+            this.stateValue.sessionId,
+            activeRun.runId,
+            toolCallId,
+        )
+        const deferred = Promise.withResolvers<TToolApprovalDecision>()
+        void deferred.promise.catch(() => {})
+        const pending: IPendingToolApproval = {
+            activeRun,
+            request,
+            resolve: deferred.resolve,
+            reject: deferred.reject,
+        }
+        this.pendingToolApproval = pending
+        this.publishEphemeralEvent({
+            type: "tool_approval_requested",
+            runId: activeRun.runId,
+            request,
+        }, activeRun)
+        return deferred.promise
+    }
+
+    private abortPendingToolApproval(activeRun: IActiveAgentRun): void {
+        const pending = this.pendingToolApproval
+        if (pending?.activeRun !== activeRun) return
+
+        this.pendingToolApproval = undefined
+        this.publishEphemeralEvent({
+            type: "tool_approval_resolved",
+            runId: activeRun.runId,
+            approvalId: pending.request.id,
+            decision: undefined,
+        }, activeRun)
+        pending.reject(new Error(abortMessage(activeRun.abortController.signal)))
+    }
+
+    private generateToolApprovalId(): string {
+        const base = this.generateId()
+        let id = base
+        let suffix = 1
+        while (this.issuedToolApprovalIds.has(id)) {
+            id = `${base}-${suffix}`
+            suffix += 1
+        }
+        this.issuedToolApprovalIds.add(id)
+        return id
+    }
+
+    private resolveToolApprovalRequest(
+        pending: IPendingToolApproval,
+        decision: TToolApprovalDecision,
+    ): void {
+        if (this.pendingToolApproval !== pending) return
+        this.pendingToolApproval = undefined
+        this.publishEphemeralEvent({
+            type: "tool_approval_resolved",
+            runId: pending.activeRun.runId,
+            approvalId: pending.request.id,
+            decision,
+        }, pending.activeRun)
+        pending.resolve(decision)
+    }
+
+    private publishEphemeralEvent(
+        event: IAgentEvent,
+        activeRun: IActiveAgentRun,
+    ): void {
+        this.reduce(event)
+        this.notifyListeners(event, activeRun.abortController.signal)
+    }
+
     private reduce(event: IAgentEvent): void {
         switch (event.type) {
             case "agent_start":
@@ -460,6 +599,22 @@ export class Agent {
                 this.stateValue = { ...this.stateValue, pendingToolCallIds }
                 return
             }
+            case "tool_approval_requested":
+                this.stateValue = Object.freeze({
+                    ...this.stateValue,
+                    pendingToolApproval: event.request,
+                })
+                return
+            case "tool_approval_resolved":
+                if (
+                    this.stateValue.pendingToolApproval?.id
+                    !== event.approvalId
+                ) return
+                this.stateValue = {
+                    ...this.stateValue,
+                    pendingToolApproval: undefined,
+                }
+                return
             case "turn_end":
                 this.stateValue = {
                     ...this.stateValue,
@@ -498,4 +653,72 @@ export class Agent {
 
 function toErrorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error)
+}
+
+function abortMessage(signal: AbortSignal): string {
+    if (signal.reason instanceof Error) return signal.reason.message
+    if (typeof signal.reason === "string") return signal.reason
+    return signal.aborted
+        ? "Buli interaction was aborted"
+        : "Tool approval was cancelled before receiving a decision"
+}
+
+function createToolApprovalRequest(
+    draft: TToolApprovalDraft,
+    id: string,
+    sessionId: string,
+    runId: string,
+    toolCallId: string,
+): TToolApprovalRequest {
+    const identity = { id, sessionId, runId, toolCallId }
+    let request: TToolApprovalRequest
+    if (draft.kind === "patch") {
+        request = {
+            ...identity,
+            kind: "patch",
+            title: draft.title,
+            explanation: draft.explanation,
+            diff: draft.diff,
+            paths: [...draft.paths],
+        }
+    } else if (draft.kind === "command") {
+        request = {
+            ...identity,
+            kind: "command",
+            title: draft.title,
+            explanation: draft.explanation,
+            command: draft.command,
+            cwd: draft.cwd,
+            purpose: draft.purpose,
+            expectedOutcome: draft.expectedOutcome,
+            sideEffects: draft.sideEffects,
+            timeoutSeconds: draft.timeoutSeconds,
+        }
+    } else {
+        throw new Error("Unknown tool approval kind")
+    }
+    deepFreeze(request)
+    return request
+}
+
+function assertToolApprovalDecision(
+    request: TToolApprovalRequest,
+    decision: TToolApprovalDecision,
+): void {
+    if (
+        decision !== "approve"
+        && decision !== "reject"
+        && decision !== "copy"
+    ) {
+        throw new Error(`Invalid tool approval decision: ${String(decision)}`)
+    }
+    if (request.kind === "patch" && decision === "copy") {
+        throw new Error('Decision "copy" is not allowed for patch approval')
+    }
+}
+
+function deepFreeze(value: unknown): void {
+    if (value === null || typeof value !== "object") return
+    for (const child of Object.values(value)) deepFreeze(child)
+    Object.freeze(value)
 }

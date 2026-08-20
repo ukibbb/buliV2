@@ -2,6 +2,7 @@ import type { ReactNode } from "react"
 
 import { useSession } from "@/tui/app/application-context"
 import { Chat } from "@/tui/components/Chat"
+import { ToolApprovalPanel } from "@/tui/components/ToolApprovalPanel"
 import { Transcript } from "@/tui/components/Transcript"
 
 interface ISessionScreenProps {
@@ -18,24 +19,31 @@ export function SessionScreen(props: ISessionScreenProps): ReactNode {
       minHeight={0}
       flexDirection="column"
     >
-      <scrollbox
-        width="100%"
-        minHeight={0}
-        flexGrow={1}
-        stickyScroll
-        stickyStart="bottom"
-      >
-        <Transcript
-          messages={session.messages}
-          {...(session.streamingMessage
-            ? { streamingMessage: session.streamingMessage }
-            : {})}
-          pendingToolCallIds={session.pendingToolCallIds}
-        />
-      </scrollbox>
+      {session.pendingToolApproval ? (
+        <ToolApprovalPanel request={session.pendingToolApproval} />
+      ) : (
+        <scrollbox
+          width="100%"
+          minHeight={0}
+          flexGrow={1}
+          stickyScroll
+          stickyStart="bottom"
+        >
+          <Transcript
+            messages={session.messages}
+            {...(session.streamingMessage
+              ? { streamingMessage: session.streamingMessage }
+              : {})}
+            pendingToolCallIds={session.pendingToolCallIds}
+          />
+        </scrollbox>
+      )}
 
       <Chat
         isRunning={session.isRunning}
+        {...(session.pendingToolApproval
+          ? { pendingToolApproval: session.pendingToolApproval }
+          : {})}
         pendingSteeringMessages={session.pendingSteeringMessages}
         pendingFollowUpMessages={session.pendingFollowUpMessages}
         {...(session.lastRunReason

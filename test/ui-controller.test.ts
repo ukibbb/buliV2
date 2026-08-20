@@ -8,7 +8,12 @@ import type {
   IBuliQueuedMessages,
 } from "@/application/contracts"
 import type { TReasoningEffort } from "@/agent/agent-types"
-import type { ISessionInfo, ISessionSnapshot } from "@/domain"
+import type {
+  ISessionInfo,
+  ISessionSnapshot,
+  TToolApprovalDecision,
+  TToolApprovalRequest,
+} from "@/domain"
 import { BuliUiController } from "@/tui/app/ui-controller"
 
 const APPLICATION_SNAPSHOT: IBuliApplicationSnapshot = {
@@ -43,6 +48,8 @@ interface IApplicationSpyOptions {
   readonly followUp?: (sessionId: string, text: string) => void
   readonly clearQueuedMessages?: (sessionId: string) => IBuliQueuedMessages
   readonly compactSession?: IBuliApplication["compactSession"]
+  readonly pendingToolApprovals?: Readonly<Record<string, TToolApprovalRequest>>
+  readonly resolveToolApproval?: IBuliApplication["resolveToolApproval"]
 }
 
 function applicationSpy(options: IApplicationSpyOptions = {}) {
@@ -57,6 +64,11 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
   const followUps: Array<{ sessionId: string; text: string }> = []
   const clearedQueues: string[] = []
   const compacted: string[] = []
+  const resolvedApprovals: Array<{
+    sessionId: string
+    approvalId: string
+    decision: TToolApprovalDecision
+  }> = []
   let createdCount = 0
   let runCount = 0
 
@@ -67,7 +79,10 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
   const sources = new Map<string, ReturnType<typeof sessionSource>>(
     [...infos.keys()].map((sessionId) => [
       sessionId,
-      sessionSource(sessionId === options.runningSessionId),
+      sessionSource(
+        sessionId === options.runningSessionId,
+        options.pendingToolApprovals?.[sessionId],
+      ),
     ]),
   )
 
@@ -130,6 +145,10 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
         followUp: [],
       }
     },
+    resolveToolApproval: (sessionId, approvalId, decision) => {
+      options.resolveToolApproval?.(sessionId, approvalId, decision)
+      resolvedApprovals.push({ sessionId, approvalId, decision })
+    },
     clearSession: (sessionId) => {
       cleared.push(sessionId)
     },
@@ -156,6 +175,7 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
     followUps,
     clearedQueues,
     compacted,
+    resolvedApprovals,
   }
 }
 
@@ -382,6 +402,88 @@ test("retains input when a finishing run rejects steering", async () => {
   expect(controller.getSnapshot()).toMatchObject({
     input: "Late steering",
     inputError: "Agent is not accepting steering messages",
+  })
+})
+
+test("resolves only the active session approval once and preserves its draft", () => {
+  let controller: BuliUiController
+  const approval = commandApproval("session-2", "approval-2")
+  const spy = applicationSpy({
+    pendingToolApprovals: { "session-2": approval },
+    resolveToolApproval: (_sessionId, approvalId, decision) => {
+      controller.resolveToolApproval(approvalId, decision)
+    },
+  })
+  controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-2")
+  controller.updateInput("Keep this draft")
+  let validatedUiEffects = 0
+
+  controller.resolveToolApproval(approval.id, "copy", () => {
+    validatedUiEffects += 1
+    return true
+  })
+
+  expect(validatedUiEffects).toBe(1)
+  expect(spy.resolvedApprovals).toEqual([{
+    sessionId: "session-2",
+    approvalId: "approval-2",
+    decision: "copy",
+  }])
+  expect(controller.getSnapshot()).toMatchObject({
+    input: "Keep this draft",
+    inputError: null,
+  })
+})
+
+test("rejects a stale approval ID without targeting another session", () => {
+  const firstApproval = commandApproval("session-1", "approval-1")
+  const secondApproval = commandApproval("session-2", "approval-2")
+  const spy = applicationSpy({
+    pendingToolApprovals: {
+      "session-1": firstApproval,
+      "session-2": secondApproval,
+    },
+  })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-2")
+  controller.updateInput("Unsent draft")
+
+  let staleUiEffects = 0
+  controller.resolveToolApproval(firstApproval.id, "copy", () => {
+    staleUiEffects += 1
+    return true
+  })
+
+  expect(staleUiEffects).toBe(0)
+  expect(spy.resolvedApprovals).toEqual([])
+  expect(controller.getSnapshot()).toMatchObject({
+    input: "Unsent draft",
+    inputError:
+      'Tool approval ID mismatch: expected "approval-2", received "approval-1"',
+  })
+})
+
+test("surfaces approval resolution errors without changing the pending request", () => {
+  const approval = commandApproval("session-1", "approval-1")
+  const spy = applicationSpy({
+    pendingToolApprovals: { "session-1": approval },
+    resolveToolApproval: () => {
+      throw new Error("Approval bridge failed")
+    },
+  })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+  controller.updateInput("Preserved after error")
+
+  controller.resolveToolApproval(approval.id, "reject")
+
+  expect(spy.resolvedApprovals).toEqual([])
+  expect(spy.application.openSession("session-1").getSnapshot().pendingToolApproval)
+    .toBe(approval)
+  expect(controller.getSnapshot()).toMatchObject({
+    input: "Preserved after error",
+    inputError: "Approval bridge failed",
   })
 })
 
@@ -707,6 +809,16 @@ test("empty input preserves a picker while typed input closes it", async () => {
   expect(controller.getSnapshot().menu).toBeNull()
 })
 
+test("dismissMenu removes an open menu before approval details are shown", () => {
+  const spy = applicationSpy()
+  const controller = new BuliUiController({ application: spy.application })
+  controller.updateInput("/")
+
+  expect(controller.getSnapshot().menu).not.toBeNull()
+  controller.dismissMenu()
+  expect(controller.getSnapshot().menu).toBeNull()
+})
+
 function sessionInfo(id: string, title: string, updatedAt: number): ISessionInfo {
   return {
     id,
@@ -717,16 +829,41 @@ function sessionInfo(id: string, title: string, updatedAt: number): ISessionInfo
   }
 }
 
-function sessionSource(isRunning: boolean) {
+function sessionSource(
+  isRunning: boolean,
+  pendingToolApproval?: TToolApprovalRequest,
+) {
   const snapshot: ISessionSnapshot = {
     messages: [],
     pendingSteeringMessages: [],
     pendingFollowUpMessages: [],
     isRunning,
     pendingToolCallIds: [],
+    ...(pendingToolApproval ? { pendingToolApproval } : {}),
   }
   return {
     subscribe: () => () => undefined,
     getSnapshot: () => snapshot,
+  }
+}
+
+function commandApproval(
+  sessionId: string,
+  id: string,
+): TToolApprovalRequest {
+  return {
+    kind: "command",
+    id,
+    sessionId,
+    runId: "run-1",
+    toolCallId: "tool-call-1",
+    title: "Run tests",
+    purpose: "Verify the changes",
+    command: "bun test",
+    explanation: "Run Bun's test command.",
+    cwd: "/workspace",
+    expectedOutcome: "Tests pass",
+    sideEffects: "May write test caches",
+    timeoutSeconds: 30,
   }
 }

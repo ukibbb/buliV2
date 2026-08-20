@@ -17,6 +17,7 @@ import type {
   IAssistantMessage,
   ICompactionCheckpoint,
   ISessionInfo,
+  IToolResultMessage,
   TAgentMessage,
   IUserMessage,
 } from "@/domain"
@@ -82,6 +83,51 @@ test("stages cloned metadata and writes exact version 2 envelopes on first appen
       updatedAt: 130,
     })
     expect(await readFile(filePath, "utf8")).toBe(contents)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test("round-trips old and new tool result records without a version migration", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-outcomes-"))
+  const filePath = join(directory, "sessions.jsonl")
+
+  try {
+    const legacy = toolResultMessage("Legacy result")
+    const structured: IToolResultMessage = {
+      ...toolResultMessage("Applied result"),
+      id: "structured-result",
+      createdAt: 3,
+      outcome: "manual",
+      summary: "Run the copied command manually",
+    }
+    const unknownEffects: IToolResultMessage = {
+      ...toolResultMessage("Execution may have changed files"),
+      id: "unknown-effects-result",
+      createdAt: 4,
+      isError: true,
+      outcome: "effects-unknown",
+      summary: "Inspect current state before retrying",
+    }
+    await writeFile(filePath, serializeRecords([
+      sessionRecord(sessionInfo()),
+      messageRecord(legacy),
+      messageRecord(structured),
+      messageRecord(unknownEffects),
+    ]), "utf8")
+
+    const restored = jsonlManager(filePath)
+    expect(restored.getMessages("session-1")).toEqual([
+      legacy,
+      structured,
+      unknownEffects,
+    ])
+    expect(await jsonlRecords(filePath)).toEqual([
+      sessionRecord(sessionInfo()),
+      messageRecord(legacy),
+      messageRecord(structured),
+      messageRecord(unknownEffects),
+    ])
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
@@ -328,6 +374,14 @@ test("rejects malformed version 2 message payloads", async () => {
         content: "Result",
         isError: false,
         createdAt: 2,
+      },
+      {
+        ...toolResultMessage("Result"),
+        outcome: "unknown",
+      },
+      {
+        ...toolResultMessage("Result"),
+        summary: 42,
       },
       { ...user, extra: true },
       {
@@ -794,5 +848,19 @@ function assistantMessage(
     content: [{ type: "text", text }],
     stopReason: options.completed ? "stop" : "pending",
     createdAt: options.createdAt ?? 2,
+  }
+}
+
+function toolResultMessage(content: string): IToolResultMessage {
+  return {
+    id: "tool-result-1",
+    sessionId: "session-1",
+    runId: "run-1",
+    role: "toolResult",
+    toolCallId: "call-1",
+    toolName: "test_tool",
+    content,
+    isError: false,
+    createdAt: 2,
   }
 }

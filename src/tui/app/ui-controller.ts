@@ -9,6 +9,7 @@ import {
     type IBuliMenuItem,
 } from "@/tui/app/commands"
 import type { TAuthenticationMode } from "@/tui/authentication/types"
+import type { TToolApprovalDecision } from "@/domain"
 
 interface IBuliMenuBase {
     // Store the index of the currently highlighted item.
@@ -65,6 +66,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     private readonly listeners = new Set<TTuiListener>()
     private inputSubmissionPending = false
     private menuActivationPending = false
+    private toolApprovalResolutionPending = false
     private disposed = false
 
     private snapshot: IBuliUiSnapshot = {
@@ -347,6 +349,60 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
             this.setInputError(error)
             return "retained"
         }
+    }
+
+    readonly resolveToolApproval = (
+        approvalId: string,
+        decision: TToolApprovalDecision,
+        beforeResolve?: () => boolean,
+    ): void => {
+        if (this.disposed || this.toolApprovalResolutionPending) return
+        this.toolApprovalResolutionPending = true
+        try {
+            const sessionId = this.activeSessionId()
+            if (!sessionId) {
+                throw new Error("Tool approval requires an active session")
+            }
+
+            const request = this.application
+                .openSession(sessionId)
+                .getSnapshot()
+                .pendingToolApproval
+            if (!request) throw new Error("No tool approval is pending")
+            if (request.id !== approvalId) {
+                throw new Error(
+                    `Tool approval ID mismatch: expected "${request.id}", received "${approvalId}"`,
+                )
+            }
+            if (request.sessionId !== sessionId) {
+                throw new Error(
+                    `Tool approval session mismatch: expected "${sessionId}", received "${request.sessionId}"`,
+                )
+            }
+            if (request.kind === "patch" && decision === "copy") {
+                throw new Error('Decision "copy" is not allowed for patch approval')
+            }
+            if (beforeResolve && !beforeResolve()) return
+
+            this.application.resolveToolApproval(sessionId, approvalId, decision)
+            if (this.snapshot.inputError !== null) {
+                this.setSnapshot({ ...this.snapshot, inputError: null })
+            }
+        } catch (error) {
+            this.setInputError(error)
+        } finally {
+            this.toolApprovalResolutionPending = false
+        }
+    }
+
+    readonly setExternalUiError = (error: unknown): void => {
+        if (this.disposed) return
+        this.setInputError(error)
+    }
+
+    readonly dismissMenu = (): void => {
+        if (this.disposed || this.snapshot.menu === null) return
+        this.setMenu(null)
     }
 
     readonly escape = (): void => {

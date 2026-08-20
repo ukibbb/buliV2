@@ -5,10 +5,10 @@ export type {
 } from "@/application/startup"
 
 export type {
-    IBuliAgentInfo,
+    IBuliAgentDisplayInfo,
     IBuliApplication,
     IBuliApplicationSnapshot,
-    IBuliModelInfo,
+    IBuliModelDisplayInfo,
     IBuliModelSelection,
     IBuliPromptInput,
     IBuliPromptSubmission,

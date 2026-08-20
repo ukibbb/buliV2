@@ -134,6 +134,56 @@ test("requires session metadata and rejects invalid durable messages", () => {
   } as unknown as TAgentMessage)).toThrow("Invalid tool result message")
 })
 
+test("accepts legacy and structured tool results and validates optional fields", () => {
+  const manager = new InMemorySessionManager()
+  manager.createSession(sessionInfo())
+  const legacy = toolResultMessage("Legacy result")
+  manager.appendMessage(legacy)
+
+  const outcomes = [
+    "completed",
+    "rejected",
+    "manual",
+    "failed",
+    "committed-after-abort",
+    "effects-unknown",
+  ] as const
+  const structured = outcomes.map((outcome, index): IToolResultMessage => ({
+    ...toolResultMessage(`Structured ${outcome}`),
+    id: `structured-${index}`,
+    isError: outcome === "failed"
+      || outcome === "committed-after-abort"
+      || outcome === "effects-unknown",
+    outcome,
+    summary: `Summary ${outcome}`,
+  }))
+  structured.forEach(manager.appendMessage)
+
+  expect(manager.getMessages("session-1")).toEqual([legacy, ...structured])
+  expect(() => manager.appendMessage({
+    ...toolResultMessage("Invalid outcome"),
+    id: "invalid-outcome",
+    outcome: "unknown",
+  } as unknown as TAgentMessage)).toThrow("Invalid tool result message")
+  expect(() => manager.appendMessage({
+    ...toolResultMessage("Invalid summary"),
+    id: "invalid-summary",
+    summary: 42,
+  } as unknown as TAgentMessage)).toThrow("Invalid tool result message")
+  expect(() => manager.appendMessage({
+    ...toolResultMessage("Contradictory failed result"),
+    id: "contradictory-failed",
+    outcome: "failed",
+    isError: false,
+  } as unknown as TAgentMessage)).toThrow("Invalid tool result message")
+  expect(() => manager.appendMessage({
+    ...toolResultMessage("Contradictory completed result"),
+    id: "contradictory-completed",
+    outcome: "completed",
+    isError: true,
+  } as unknown as TAgentMessage)).toThrow("Invalid tool result message")
+})
+
 test("rejects sparse, cyclic, and non-JSON values nested in tool input", () => {
   const manager = new InMemorySessionManager()
   manager.createSession(sessionInfo())

@@ -12,6 +12,7 @@ import type {
     ICompactionCheckpoint,
     ISessionSnapshot,
     TAgentMessage,
+    TToolApprovalDecision,
 } from "@/domain"
 import { compactSessionMessages } from "@/session/session-compactor"
 import {
@@ -197,6 +198,14 @@ export class AgentSession {
         }
     }
 
+    resolveToolApproval(
+        approvalId: string,
+        decision: TToolApprovalDecision,
+    ): void {
+        if (this.disposed) throw new Error("AgentSession is disposed")
+        this.agent.resolveToolApproval(approvalId, decision)
+    }
+
     async abort(): Promise<void> {
         if (this.disposed) return
         const compactionController = this.compactionController
@@ -371,6 +380,9 @@ export class AgentSession {
             pendingFollowUpMessages: this.agent.pendingFollowUpMessages,
             ...(state.streamingMessage
                 ? { streamingMessage: state.streamingMessage }
+                : {}),
+            ...(state.pendingToolApproval
+                ? { pendingToolApproval: state.pendingToolApproval }
                 : {}),
             isRunning: state.isRunning,
             ...(state.activeRunId ? { activeRunId: state.activeRunId } : {}),

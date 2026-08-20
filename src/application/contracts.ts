@@ -3,6 +3,7 @@ import type {
     ICompactionCheckpoint,
     ISessionInfo,
     ISessionSnapshot,
+    TToolApprovalDecision,
 } from "@/domain"
 
 export interface ISnapshotSource<Snapshot> {
@@ -27,7 +28,7 @@ export interface IBuliQueuedMessages {
     readonly followUp: readonly string[]
 }
 
-export interface IBuliAgentInfo {
+export interface IBuliAgentDisplayInfo {
     readonly id: string
     readonly name: string
 }
@@ -39,16 +40,16 @@ export interface IBuliModelSelection {
 }
 
 // bezpieczne dane dla ui i pickerow
-export interface IBuliModelInfo {
+export interface IBuliModelDisplayInfo {
     readonly id: string
     readonly name: string
     readonly reasoningEfforts: readonly TReasoningEffort[]
 }
 
 export interface IBuliApplicationSnapshot {
-    readonly agents: readonly IBuliAgentInfo[]
+    readonly agents: readonly IBuliAgentDisplayInfo[]
     readonly defaultAgentId: string
-    readonly models: readonly IBuliModelInfo[]
+    readonly models: readonly IBuliModelDisplayInfo[]
     readonly selection: IBuliModelSelection
 }
 
@@ -71,6 +72,11 @@ export interface IBuliApplication
     readonly steer: (sessionId: string, text: string) => void
     readonly followUp: (sessionId: string, text: string) => void
     readonly clearQueuedMessages: (sessionId: string) => IBuliQueuedMessages
+    readonly resolveToolApproval: (
+        sessionId: string,
+        approvalId: string,
+        decision: TToolApprovalDecision,
+    ) => void
     readonly clearSession: (sessionId: string) => void
     readonly compactSession: (
         sessionId: string,

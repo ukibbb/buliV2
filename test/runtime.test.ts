@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import type { IBuliPromptInput } from "@/application/contracts"
 import {
   BuliApplicationRuntime,
-  type IBuliAgentRegistration,
+  type IBuliAgentRuntimeConfig,
 } from "@/application/runtime"
 import type {
   IAgentModel,
@@ -22,7 +22,7 @@ const model: IAgentModel = {
   async *stream() {},
 }
 
-const TEST_AGENTS: readonly IBuliAgentRegistration[] = [{
+const TEST_AGENTS: readonly IBuliAgentRuntimeConfig[] = [{
   id: TEST_AGENT_ID,
   name: "Test Agent",
   systemPrompt: "System",
@@ -31,7 +31,7 @@ const TEST_AGENTS: readonly IBuliAgentRegistration[] = [{
 
 function runtimeWith(
   modelOverride: IAgentModel = model,
-  agents: readonly IBuliAgentRegistration[] = TEST_AGENTS,
+  agents: readonly IBuliAgentRuntimeConfig[] = TEST_AGENTS,
   manager: ISessionManager = new InMemorySessionManager(),
 ): BuliApplicationRuntime {
   let sessionNumber = 0
@@ -261,7 +261,7 @@ test("application runtime resolves fixed prompt and tools from an agent", async 
     inputSchema: {},
     execute: async () => "reviewed",
   }
-  const agents: readonly IBuliAgentRegistration[] = [
+  const agents: readonly IBuliAgentRuntimeConfig[] = [
     ...TEST_AGENTS,
     {
       id: "reviewer",
@@ -607,6 +607,93 @@ test("application runtime awaits abort and rejects it after disposal", async () 
   await expect(runtime.abort("session-1")).rejects.toThrow(
     "Buli runtime is disposed",
   )
+})
+
+test("runtime resolves approval only in the addressed session and dispose releases a waiter", async () => {
+  const firstApprovalStarted = Promise.withResolvers<void>()
+  const secondApprovalStarted = Promise.withResolvers<void>()
+  const decisions: string[] = []
+  let approvalCount = 0
+  const tool: IAgentTool = {
+    name: "run_command",
+    description: "Run a command",
+    inputSchema: { type: "object", additionalProperties: false },
+    async execute(_input, context) {
+      if (!context.requestApproval) throw new Error("Missing approval bridge")
+      const decisionTask = context.requestApproval({
+        kind: "command",
+        title: "Run tests",
+        explanation: "Verify the workspace",
+        command: "bun test",
+        cwd: WORKSPACE_ROOT,
+        purpose: "Check the implementation",
+        expectedOutcome: "Tests pass",
+        sideEffects: "Writes test caches",
+        timeoutSeconds: 30,
+      })
+      approvalCount += 1
+      if (approvalCount === 1) firstApprovalStarted.resolve()
+      else secondApprovalStarted.resolve()
+      const decision = await decisionTask
+      decisions.push(decision)
+      return decision
+    },
+  }
+  const continuedRuns = new Set<string>()
+  const runtime = runtimeWith({
+    async *stream(request) {
+      if (!continuedRuns.has(request.runId)) {
+        continuedRuns.add(request.runId)
+        yield {
+          type: "tool-call",
+          toolCallId: `command-${request.runId}`,
+          toolName: tool.name,
+          input: {},
+        }
+        yield { type: "finish", reason: "tool-calls" }
+        return
+      }
+      yield { type: "finish", reason: "stop" }
+    },
+  }, [{
+    id: TEST_AGENT_ID,
+    name: "Test Agent",
+    systemPrompt: "System",
+    tools: [tool],
+  }])
+  const firstView = createSession(runtime)
+  const secondView = createSession(runtime)
+  const firstSubmission = runtime.submitPrompt({
+    sessionId: "session-1",
+    text: "Run tests",
+  })
+  await firstApprovalStarted.promise
+  const firstRequest = firstView.getSnapshot().pendingToolApproval
+  if (!firstRequest) throw new Error("Expected command approval")
+
+  expect(() => runtime.resolveToolApproval(
+    "session-2",
+    firstRequest.id,
+    "approve",
+  )).toThrow("No tool approval is pending")
+  expect(firstView.getSnapshot().pendingToolApproval?.id).toBe(firstRequest.id)
+  expect(secondView.getSnapshot().pendingToolApproval).toBeUndefined()
+
+  runtime.resolveToolApproval("session-1", firstRequest.id, "copy")
+  await firstSubmission.settled
+  expect(decisions).toEqual(["copy"])
+
+  const secondSubmission = runtime.submitPrompt({
+    sessionId: "session-1",
+    text: "Run tests again",
+  })
+  await secondApprovalStarted.promise
+  expect(firstView.getSnapshot().pendingToolApproval).toBeDefined()
+
+  await Promise.all([runtime.dispose(), secondSubmission.settled])
+
+  expect(decisions).toEqual(["copy"])
+  expect(firstView.getSnapshot().pendingToolApproval).toBeUndefined()
 })
 
 test("clears sessions explicitly and treats slash input as prompts", async () => {

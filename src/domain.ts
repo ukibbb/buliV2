@@ -75,13 +75,67 @@ export interface IAssistantMessage extends IMessageBase {
     readonly usage?: IModelUsage
 }
 
+export type TToolExecutionOutcome =
+    | "completed"
+    | "rejected"
+    | "manual"
+    | "failed"
+    | "committed-after-abort"
+    | "effects-unknown"
+
 export interface IToolResultMessage extends IMessageBase {
     readonly role: "toolResult"
     readonly toolCallId: string
     readonly toolName: string
     readonly content: string
     readonly isError: boolean
+    readonly outcome?: TToolExecutionOutcome
+    readonly summary?: string
 }
+
+export type TToolApprovalDecision = "approve" | "reject" | "copy"
+
+interface IToolApprovalDraftBase {
+    readonly title: string
+    readonly explanation: string
+}
+
+export interface IPatchToolApprovalDraft extends IToolApprovalDraftBase {
+    readonly kind: "patch"
+    readonly diff: string
+    readonly paths: readonly string[]
+}
+
+export interface ICommandToolApprovalDraft extends IToolApprovalDraftBase {
+    readonly kind: "command"
+    readonly command: string
+    readonly cwd: string
+    readonly purpose: string
+    readonly expectedOutcome: string
+    readonly sideEffects: string
+    readonly timeoutSeconds: number
+}
+
+export type TToolApprovalDraft =
+    | IPatchToolApprovalDraft
+    | ICommandToolApprovalDraft
+
+interface IToolApprovalRequestBase {
+    readonly id: string
+    readonly sessionId: string
+    readonly runId: string
+    readonly toolCallId: string
+}
+
+export interface IPatchToolApprovalRequest
+    extends IToolApprovalRequestBase, IPatchToolApprovalDraft {}
+
+export interface ICommandToolApprovalRequest
+    extends IToolApprovalRequestBase, ICommandToolApprovalDraft {}
+
+export type TToolApprovalRequest =
+    | IPatchToolApprovalRequest
+    | ICommandToolApprovalRequest
 
 export type TAgentMessage =
     | IUserMessage
@@ -109,6 +163,7 @@ export interface ISessionSnapshot {
     readonly pendingSteeringMessages: readonly IUserMessage[]
     readonly pendingFollowUpMessages: readonly IUserMessage[]
     readonly streamingMessage?: IAssistantMessage
+    readonly pendingToolApproval?: TToolApprovalRequest
     readonly isRunning: boolean
     readonly activeRunId?: string
     readonly pendingToolCallIds: readonly string[]

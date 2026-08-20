@@ -5,6 +5,7 @@ import type {
     ISessionSnapshot,
     IToolResultMessage,
     TAgentMessage,
+    TToolExecutionOutcome,
 } from "@/domain"
 
 export interface ISessionManager {
@@ -290,6 +291,8 @@ export function assertDurableSessionMessage(
                     "toolName",
                     "content",
                     "isError",
+                    ...(value.outcome === undefined ? [] : ["outcome"]),
+                    ...(value.summary === undefined ? [] : ["summary"]),
                     "createdAt",
                 ])
                 || typeof value.toolCallId !== "string"
@@ -298,6 +301,18 @@ export function assertDurableSessionMessage(
                 || value.toolName.trim().length === 0
                 || typeof value.content !== "string"
                 || typeof value.isError !== "boolean"
+                || (
+                    value.outcome !== undefined
+                    && !isToolExecutionOutcome(value.outcome)
+                )
+                || (
+                    isToolExecutionOutcome(value.outcome)
+                    && value.isError !== isErrorOutcome(value.outcome)
+                )
+                || (
+                    value.summary !== undefined
+                    && typeof value.summary !== "string"
+                )
             ) {
                 throw new Error("Invalid tool result message")
             }
@@ -382,8 +397,10 @@ export function createInterruptedToolResults(
             role: "toolResult" as const,
             toolCallId: content.toolCallId,
             toolName: content.toolName,
-            content: "Tool execution was interrupted before a durable result was recorded.",
+            content: "A durable tool result was not recorded. The tool may have produced side effects; inspect the current state before retrying.",
             isError: true,
+            outcome: "effects-unknown" as const,
+            summary: "Tool outcome is unknown; inspect state before retrying",
             createdAt: pending.assistant.createdAt,
         }]
     })
@@ -491,6 +508,21 @@ function isNonNegativeInteger(value: unknown, allowZero: boolean): boolean {
     return typeof value === "number"
         && Number.isSafeInteger(value)
         && (allowZero ? value >= 0 : value > 0)
+}
+
+function isToolExecutionOutcome(value: unknown): value is TToolExecutionOutcome {
+    return value === "completed"
+        || value === "rejected"
+        || value === "manual"
+        || value === "failed"
+        || value === "committed-after-abort"
+        || value === "effects-unknown"
+}
+
+function isErrorOutcome(outcome: TToolExecutionOutcome): boolean {
+    return outcome === "failed"
+        || outcome === "committed-after-abort"
+        || outcome === "effects-unknown"
 }
 
 function isMessageBase(value: unknown): value is Record<string, unknown> & {

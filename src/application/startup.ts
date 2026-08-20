@@ -8,8 +8,8 @@ import type { IBuliModelSelection } from "@/application/contracts"
 import type { IBuliApplication } from "@/application/contracts"
 import {
     BuliApplicationRuntime,
-    type IBuliAgentRegistration,
-    type IBuliModelRegistration,
+    type IBuliAgentRuntimeConfig,
+    type IBuliModelRuntimeConfig
 } from "@/application/runtime"
 import {
     DEFAULT_OPENAI_MODEL_ID,
@@ -62,7 +62,7 @@ export async function createBuliApplication(
         const model: IAgentModel = options.model ?? new OpenAiAgentModel({
             auth: auth.openAi,
         })
-        const models: readonly IBuliModelRegistration[] = [{
+        const models: readonly IBuliModelRuntimeConfig[] = [{
             id: DEFAULT_OPENAI_MODEL_ID,
             name: "GPT-5.6 Sol",
             model,
@@ -86,10 +86,10 @@ export async function createBuliApplication(
         const tools: readonly IAgentTool[] = options.tools
             ?? createWorkspaceTools(workspaceRoot)
 
-        const agents: readonly IBuliAgentRegistration[] = [{
+        const agents: readonly IBuliAgentRuntimeConfig[] = [{
             id: BULI_AGENT_ID,
             name: "Buli",
-            systemPrompt: systemPrompt(workspaceRoot),
+            systemPrompt: systemPrompt(workspaceRoot, tools),
             tools,
         }]
 
@@ -106,17 +106,18 @@ export async function createBuliApplication(
 
         let disposePromise: Promise<void> | undefined
         let removeAbortListener: (() => void) | undefined
+
         const dispose = (
             reason: unknown = abortError("Buli application is shutting down"),
         ): Promise<void> => {
             if (disposePromise) return disposePromise
 
-            // Publikujemy Promise przed abortowaniem zależności. Listenery mogą
-            // reentrantnie wywołać dispose i muszą dostać ten sam wynik shutdownu.
             const completion = Promise.withResolvers<void>()
             disposePromise = completion.promise
+
             removeAbortListener?.()
             removeAbortListener = undefined
+
             void disposeApplicationResources(
                 applicationRuntime,
                 authentication,
@@ -128,8 +129,6 @@ export async function createBuliApplication(
             return disposePromise
         }
 
-        // Listener abort działa synchronicznie, ale dispose jest async: tutaj je zaczynamy,
-        // a cleanup Lifetime czeka później na ten sam, zapamiętany Promise dispose.
         const disposeOnAbort = (): void => {
             void dispose(options.signal.reason).catch(() => { })
         }
@@ -141,11 +140,8 @@ export async function createBuliApplication(
 
         return { runtime: applicationRuntime, authentication, dispose }
     } catch (startupError) {
-        // allSettled zawsze próbuje obu cleanupów. Gdy rollback też zawiedzie,
-        // AggregateError zachowuje błąd startupu jako pierwszy i nie ukrywa reszty.
         const rollbackResults = await Promise.allSettled([
-            // Runtime posiada manager po udanej konstrukcji; wcześniej startup
-            // zwalnia go bezpośrednio.
+
             runtime?.dispose() ?? manager?.dispose?.(),
             authentication.dispose(startupError),
         ])
@@ -167,9 +163,6 @@ async function disposeApplicationResources(
     authentication: IAuthenticationService,
     reason: unknown,
 ): Promise<void> {
-    // Oba cleanupy zaczynamy razem: auth przerywa request modelu, a runtime
-    // przerywa sesje, które ten auth pożyczają. allSettled nie pomija drugiego
-    // zasobu, gdy pierwszy cleanup zawiedzie.
     const results = await Promise.allSettled([
         runtime.dispose(),
         authentication.dispose(reason),

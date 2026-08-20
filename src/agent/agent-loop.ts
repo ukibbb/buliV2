@@ -10,6 +10,8 @@ import type {
     IAgentToolDescriptor,
     TAgentRunEndReason,
     TReasoningEffort,
+    TToolApprovalDecision,
+    TToolApprovalDraft,
 } from "@/agent/agent-types"
 import type {
     IAssistantMessage,
@@ -18,9 +20,14 @@ import type {
     IToolResultMessage,
     IUserMessage,
     TAgentMessage,
+    TToolExecutionOutcome,
 } from "@/domain"
 
 const DEFAULT_MAX_PROVIDER_ITERATIONS = 5
+const COMMITTED_AFTER_ABORT_SUMMARY =
+    "WARNING: Workspace changes were committed despite cancellation."
+const SIDE_EFFECTS_UNKNOWN_SUMMARY =
+    "WARNING: Tool side effects are unknown; inspect current state before retrying."
 
 interface IRunAgentLoopOptions {
     readonly sessionId: string
@@ -35,6 +42,15 @@ interface IRunAgentLoopOptions {
     readonly reasoningEffort: TReasoningEffort
     readonly signal: AbortSignal
     readonly emit: (event: IAgentEvent) => void | Promise<void>
+    readonly requestApproval?: (
+        draft: TToolApprovalDraft,
+        context: {
+            readonly sessionId: string
+            readonly runId: string
+            readonly toolCallId: string
+            readonly signal: AbortSignal
+        },
+    ) => Promise<TToolApprovalDecision>
     readonly hasSteeringMessages?: () => boolean
     readonly takeSteeringMessage?: () => IUserMessage | undefined
     readonly hasFollowUpMessages?: () => boolean
@@ -338,6 +354,8 @@ async function executeToolCall(
 ): Promise<IToolResultMessage> {
     let content: string
     let isError: boolean
+    let outcome: TToolExecutionOutcome | undefined
+    let summary: string | undefined
     const tool = toolsByName.get(toolCall.toolName)
 
     if (options.signal.aborted) {
@@ -348,6 +366,8 @@ async function executeToolCall(
         isError = true
     } else {
         let acceptingProgress = true
+        let acceptingApprovals = true
+        let pendingApprovalTask: Promise<TToolApprovalDecision> | undefined
         let progressTask: Promise<void> = Promise.resolve()
         const reportProgress = (progress: string): void => {
             if (!acceptingProgress) return
@@ -363,28 +383,98 @@ async function executeToolCall(
             }))
             void progressTask.catch(() => {})
         }
+        const requestApproval = (
+            draft: TToolApprovalDraft,
+        ): Promise<TToolApprovalDecision> => {
+            if (!acceptingApprovals) {
+                return Promise.reject(new Error(
+                    `Tool "${tool.name}" is no longer accepting approval requests`,
+                ))
+            }
+            if (pendingApprovalTask) {
+                return Promise.reject(new Error(
+                    `Tool "${tool.name}" already has a pending approval request`,
+                ))
+            }
+            if (!options.requestApproval) {
+                return Promise.reject(new Error(
+                    "Tool approval is not available in this agent loop",
+                ))
+            }
+
+            let task: Promise<TToolApprovalDecision>
+            try {
+                options.signal.throwIfAborted()
+                task = Promise.resolve(options.requestApproval(
+                    structuredClone(draft),
+                    {
+                        sessionId: options.sessionId,
+                        runId: options.runId,
+                        toolCallId: toolCall.toolCallId,
+                        signal: options.signal,
+                    },
+                ))
+            } catch (error) {
+                return Promise.reject(error)
+            }
+
+            pendingApprovalTask = task
+            void task.then(
+                () => {
+                    if (pendingApprovalTask === task) {
+                        pendingApprovalTask = undefined
+                    }
+                },
+                () => {
+                    if (pendingApprovalTask === task) {
+                        pendingApprovalTask = undefined
+                    }
+                },
+            )
+            return task
+        }
 
         try {
             const input = structuredClone(toolCall.input)
             assertToolInput(tool, input)
-            content = await tool.execute(input, {
-                toolCallId: toolCall.toolCallId,
-                runId: options.runId,
-                signal: options.signal,
-                reportProgress,
-            })
-            if (typeof content !== "string") {
-                throw new TypeError(`Tool "${tool.name}" must return a string`)
-            }
-            options.signal.throwIfAborted()
-            isError = false
+            const executionResult = normalizeToolExecutionResult(
+                tool.name,
+                await tool.execute(input, {
+                    toolCallId: toolCall.toolCallId,
+                    runId: options.runId,
+                    signal: options.signal,
+                    reportProgress,
+                    requestApproval,
+                }),
+            )
+            content = executionResult.content
+            outcome = executionResult.outcome
+            summary = executionResult.summary
+            isError = outcome === "failed"
+                || outcome === "committed-after-abort"
+                || outcome === "effects-unknown"
         } catch (error) {
-            content = options.signal.aborted
-                ? abortReason(options.signal)
-                : errorMessage(error)
+            if (options.signal.aborted && isCommittedError(error)) {
+                content = errorMessage(error)
+                outcome = "committed-after-abort"
+                summary = COMMITTED_AFTER_ABORT_SUMMARY
+            } else if (isUnknownSideEffectsError(error)) {
+                content = errorMessage(error)
+                outcome = "effects-unknown"
+                summary = SIDE_EFFECTS_UNKNOWN_SUMMARY
+            } else {
+                content = options.signal.aborted
+                    ? abortReason(options.signal)
+                    : errorMessage(error)
+                outcome = undefined
+                summary = undefined
+            }
             isError = true
         } finally {
             acceptingProgress = false
+            acceptingApprovals = false
+            const approvalTask = pendingApprovalTask
+            if (approvalTask) await approvalTask.catch(() => {})
         }
         await progressTask
     }
@@ -392,6 +482,7 @@ async function executeToolCall(
     // Limit jest stosowany centralnie, więc obejmuje także custom tools i błędy.
     // Do modelu, eventu końcowego i persistence trafia dokładnie ta sama treść.
     content = truncateToolOutput(content)
+    if (summary !== undefined) summary = truncateToolOutput(summary)
 
     return {
         id: generateId(),
@@ -402,8 +493,71 @@ async function executeToolCall(
         toolName: toolCall.toolName,
         content,
         isError,
+        ...(outcome === undefined ? {} : { outcome }),
+        ...(summary === undefined ? {} : { summary }),
         createdAt: now(),
     }
+}
+
+function normalizeToolExecutionResult(
+    toolName: string,
+    value: unknown,
+): {
+    readonly content: string
+    readonly outcome: TToolExecutionOutcome
+    readonly summary?: string
+} {
+    if (typeof value === "string") {
+        return { content: value, outcome: "completed" }
+    }
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        throw new TypeError(
+            `Tool "${toolName}" must return a string or structured result`,
+        )
+    }
+
+    const result = value as Record<string, unknown>
+    if (typeof result.content !== "string") {
+        throw new TypeError(`Tool "${toolName}" result content must be a string`)
+    }
+    if (
+        result.outcome !== undefined
+        && !isToolExecutionOutcome(result.outcome)
+    ) {
+        throw new TypeError(`Tool "${toolName}" result outcome is invalid`)
+    }
+    if (result.summary !== undefined && typeof result.summary !== "string") {
+        throw new TypeError(`Tool "${toolName}" result summary must be a string`)
+    }
+
+    return {
+        content: result.content,
+        outcome: result.outcome ?? "completed",
+        ...(result.summary === undefined ? {} : { summary: result.summary }),
+    }
+}
+
+function isToolExecutionOutcome(value: unknown): value is TToolExecutionOutcome {
+    return value === "completed"
+        || value === "rejected"
+        || value === "manual"
+        || value === "failed"
+        || value === "committed-after-abort"
+        || value === "effects-unknown"
+}
+
+function isCommittedError(error: unknown): boolean {
+    return error !== null
+        && typeof error === "object"
+        && "committed" in error
+        && error.committed === true
+}
+
+function isUnknownSideEffectsError(error: unknown): boolean {
+    return error !== null
+        && typeof error === "object"
+        && "sideEffectsUnknown" in error
+        && error.sideEffectsUnknown === true
 }
 
 function indexTools(tools: readonly IAgentTool[]): ReadonlyMap<string, IAgentTool> {

@@ -1,10 +1,15 @@
 import { expect, test } from "bun:test"
 
-import type { IAgentModel, IAgentModelRequest } from "@/agent/agent-types"
+import type {
+  IAgentModel,
+  IAgentModelRequest,
+  IAgentTool,
+} from "@/agent/agent-types"
 import type {
   IAssistantMessage,
   IToolResultMessage,
   IUserMessage,
+  TToolApprovalDecision,
 } from "@/domain"
 import { AgentSession } from "@/session/agent-session"
 import {
@@ -62,6 +67,100 @@ test("AgentSession restores history, persists completion barriers, and publishes
   )).toBe(true)
   expect(session.getSnapshot().isRunning).toBe(false)
   expect(notifications).toBeGreaterThan(0)
+
+  await session.dispose()
+})
+
+test("AgentSession publishes immutable approval request and resolution snapshots", async () => {
+  const manager = new InMemorySessionManager()
+  manager.createSession(sessionInfo("session-1", "test-agent", "Approval"))
+  const approvalStarted = Promise.withResolvers<void>()
+  const decisions: TToolApprovalDecision[] = []
+  const tool: IAgentTool = {
+    name: "apply_patch",
+    description: "Apply a patch",
+    inputSchema: { type: "object", additionalProperties: false },
+    async execute(_input, context) {
+      if (!context.requestApproval) throw new Error("Missing approval bridge")
+      const decisionTask = context.requestApproval({
+        kind: "patch",
+        title: "Apply changes",
+        explanation: "Update the runtime",
+        diff: "--- a/src/application/runtime.ts\n+++ b/src/application/runtime.ts",
+        paths: ["src/application/runtime.ts"],
+      })
+      approvalStarted.resolve()
+      const decision = await decisionTask
+      decisions.push(decision)
+      return decision
+    },
+  }
+  let requestCount = 0
+  const session = new AgentSession({
+    agentId: "test-agent",
+    sessionId: "session-1",
+    manager,
+    systemPrompt: "System",
+    resolveRunConfiguration: () => ({
+      model: {
+        async *stream() {
+          if (requestCount++ === 0) {
+            yield {
+              type: "tool-call",
+              toolCallId: "patch-call",
+              toolName: tool.name,
+              input: {},
+            }
+            yield { type: "finish", reason: "tool-calls" }
+            return
+          }
+          yield { type: "finish", reason: "stop" }
+        },
+      },
+      reasoningEffort: "medium",
+    }),
+    tools: [tool],
+  })
+  const approvalTransitions: Array<string | undefined> = []
+  let previousApprovalId: string | undefined
+  session.subscribe(() => {
+    const approvalId = session.getSnapshot().pendingToolApproval?.id
+    if (approvalId === previousApprovalId) return
+    previousApprovalId = approvalId
+    approvalTransitions.push(approvalId)
+  })
+
+  const run = session.prompt("Apply the patch")
+  await approvalStarted.promise
+  const waitingSnapshot = session.getSnapshot()
+  const request = waitingSnapshot.pendingToolApproval
+  if (!request || request.kind !== "patch") {
+    throw new Error("Expected pending patch approval")
+  }
+
+  expect(request).toMatchObject({
+    sessionId: "session-1",
+    runId: run.runId,
+    toolCallId: "patch-call",
+    kind: "patch",
+    paths: ["src/application/runtime.ts"],
+  })
+  expect(Object.isFrozen(waitingSnapshot)).toBe(true)
+  expect(Object.isFrozen(request)).toBe(true)
+  expect(Object.isFrozen(request.paths)).toBe(true)
+  expect(() => (request.paths as string[]).push("src/domain.ts")).toThrow()
+  expect(manager.getMessages("session-1").map((message) => message.role)).toEqual([
+    "user",
+    "assistant",
+  ])
+
+  session.resolveToolApproval(request.id, "approve")
+
+  expect(session.getSnapshot().pendingToolApproval).toBeUndefined()
+  expect(approvalTransitions).toEqual([request.id, undefined])
+  await run.settled
+  expect(decisions).toEqual(["approve"])
+  expect(session.getSnapshot()).not.toHaveProperty("pendingToolApproval")
 
   await session.dispose()
 })
@@ -408,8 +507,10 @@ test("AgentSession recovers one interrupted tool call deterministically without 
     role: "toolResult" as const,
     toolCallId: "call-read",
     toolName: "read_file",
-    content: "Tool execution was interrupted before a durable result was recorded.",
+    content: "A durable tool result was not recorded. The tool may have produced side effects; inspect the current state before retrying.",
     isError: true,
+    outcome: "effects-unknown" as const,
+    summary: "Tool outcome is unknown; inspect state before retrying",
     createdAt: 2,
   }
 
@@ -489,8 +590,10 @@ test("AgentSession recovers a toolCallId reused by a later run", async () => {
     role: "toolResult",
     toolCallId: "call-shared",
     toolName: "read_file",
-    content: "Tool execution was interrupted before a durable result was recorded.",
+    content: "A durable tool result was not recorded. The tool may have produced side effects; inspect the current state before retrying.",
     isError: true,
+    outcome: "effects-unknown",
+    summary: "Tool outcome is unknown; inspect state before retrying",
     createdAt: 5,
   })
   expect(manager.getMessages("session-1").filter((message) =>
@@ -565,8 +668,10 @@ test("AgentSession suffixes a colliding recovery ID without replacing history", 
       role: "toolResult",
       toolCallId: "call-read",
       toolName: "read_file",
-      content: "Tool execution was interrupted before a durable result was recorded.",
+      content: "A durable tool result was not recorded. The tool may have produced side effects; inspect the current state before retrying.",
       isError: true,
+      outcome: "effects-unknown",
+      summary: "Tool outcome is unknown; inspect state before retrying",
       createdAt: 2,
     },
   ])

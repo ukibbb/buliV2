@@ -4,10 +4,10 @@ import type {
     TReasoningEffort,
 } from "@/agent/agent-types"
 import type {
-    IBuliAgentInfo,
+    IBuliAgentDisplayInfo,
     IBuliApplication,
     IBuliApplicationSnapshot,
-    IBuliModelInfo,
+    IBuliModelDisplayInfo,
     IBuliModelSelection,
     IBuliPromptInput,
     IBuliPromptSubmission,
@@ -19,18 +19,20 @@ import type {
     IModelProfile,
     ISessionInfo,
     ISessionSnapshot,
+    TToolApprovalDecision,
 } from "@/domain"
 import { AgentSession } from "@/session/agent-session"
 import type { ISessionManager } from "@/session/session-manager"
 
-export interface IBuliAgentRegistration extends IBuliAgentInfo {
+type TBuliRuntimeListener = () => void
+type TBuliRuntimeSubscribe = () => void
+
+export interface IBuliAgentRuntimeConfig extends IBuliAgentDisplayInfo {
     readonly systemPrompt: string
     readonly tools: readonly IAgentTool[]
 }
 
-// register model
-// konkretny adapter modelu
-export interface IBuliModelRegistration extends IBuliModelInfo {
+export interface IBuliModelRuntimeConfig extends IBuliModelDisplayInfo {
     readonly model: IAgentModel
     readonly modelProfile?: IModelProfile
 }
@@ -38,17 +40,15 @@ export interface IBuliModelRegistration extends IBuliModelInfo {
 export interface IBuliRuntimeOptions {
     readonly workspaceRoot: string
     readonly manager: ISessionManager
-    readonly agents: readonly IBuliAgentRegistration[]
+    readonly agents: readonly IBuliAgentRuntimeConfig[]
     readonly defaultAgentId: string
     // readonly tuiControler: ITuiController
-    readonly models: readonly IBuliModelRegistration[]
+    readonly models: readonly IBuliModelRuntimeConfig[]
     readonly selection: IBuliModelSelection
     readonly now?: () => number
     readonly generateId?: () => string
 }
 
-type TBuliRuntimeListener = () => void
-type TBuliRuntimeSubscribe = () => void
 
 /** Owns and reuses one AgentSession for each requested session ID. */
 export class BuliApplicationRuntime implements IBuliApplication {
@@ -56,11 +56,12 @@ export class BuliApplicationRuntime implements IBuliApplication {
     readonly workspaceRoot: string
 
     private readonly manager: ISessionManager
-    private readonly agents: readonly IBuliAgentRegistration[]
+    private readonly agents: readonly IBuliAgentRuntimeConfig[]
     private readonly defaultAgentId: string
-    private readonly models: readonly IBuliModelRegistration[]
+    private readonly models: readonly IBuliModelRuntimeConfig[]
     private readonly now: () => number
     private readonly generateId: () => string
+
     private selection: IBuliModelSelection
 
     // What are agent sesions what is thier responsibility
@@ -170,7 +171,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
         } catch (error) {
             if (createdSession) {
                 this.sessions.delete(sessionId)
-                void session.dispose().catch(() => {})
+                void session.dispose().catch(() => { })
                 this.manager.deleteSession(sessionId)
             }
             throw error
@@ -179,12 +180,12 @@ export class BuliApplicationRuntime implements IBuliApplication {
             ? run.accepted.then(
                 () => undefined,
                 async () => {
-                    await run.settled.catch(() => {})
+                    await run.settled.catch(() => { })
                     await this.rollbackSession(sessionId, session)
                 },
             )
             : undefined
-        if (rollback) void rollback.catch(() => {})
+        if (rollback) void rollback.catch(() => { })
         const accepted = this.waitForRollback(run.accepted, rollback)
         const settled = this.waitForRollback(run.settled, rollback)
         return {
@@ -222,6 +223,18 @@ export class BuliApplicationRuntime implements IBuliApplication {
     ): ReturnType<AgentSession["clearQueuedMessages"]> => {
         if (this.disposed) throw new Error("Buli runtime is disposed")
         return this.getOrOpenAgentSession(sessionId).clearQueuedMessages()
+    }
+
+    readonly resolveToolApproval = (
+        sessionId: string,
+        approvalId: string,
+        decision: TToolApprovalDecision,
+    ): void => {
+        if (this.disposed) throw new Error("Buli runtime is disposed")
+        this.getOrOpenAgentSession(sessionId).resolveToolApproval(
+            approvalId,
+            decision,
+        )
     }
 
     readonly getSnapshot = (): IBuliApplicationSnapshot => this.snapshot
@@ -330,7 +343,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
             name: registration.name,
         }))
         const models = this.models.map(
-            (registration: IBuliModelRegistration) => Object.freeze({
+            (registration: IBuliModelRuntimeConfig) => Object.freeze({
                 id: registration.id,
                 name: registration.name,
                 reasoningEfforts: Object.freeze([
@@ -403,13 +416,13 @@ export class BuliApplicationRuntime implements IBuliApplication {
             }
             throw phaseError
         })
-        void wrapped.catch(() => {})
+        void wrapped.catch(() => { })
         return wrapped
     }
 
     private createLiveSession(
         info: ISessionInfo,
-        agent: IBuliAgentRegistration,
+        agent: IBuliAgentRuntimeConfig,
     ): AgentSession {
         return new AgentSession({
             agentId: agent.id,
@@ -435,7 +448,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
         })
     }
 
-    private resolveAgent(agentId: string): IBuliAgentRegistration {
+    private resolveAgent(agentId: string): IBuliAgentRuntimeConfig {
         const registration = this.agents.find((agent) => agent.id === agentId)
         if (!registration) throw new Error(`Unknown agent: ${agentId}`)
 
@@ -444,7 +457,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
 
     private resolveSelectedModel(
         selection: IBuliModelSelection = this.selection,
-    ): IBuliModelRegistration {
+    ): IBuliModelRuntimeConfig {
         // Użyj przekazanej selekcji albo aktualnej selekcji runtime.
         const registration = this.models.find(
             (model) => model.id === selection.modelId,

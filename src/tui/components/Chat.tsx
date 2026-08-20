@@ -6,7 +6,11 @@ import {
 import { useEffect, useRef } from "react"
 
 import { useBuliApplicationSnapshot } from "@/tui/app/application-context"
-import type { IUserMessage, TAgentRunEndReason } from "@/domain"
+import type {
+    IUserMessage,
+    TAgentRunEndReason,
+    TToolApprovalRequest,
+} from "@/domain"
 import {
     useBuliUiController,
     useBuliUiSnapshot,
@@ -27,6 +31,7 @@ interface IChatProps {
     readonly isRunning?: boolean
     readonly pendingSteeringMessages?: readonly IUserMessage[]
     readonly pendingFollowUpMessages?: readonly IUserMessage[]
+    readonly pendingToolApproval?: TToolApprovalRequest
     readonly lastRunReason?: TAgentRunEndReason
     readonly errorMessage?: string
 }
@@ -52,12 +57,17 @@ export function Chat(props: IChatProps) {
         }
     }, [ui.input])
 
+    useEffect(() => {
+        if (props.pendingToolApproval) controller.dismissMenu()
+    }, [controller, props.pendingToolApproval])
+
     const clearInput = (): void => {
         textAreaRef.current?.clear()
         controller.updateInput("")
     }
 
     const submitInput = (delivery: TBuliInputDelivery): void => {
+        if (props.pendingToolApproval) return
         const input = textAreaRef.current?.plainText ?? ""
         if (!input.trim()) return
 
@@ -82,6 +92,12 @@ export function Chat(props: IChatProps) {
     }
 
     const handleKeyDown = (key: KeyEvent): void => {
+        if (props.pendingToolApproval) {
+            key.preventDefault()
+            key.stopPropagation()
+            return
+        }
+
         const inputAction = buliKeyboardShortcuts.resolve("input", key)
         if (inputAction === "input.followUp") {
             key.preventDefault()
@@ -103,7 +119,7 @@ export function Chat(props: IChatProps) {
         if (action === "menu.activate") activateSelectedMenuItem()
     }
 
-    const menu = ui.menu
+    const menu = props.pendingToolApproval ? null : ui.menu
     const visibleMenuStart = menu
         ? Math.min(
             Math.max(menu.selectedIndex - Math.floor(MENU_MAX_ROW_COUNT / 2), 0),
@@ -114,6 +130,9 @@ export function Chat(props: IChatProps) {
         visibleMenuStart,
         visibleMenuStart + MENU_MAX_ROW_COUNT,
     ) ?? []
+    const pendingSteeringCount = props.pendingSteeringMessages?.length ?? 0
+    const pendingFollowUpCount = props.pendingFollowUpMessages?.length ?? 0
+    const pendingMessageCount = pendingSteeringCount + pendingFollowUpCount
 
     return (
         <box width="100%" flexShrink={0} flexDirection="column">
@@ -138,7 +157,7 @@ export function Chat(props: IChatProps) {
                             controller.updateInput(input)
                         }
                     }}
-                    focused
+                    focused={!props.pendingToolApproval}
                     style={{
                         keyBindings: chatTextAreaKeybindings,
                     }}
@@ -151,25 +170,29 @@ export function Chat(props: IChatProps) {
                 paddingLeft={1}
                 paddingBottom={1}
             >
-                {props.isRunning ? (
+                {props.pendingToolApproval ? (
+                    <text fg={theme.amber}>Waiting for your decision</text>
+                ) : props.isRunning ? (
                     <text fg={theme.amber}>
                         Working... Enter steer | Alt+Enter follow-up | Esc stop
                     </text>
                 ) : null}
-                {props.pendingSteeringMessages?.map((message) => (
+                {props.pendingToolApproval && pendingMessageCount > 0 ? (
+                    <text fg={theme.textMuted}>
+                        {`Queued: ${pendingSteeringCount} steering, ${pendingFollowUpCount} follow-up`}
+                    </text>
+                ) : null}
+                {!props.pendingToolApproval && props.pendingSteeringMessages?.map((message) => (
                     <text key={message.id} fg={theme.textMuted}>
                         {`Steering: ${message.content}`}
                     </text>
                 ))}
-                {props.pendingFollowUpMessages?.map((message) => (
+                {!props.pendingToolApproval && props.pendingFollowUpMessages?.map((message) => (
                     <text key={message.id} fg={theme.textMuted}>
                         {`Follow-up: ${message.content}`}
                     </text>
                 ))}
-                {(
-                    (props.pendingSteeringMessages?.length ?? 0)
-                    + (props.pendingFollowUpMessages?.length ?? 0)
-                ) > 0 ? (
+                {!props.pendingToolApproval && pendingMessageCount > 0 ? (
                     <text fg={theme.textMuted}>Esc restores queued input</text>
                 ) : null}
                 {!props.isRunning && props.lastRunReason === "aborted" ? (

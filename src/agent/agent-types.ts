@@ -5,6 +5,10 @@ import type {
     IToolResultMessage,
     TAgentMessage,
     TAgentRunEndReason,
+    TToolApprovalDecision,
+    TToolApprovalDraft,
+    TToolApprovalRequest,
+    TToolExecutionOutcome,
 } from "@/domain"
 
 
@@ -42,13 +46,22 @@ export interface IAgentToolExecutionContext {
     // Postęp jest przejściowym snapshotem dla UI. Nie trafia do trwałej historii;
     // tylko finalny wynik narzędzia staje się wiadomością `toolResult`.
     readonly reportProgress?: (progress: string) => void
+    readonly requestApproval?: (
+        draft: TToolApprovalDraft,
+    ) => Promise<TToolApprovalDecision>
+}
+
+export interface IAgentToolExecutionResult {
+    readonly content: string
+    readonly outcome?: TToolExecutionOutcome
+    readonly summary?: string
 }
 
 export interface IAgentTool extends IAgentToolDescriptor {
     readonly execute: (
         input: Record<string, unknown>,
         context: IAgentToolExecutionContext,
-    ) => Promise<string>
+    ) => Promise<string | IAgentToolExecutionResult>
 }
 
 // ?? co to jest?
@@ -167,6 +180,15 @@ type TAgentEventPayload =
         readonly result: IToolResultMessage
     }
     | {
+        readonly type: "tool_approval_requested"
+        readonly request: TToolApprovalRequest
+    }
+    | {
+        readonly type: "tool_approval_resolved"
+        readonly approvalId: string
+        readonly decision: TToolApprovalDecision | undefined
+    }
+    | {
         readonly type: "agent_settled"
         readonly reason: TAgentRunEndReason
         readonly errorMessage?: string
@@ -183,6 +205,7 @@ export interface IAgentState {
     readonly activeRunId: string | undefined
     readonly streamingMessage: IAssistantMessage | undefined
     readonly pendingToolCallIds: ReadonlySet<string>
+    readonly pendingToolApproval: TToolApprovalRequest | undefined
     readonly errorMessage: string | undefined
     readonly lastRunReason: TAgentRunEndReason | undefined
 }
@@ -207,3 +230,10 @@ export interface IAgentLoopResult {
     readonly reason: TAgentRunEndReason
     readonly messages: readonly TAgentMessage[]
 }
+
+export type {
+    TToolApprovalDecision,
+    TToolApprovalDraft,
+    TToolApprovalRequest,
+    TToolExecutionOutcome,
+} from "@/domain"

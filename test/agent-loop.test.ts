@@ -164,6 +164,7 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
     toolName: "read_file",
     content: "contents:README.md",
     isError: false,
+    outcome: "completed" as const,
     createdAt: 12,
   }
   const packageResult = {
@@ -175,6 +176,7 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
     toolName: "read_file",
     content: "contents:package.json",
     isError: false,
+    outcome: "completed" as const,
     createdAt: 13,
   }
 
@@ -263,6 +265,256 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
     content: [{ type: "text", text: "Finished" }],
     stopReason: "stop",
   })
+})
+
+test("normalizes legacy string tool results to completed", async () => {
+  const { toolResult } = await executeSingleTool(async () => "legacy result")
+
+  expect(toolResult).toMatchObject({
+    content: "legacy result",
+    isError: false,
+    outcome: "completed",
+  })
+  expect("summary" in toolResult).toBe(false)
+})
+
+test("accepts every structured tool outcome", async () => {
+  const cases = [
+    {
+      value: { content: "applied", outcome: "completed", summary: "Applied" },
+      isError: false,
+    },
+    {
+      value: { content: "declined", outcome: "rejected", summary: "Declined" },
+      isError: false,
+    },
+    {
+      value: { content: "copied", outcome: "manual", summary: "Run manually" },
+      isError: false,
+    },
+    {
+      value: { content: "exit 7", outcome: "failed", summary: "Command failed" },
+      isError: true,
+    },
+    {
+      value: {
+        content: "committed",
+        outcome: "committed-after-abort",
+        summary: "Committed during cancellation",
+      },
+      isError: true,
+    },
+    {
+      value: {
+        content: "result not recorded",
+        outcome: "effects-unknown",
+        summary: "Inspect current state",
+      },
+      isError: true,
+    },
+  ] as const
+
+  for (const testCase of cases) {
+    const { toolResult } = await executeSingleTool(async () => testCase.value)
+    expect(toolResult).toMatchObject({
+      ...testCase.value,
+      isError: testCase.isError,
+    })
+  }
+})
+
+test("turns invalid structured tool results into errors", async () => {
+  const cases = [
+    {
+      value: { content: 42 },
+      error: 'Tool "test_tool" result content must be a string',
+    },
+    {
+      value: { content: "result", outcome: "unknown" },
+      error: 'Tool "test_tool" result outcome is invalid',
+    },
+    {
+      value: { content: "result", summary: 42 },
+      error: 'Tool "test_tool" result summary must be a string',
+    },
+  ]
+
+  for (const testCase of cases) {
+    const execute = (async () => testCase.value) as unknown as IAgentTool["execute"]
+    const { toolResult } = await executeSingleTool(execute)
+    expect(toolResult).toMatchObject({
+      content: testCase.error,
+      isError: true,
+    })
+    expect("outcome" in toolResult).toBe(false)
+    expect("summary" in toolResult).toBe(false)
+  }
+})
+
+test("preserves a committed error when cancellation races with a tool", async () => {
+  const controller = new AbortController()
+  const { result, toolResult } = await executeSingleTool(async () => {
+    controller.abort("Stopped by test")
+    throw Object.assign(new Error("Patch commit completed"), { committed: true })
+  }, controller.signal)
+
+  expect(result.reason).toBe("aborted")
+  expect(toolResult).toMatchObject({
+    content: "Patch commit completed",
+    isError: true,
+    outcome: "committed-after-abort",
+    summary: expect.stringMatching(/workspace changes were committed despite cancellation/i),
+  })
+})
+
+test("preserves an error that reports unknown side effects", async () => {
+  const { toolResult } = await executeSingleTool(async () => {
+    throw Object.assign(new Error("Rollback was incomplete"), {
+      sideEffectsUnknown: true,
+    })
+  })
+
+  expect(toolResult).toMatchObject({
+    content: "Rollback was incomplete",
+    isError: true,
+    outcome: "effects-unknown",
+    summary: expect.stringMatching(/inspect current state before retrying/i),
+  })
+})
+
+test("preserves a structured unknown-effects result during cancellation", async () => {
+  const controller = new AbortController()
+  const { result, toolResult } = await executeSingleTool(async () => {
+    controller.abort("Stopped by test")
+    return {
+      content: "Execution may have changed files",
+      outcome: "effects-unknown",
+      summary: "Inspect current state",
+    }
+  }, controller.signal)
+
+  expect(result.reason).toBe("aborted")
+  expect(toolResult).toMatchObject({
+    content: "Execution may have changed files",
+    isError: true,
+    outcome: "effects-unknown",
+    summary: "Inspect current state",
+  })
+})
+
+test("preserves an authoritative completed result during later cancellation", async () => {
+  const controller = new AbortController()
+  const { result, toolResult } = await executeSingleTool(async () => {
+    controller.abort("Stopped after completion")
+    return {
+      content: "Command completed",
+      outcome: "completed",
+      summary: "Exit code 0",
+    }
+  }, controller.signal)
+
+  expect(result.reason).toBe("aborted")
+  expect(toolResult).toMatchObject({
+    content: "Command completed",
+    isError: false,
+    outcome: "completed",
+    summary: "Exit code 0",
+  })
+})
+
+test("keeps ordinary aborted tool errors generic", async () => {
+  const controller = new AbortController()
+  const { toolResult } = await executeSingleTool(async () => {
+    controller.abort("Stopped by test")
+    throw new Error("Ordinary tool failure")
+  }, controller.signal)
+
+  expect(toolResult).toMatchObject({
+    content: "Stopped by test",
+    isError: true,
+  })
+  expect("outcome" in toolResult).toBe(false)
+  expect("summary" in toolResult).toBe(false)
+})
+
+test("always gives tools an approval bridge with exact execution context", async () => {
+  const model = new ScriptedModel((iteration) => iteration === 0
+    ? [
+        {
+          type: "tool-call",
+          toolCallId: "call-command",
+          toolName: "run_command",
+          input: {},
+        },
+        { type: "finish", reason: "tool-calls" },
+      ]
+    : [{ type: "finish", reason: "stop" }])
+  const decisions: string[] = []
+  const tool: IAgentTool = {
+    name: "run_command",
+    description: "Run a command",
+    inputSchema: { type: "object", additionalProperties: false },
+    async execute(_input, context) {
+      if (!context.requestApproval) throw new Error("Missing approval bridge")
+      decisions.push(await context.requestApproval({
+        kind: "command",
+        title: "List files",
+        explanation: "Inspect the workspace",
+        command: "ls",
+        cwd: "/workspace",
+        purpose: "Find project files",
+        expectedOutcome: "A file list",
+        sideEffects: "None",
+        timeoutSeconds: 30,
+      }))
+      return "complete"
+    },
+  }
+  const approvalContexts: Array<{
+    sessionId: string
+    runId: string
+    toolCallId: string
+    aborted: boolean
+  }> = []
+
+  const result = await runAgentLoop({
+    sessionId: "session-1",
+    runId: RUN_ID,
+    systemPrompt: "System",
+    messages: [],
+    prompt: userMessage("List files"),
+    model,
+    reasoningEffort: "medium",
+    tools: [tool],
+    signal: new AbortController().signal,
+    emit: () => undefined,
+    requestApproval: async (draft, context) => {
+      expect(draft).toMatchObject({
+        kind: "command",
+        command: "ls",
+        cwd: "/workspace",
+      })
+      approvalContexts.push({
+        sessionId: context.sessionId,
+        runId: context.runId,
+        toolCallId: context.toolCallId,
+        aborted: context.signal.aborted,
+      })
+      return "copy"
+    },
+    now: timeGenerator(),
+    generateId: idGenerator(),
+  })
+
+  expect(decisions).toEqual(["copy"])
+  expect(approvalContexts).toEqual([{
+    sessionId: "session-1",
+    runId: RUN_ID,
+    toolCallId: "call-command",
+    aborted: false,
+  }])
+  expect(result.messages.find((message) => message.role === "toolResult"))
+    .toMatchObject({ content: "complete", isError: false })
 })
 
 test("injects steering only after the complete tool batch", async () => {
@@ -756,7 +1008,7 @@ test("serializes tool progress before the final result and ignores late updates"
     ])
 })
 
-test("truncates custom tool output before persistence and model continuation", async () => {
+test("truncates custom tool content and summary before persistence and continuation", async () => {
   const model = new ScriptedModel((iteration) => iteration === 0
     ? [
         {
@@ -772,7 +1024,11 @@ test("truncates custom tool output before persistence and model continuation", a
     name: "large",
     description: "Large output",
     inputSchema: { type: "object", additionalProperties: false },
-    execute: async () => "x".repeat(100_001),
+    execute: async () => ({
+      content: "x".repeat(100_001),
+      outcome: "manual",
+      summary: "y".repeat(100_001),
+    }),
   }
 
   const result = await runAgentLoop({
@@ -797,11 +1053,55 @@ test("truncates custom tool output before persistence and model continuation", a
   if (persisted?.role !== "toolResult") throw new Error("Expected tool result")
   if (continued?.role !== "toolResult") throw new Error("Expected continued result")
   expect(persisted).toEqual(continued)
+  expect(persisted.outcome).toBe("manual")
   expect(persisted.content).toEndWith("... output truncated")
   expect(Buffer.byteLength(persisted.content, "utf8")).toBeLessThanOrEqual(
     100_000,
   )
+  expect(persisted.summary).toEndWith("... output truncated")
+  expect(Buffer.byteLength(persisted.summary ?? "", "utf8")).toBeLessThanOrEqual(
+    100_000,
+  )
 })
+
+async function executeSingleTool(
+  execute: IAgentTool["execute"],
+  signal: AbortSignal = new AbortController().signal,
+) {
+  const model = new ScriptedModel((iteration) => iteration === 0
+    ? [
+        {
+          type: "tool-call",
+          toolCallId: "test-call",
+          toolName: "test_tool",
+          input: {},
+        },
+        { type: "finish", reason: "tool-calls" },
+      ]
+    : [{ type: "finish", reason: "stop" }])
+  const result = await runAgentLoop({
+    sessionId: "session-1",
+    runId: RUN_ID,
+    systemPrompt: "System",
+    messages: [],
+    prompt: userMessage("Run tool"),
+    model,
+    reasoningEffort: "medium",
+    tools: [{
+      name: "test_tool",
+      description: "Test tool",
+      inputSchema: { type: "object", additionalProperties: false },
+      execute,
+    }],
+    signal,
+    emit: () => undefined,
+    now: timeGenerator(),
+    generateId: idGenerator(),
+  })
+  const toolResult = result.messages.find((message) => message.role === "toolResult")
+  if (toolResult?.role !== "toolResult") throw new Error("Expected tool result")
+  return { result, toolResult }
+}
 
 function userMessage(text: string) {
   return {

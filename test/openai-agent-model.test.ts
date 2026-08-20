@@ -29,7 +29,7 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
       return toolCallResponse("grep", { pattern: "packageManager" })
     }
     if (capturedRequests.length === 3) {
-      return toolCallResponse("read_file", { path: "package.json" })
+      return toolCallResponse("read", { path: "package.json" })
     }
     return streamResponse()
   })
@@ -78,7 +78,7 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
     agentId: "test-agent",
     sessionId: "session-1",
     manager,
-    systemPrompt: systemPrompt(WORKSPACE_ROOT),
+    systemPrompt: systemPrompt(WORKSPACE_ROOT, createWorkspaceTools(WORKSPACE_ROOT)),
     resolveRunConfiguration: () => ({
       model,
       reasoningEffort: "medium",
@@ -110,12 +110,15 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
     `Aktualny katalog roboczy i root workspace: ${WORKSPACE_ROOT}.`,
   )
   expect(body.tools).toEqual(expect.arrayContaining([
-    expect.objectContaining({ type: "function", name: "read_file" }),
+    expect.objectContaining({ type: "function", name: "read" }),
     expect.objectContaining({ type: "function", name: "glob" }),
     expect.objectContaining({ type: "function", name: "grep" }),
   ]))
   expect(JSON.stringify(body.tools)).not.toContain("write_file")
-  expect(JSON.stringify(body.tools)).not.toContain("apply_patch")
+  expect(body.tools).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: "function", name: "apply_patch" }),
+    expect.objectContaining({ type: "function", name: "bash" }),
+  ]))
 
   expect(body.input).toEqual([
     {
@@ -175,8 +178,8 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
     },
     {
       type: "toolCall",
-      toolCallId: "call-read_file",
-      toolName: "read_file",
+      toolCallId: "call-read",
+      toolName: "read",
       input: { path: "package.json" },
     },
   ])
@@ -197,8 +200,8 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
     }),
     expect.objectContaining({
       role: "toolResult",
-      toolCallId: "call-read_file",
-      toolName: "read_file",
+      toolCallId: "call-read",
+      toolName: "read",
       content: expect.stringContaining('"scripts"'),
       isError: false,
     }),
@@ -220,7 +223,7 @@ test("replays a local tool failure into the next OAuth iteration", async () => {
   const captureFetch = fetchImplementation(async (...args) => {
     capturedRequests.push(new Request(...args))
     return capturedRequests.length === 1
-      ? toolCallResponse("read_file", { path: missingPath })
+      ? toolCallResponse("read", { path: missingPath })
       : streamResponse()
   })
   const auth = new OpenAiAuth({
@@ -240,7 +243,7 @@ test("replays a local tool failure into the next OAuth iteration", async () => {
     agentId: "test-agent",
     sessionId: "session-1",
     manager,
-    systemPrompt: systemPrompt(WORKSPACE_ROOT),
+    systemPrompt: systemPrompt(WORKSPACE_ROOT, createWorkspaceTools(WORKSPACE_ROOT)),
     resolveRunConfiguration: () => ({
       model: new OpenAiAgentModel({
         auth,
@@ -258,12 +261,12 @@ test("replays a local tool failure into the next OAuth iteration", async () => {
     .find((message) => message.role === "toolResult")
 
   if (failedTool?.role !== "toolResult") {
-    throw new Error("Expected a failed read_file tool")
+    throw new Error("Expected a failed read tool")
   }
 
   expect(failedTool).toMatchObject({
-    toolCallId: "call-read_file",
-    toolName: "read_file",
+    toolCallId: "call-read",
+    toolName: "read",
     isError: true,
   })
 
@@ -273,13 +276,13 @@ test("replays a local tool failure into the next OAuth iteration", async () => {
   expect(body.input).toEqual(expect.arrayContaining([
     {
       type: "function_call",
-      call_id: "call-read_file",
-      name: "read_file",
+      call_id: "call-read",
+      name: "read",
       arguments: JSON.stringify({ path: missingPath }),
     },
     {
       type: "function_call_output",
-      call_id: "call-read_file",
+      call_id: "call-read",
       output: failedTool.content,
     },
   ]))
@@ -358,6 +361,72 @@ test("lowers direct assistant and text-only toolResult messages", async () => {
       output: "README contents",
     },
   ])
+})
+
+test("projects structured tool outcomes as text-only provider results", async () => {
+  const capturedRequests: Request[] = []
+  const model = createModel(async (...args) => {
+    capturedRequests.push(new Request(...args))
+    return streamResponse()
+  })
+  const outcomes = [
+    "completed",
+    "rejected",
+    "manual",
+    "failed",
+    "committed-after-abort",
+    "effects-unknown",
+  ] as const
+
+  for (const [index, outcome] of outcomes.entries()) {
+    const toolCallId = `call-${index}`
+    await collectEvents(model, [
+      userMessage("Question"),
+      {
+        id: `assistant-${index}`,
+        sessionId: "session-1",
+        runId: "run-1",
+        role: "assistant",
+        content: [{
+          type: "toolCall",
+          toolCallId,
+          toolName: "test_tool",
+          input: {},
+        }],
+        stopReason: "tool-calls",
+        createdAt: 2,
+      },
+      {
+        id: `result-${index}`,
+        sessionId: "session-1",
+        runId: "run-1",
+        role: "toolResult",
+        toolCallId,
+        toolName: "test_tool",
+        content: `provider-visible-${index}`,
+        isError: outcome === "failed"
+          || outcome === "committed-after-abort"
+          || outcome === "effects-unknown",
+        outcome,
+        summary: `HOST_ONLY_SUMMARY_${index}`,
+        createdAt: 3,
+      },
+    ], [toolDescriptor("test_tool")])
+  }
+
+  expect(capturedRequests).toHaveLength(outcomes.length)
+  for (const [index, request] of capturedRequests.entries()) {
+    const body = (await request.json()) as Record<string, unknown>
+    expect(body.input).toEqual(expect.arrayContaining([{
+      type: "function_call_output",
+      call_id: `call-${index}`,
+      output: `provider-visible-${index}`,
+    }]))
+    const input = JSON.stringify(body.input)
+    expect(input).not.toContain("HOST_ONLY_SUMMARY")
+    expect(input).not.toContain('"outcome"')
+    expect(input).not.toContain('"summary"')
+  }
 })
 
 test("sends projected context summaries and compaction output limits", async () => {
@@ -466,7 +535,7 @@ test("forwards cancellation to the OpenAI request", async () => {
     for await (const event of model.stream({
       sessionId: "session-1",
       runId: "run-1",
-      systemPrompt: systemPrompt(WORKSPACE_ROOT),
+      systemPrompt: systemPrompt(WORKSPACE_ROOT, []),
       messages: [userMessage("Wait")],
       tools: [],
       reasoningEffort: "medium",

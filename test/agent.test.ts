@@ -5,7 +5,13 @@ import type {
   IAgentEvent,
   IAgentModel,
   IAgentModelRequest,
+  IAgentTool,
 } from "@/agent/agent-types"
+import type {
+  TToolApprovalDecision,
+  TToolApprovalDraft,
+  TToolApprovalRequest,
+} from "@/domain"
 
 test("Agent.prompt returns a synchronous handle and Agent owns live state", async () => {
   const agent = new Agent({
@@ -522,6 +528,187 @@ test("Agent keeps steering recoverable when the iteration limit prevents deliver
   ])
 })
 
+test("Agent publishes an immutable approval and approve resumes the pending run", async () => {
+  const draftPaths = ["src/domain.ts"]
+  const decisions: TToolApprovalDecision[] = []
+  const agent = approvalAgent({
+    kind: "patch",
+    title: "Apply domain types",
+    explanation: "Add approval contracts",
+    diff: "--- a/src/domain.ts\n+++ b/src/domain.ts",
+    paths: draftPaths,
+  }, decisions)
+  const requested = Promise.withResolvers<TToolApprovalRequest>()
+  const events: IAgentEvent[] = []
+  agent.subscribe((event) => {
+    events.push(event)
+    if (event.type === "tool_approval_requested") {
+      requested.resolve(event.request)
+    }
+  })
+
+  expect(() => agent.resolveToolApproval("missing", "approve")).toThrow(
+    "No tool approval is pending",
+  )
+  const run = agent.prompt("Update the domain")
+  await run.accepted
+  const request = await requested.promise
+  let settled = false
+  void run.settled.then(() => {
+    settled = true
+  })
+  await Promise.resolve()
+
+  expect(settled).toBe(false)
+  expect(request).toMatchObject({
+    sessionId: "session-1",
+    runId: run.runId,
+    toolCallId: "approval-call",
+    kind: "patch",
+    title: "Apply domain types",
+    explanation: "Add approval contracts",
+    diff: "--- a/src/domain.ts\n+++ b/src/domain.ts",
+    paths: ["src/domain.ts"],
+  })
+  expect(typeof request.id).toBe("string")
+  expect(agent.state.pendingToolApproval).toBe(request)
+  expect(Object.isFrozen(request)).toBe(true)
+  expect(request.kind).toBe("patch")
+  if (request.kind !== "patch") throw new Error("Expected patch approval")
+  expect(Object.isFrozen(request.paths)).toBe(true)
+  expect(() => (request.paths as string[]).push("src/agent/agent.ts")).toThrow()
+  draftPaths.push("src/application/runtime.ts")
+  expect(request.paths).toEqual(["src/domain.ts"])
+  expect(() => {
+    (agent.state as {
+      pendingToolApproval: TToolApprovalRequest | undefined
+    }).pendingToolApproval = undefined
+  }).toThrow()
+  expect(agent.state.pendingToolApproval).toBe(request)
+
+  agent.resolveToolApproval(request.id, "approve")
+
+  expect(agent.state.pendingToolApproval).toBeUndefined()
+  await run.settled
+  expect(decisions).toEqual(["approve"])
+  expect(events.filter((event) => event.type.startsWith("tool_approval")))
+    .toEqual([
+      {
+        type: "tool_approval_requested",
+        runId: run.runId,
+        request,
+      },
+      {
+        type: "tool_approval_resolved",
+        runId: run.runId,
+        approvalId: request.id,
+        decision: "approve",
+      },
+    ])
+  expect(events.filter((event) =>
+    event.type === "tool_execution_start"
+    || event.type === "tool_approval_requested"
+    || event.type === "tool_approval_resolved"
+    || event.type === "tool_execution_end"
+  ).map((event) => event.type)).toEqual([
+    "tool_execution_start",
+    "tool_approval_requested",
+    "tool_approval_resolved",
+    "tool_execution_end",
+  ])
+  expect(() => agent.resolveToolApproval(request.id, "approve")).toThrow(
+    "No tool approval is pending",
+  )
+})
+
+test("Agent keeps invalid patch decisions and mismatched IDs pending", async () => {
+  const decisions: TToolApprovalDecision[] = []
+  const agent = approvalAgent(patchApprovalDraft(), decisions)
+  const requested = Promise.withResolvers<TToolApprovalRequest>()
+  agent.subscribe((event) => {
+    if (event.type === "tool_approval_requested") {
+      requested.resolve(event.request)
+    }
+  })
+
+  const run = agent.prompt("Apply the patch")
+  const request = await requested.promise
+
+  expect(() => agent.resolveToolApproval("other-approval", "approve")).toThrow(
+    "Tool approval ID mismatch",
+  )
+  expect(() => agent.resolveToolApproval(request.id, "copy")).toThrow(
+    'Decision "copy" is not allowed for patch approval',
+  )
+  expect(agent.state.pendingToolApproval).toBe(request)
+
+  agent.resolveToolApproval(request.id, "reject")
+  await run.settled
+
+  expect(decisions).toEqual(["reject"])
+  expect(agent.state.pendingToolApproval).toBeUndefined()
+})
+
+test("Agent rejects unknown command decisions and delivers copy", async () => {
+  const decisions: TToolApprovalDecision[] = []
+  const agent = approvalAgent(commandApprovalDraft(), decisions)
+  const requested = Promise.withResolvers<TToolApprovalRequest>()
+  agent.subscribe((event) => {
+    if (event.type === "tool_approval_requested") {
+      requested.resolve(event.request)
+    }
+  })
+
+  const run = agent.prompt("Run the command")
+  const request = await requested.promise
+
+  expect(() => agent.resolveToolApproval(
+    request.id,
+    "later" as TToolApprovalDecision,
+  )).toThrow("Invalid tool approval decision: later")
+  expect(agent.state.pendingToolApproval).toBe(request)
+
+  agent.resolveToolApproval(request.id, "copy")
+  await run.settled
+
+  expect(decisions).toEqual(["copy"])
+})
+
+test("Agent abort settles a waiting approval and clears pending state", async () => {
+  const decisions: TToolApprovalDecision[] = []
+  const events: IAgentEvent[] = []
+  const agent = approvalAgent(commandApprovalDraft(), decisions)
+  const requested = Promise.withResolvers<TToolApprovalRequest>()
+  agent.subscribe((event) => {
+    events.push(event)
+    if (event.type === "tool_approval_requested") {
+      requested.resolve(event.request)
+    }
+  })
+
+  const run = agent.prompt("Run and stop")
+  const request = await requested.promise
+
+  await Promise.all([agent.abort(), run.settled])
+
+  expect(decisions).toEqual([])
+  expect(agent.state.pendingToolApproval).toBeUndefined()
+  expect(agent.state.isRunning).toBe(false)
+  expect(agent.state.lastRunReason).toBe("aborted")
+  expect(agent.state.messages).toContainEqual(expect.objectContaining({
+    role: "toolResult",
+    toolCallId: "approval-call",
+    isError: true,
+    content: "Buli interaction was aborted",
+  }))
+  expect(events).toContainEqual({
+    type: "tool_approval_resolved",
+    runId: run.runId,
+    approvalId: request.id,
+    decision: undefined,
+  })
+})
+
 test("Agent rejects overlap, abort settles the active run, and can clear when idle", async () => {
   const started = Promise.withResolvers<void>()
   const model: IAgentModel = {
@@ -571,5 +758,71 @@ function completedModel(): IAgentModel {
       yield { type: "text-end", id: "answer" }
       yield { type: "finish", reason: "stop" }
     },
+  }
+}
+
+function approvalAgent(
+  draft: TToolApprovalDraft,
+  decisions: TToolApprovalDecision[],
+): Agent {
+  const tool: IAgentTool = {
+    name: "approval_tool",
+    description: "Request approval",
+    inputSchema: { type: "object", additionalProperties: false },
+    async execute(_input, context) {
+      if (!context.requestApproval) throw new Error("Missing approval bridge")
+      const decision = await context.requestApproval(draft)
+      decisions.push(decision)
+      return decision
+    },
+  }
+  let requestCount = 0
+  const model: IAgentModel = {
+    async *stream() {
+      if (requestCount++ === 0) {
+        yield {
+          type: "tool-call",
+          toolCallId: "approval-call",
+          toolName: tool.name,
+          input: {},
+        }
+        yield { type: "finish", reason: "tool-calls" }
+        return
+      }
+      yield { type: "finish", reason: "stop" }
+    },
+  }
+  return new Agent({
+    sessionId: "session-1",
+    systemPrompt: "System",
+    resolveRunConfiguration: () => ({
+      model,
+      reasoningEffort: "medium",
+    }),
+    tools: [tool],
+  })
+}
+
+function patchApprovalDraft(): TToolApprovalDraft {
+  return {
+    kind: "patch",
+    title: "Apply patch",
+    explanation: "Update a file",
+    diff: "--- a/file.ts\n+++ b/file.ts",
+    paths: ["file.ts"],
+  }
+}
+
+function commandApprovalDraft(): TToolApprovalDraft {
+  return {
+    kind: "command",
+    title: "Run tests",
+    explanation: "Verify the change",
+    command: "bun test",
+    cwd: "/workspace",
+    purpose: "Run focused tests",
+    expectedOutcome: "Tests pass",
+    sideEffects: "Writes test caches",
+    timeoutSeconds: 30,
   }
 }

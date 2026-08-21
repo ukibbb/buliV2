@@ -1,8 +1,5 @@
 import type { IAgentTool } from "@/agent/agent-types"
-import {
-    applyWorkspacePatch,
-    planWorkspacePatch,
-} from "@/tools/patch-engine"
+import { prepareWorkspacePatch } from "@/tools/patch-engine"
 
 const INPUT_KEYS = new Set(["patchText", "explanation"])
 
@@ -14,10 +11,10 @@ const APPLY_PATCH_DESCRIPTION = [
     "*** Add File: path/to/new-file.ts",
     "+Every added-file line starts with +",
     "*** Update File: path/to/existing-file.ts",
+    "*** Move to: optional/new-path.ts",
     "@@ optional exact anchor",
     "-old line",
     "+new line",
-    "*** Move to: optional/new-path.ts",
     "*** Delete File: path/to/obsolete-file.ts",
     "*** End Patch",
     "",
@@ -49,50 +46,50 @@ export function createApplyPatchTool(workspaceRoot: string): IAgentTool {
             assertOnlyInputKeys(input)
             const patchText = requireNonEmptyString(input, "patchText")
             const explanation = requireNonEmptyString(input, "explanation")
-            const plan = await planWorkspacePatch({
+            const proposal = await prepareWorkspacePatch({
                 patchText,
                 workspaceRoot,
                 signal: context.signal,
             })
-
-            context.signal.throwIfAborted()
-            const requestApproval = context.requestApproval
-            if (!requestApproval) {
-                throw new Error(
-                    "apply_patch cannot modify the workspace because tool approval is "
-                    + "unavailable; no workspace files were changed.",
-                )
-            }
-
-            const decision = await requestApproval({
-                kind: "patch",
-                title: `Apply workspace patch: ${plan.summary.text}`,
-                explanation,
-                diff: plan.diff,
-                paths: plan.affectedPaths,
-            })
-            if (decision === "reject") {
-                return {
-                    content: "Patch approval was rejected; no workspace files were changed.",
-                    outcome: "rejected",
-                    summary: "Patch rejected; workspace unchanged",
+            try {
+                context.signal.throwIfAborted()
+                const requestApproval = context.requestApproval
+                if (!requestApproval) {
+                    throw new Error(
+                        "apply_patch cannot modify the workspace because tool approval is "
+                        + "unavailable; no workspace files were changed.",
+                    )
                 }
-            }
-            if (decision !== "approve") {
-                throw new Error(
-                    `apply_patch requires an approve decision, received ${JSON.stringify(decision)}; `
-                    + "no workspace files were changed.",
-                )
-            }
 
-            const result = await applyWorkspacePatch({
-                plan,
-                signal: context.signal,
-            })
-            return {
-                content: result.summary,
-                outcome: "completed",
-                summary: result.summary,
+                const decision = await requestApproval({
+                    kind: "patch",
+                    title: `Apply workspace patch: ${proposal.preview.summary.text}`,
+                    explanation,
+                    diff: proposal.preview.diff,
+                    paths: proposal.preview.affectedPaths,
+                })
+                if (decision === "reject") {
+                    return {
+                        content: "Patch approval was rejected; no workspace files were changed.",
+                        outcome: "rejected",
+                        summary: "Patch rejected; workspace unchanged",
+                    }
+                }
+                if (decision !== "approve") {
+                    throw new Error(
+                        `apply_patch requires an approve decision, received ${JSON.stringify(decision)}; `
+                        + "no workspace files were changed.",
+                    )
+                }
+
+                const result = await proposal.applyOnce(context.signal)
+                return {
+                    content: result.summary,
+                    outcome: "completed",
+                    summary: result.summary,
+                }
+            } finally {
+                proposal.discard()
             }
         },
     }

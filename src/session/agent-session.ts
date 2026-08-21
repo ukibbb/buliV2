@@ -21,6 +21,10 @@ import {
     type ISessionManager,
 } from "@/session/session-manager"
 
+
+const DEFAULT_DISPOSE_TIMEOUT_MS = 5_000
+const DEFAULT_AUTO_COMPACTION_THRESHOLD = 0.8
+
 interface IAgentSessionOptions {
     readonly agentId: string
     readonly sessionId: string
@@ -28,7 +32,6 @@ interface IAgentSessionOptions {
     readonly systemPrompt: string
     readonly resolveRunConfiguration: TAgentRunConfigurationResolver
     readonly tools: readonly IAgentTool[]
-    readonly maxProviderIterations?: number
     readonly now?: () => number
     readonly generateId?: () => string
     readonly disposeTimeoutMs?: number
@@ -41,8 +44,6 @@ interface IQueuedSessionMessages {
 }
 
 type TSessionListener = () => void
-const DEFAULT_DISPOSE_TIMEOUT_MS = 5_000
-const DEFAULT_AUTO_COMPACTION_THRESHOLD = 0.8
 
 /** Connects one live Agent to durable history and UI subscriptions. */
 export class AgentSession {
@@ -122,9 +123,6 @@ export class AgentSession {
                 messages,
                 this.manager.getCompactionCheckpoint(this.id),
             ),
-            ...(options.maxProviderIterations === undefined
-                ? {}
-                : { maxProviderIterations: options.maxProviderIterations }),
             ...(options.now === undefined ? {} : { now: options.now }),
             ...(options.generateId === undefined
                 ? {}
@@ -323,10 +321,7 @@ export class AgentSession {
         }
         if (
             event.type === "agent_settled"
-            && (
-                event.reason === "completed"
-                || event.reason === "max-iterations"
-            )
+            && event.reason === "completed"
             && this.shouldCompactAutomatically()
         ) {
             // Auto-compaction nie opóźnia settlementu ukończonego runu. Nowy prompt

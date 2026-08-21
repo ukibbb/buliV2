@@ -19,8 +19,11 @@ test("builds pair-programming instructions from active capabilities", () => {
   ])
 
   expect(prompt).toContain("Aktywne narzędzia: read, glob, grep, apply_patch, bash.")
-  expect(prompt).toContain("trybie pair programming")
+  expect(prompt).toContain("Nie jesteś zwykłym coding agent")
+  expect(prompt).toContain("Pracujemy z naciskiem na programowanie i mentoring.")
   expect(prompt).toContain("apply_patch wolno wywołać tylko po jawnej prośbie")
+  expect(prompt).toContain("samo wywołanie nie zmienia plików")
+  expect(prompt).toContain("dopiero osobne Apply w UI")
   expect(prompt).toContain("Copy / Run once / Reject")
   expect(prompt).toContain("/bin/bash --noprofile --norc")
   expect(prompt).not.toContain("read_file")

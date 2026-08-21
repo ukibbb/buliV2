@@ -4,7 +4,6 @@ import type { Lifetime } from "@/lifetime"
 import { runTuiRenderer } from "@/tui/host/run-tui-renderer"
 import { openExternalUrl } from "@/tui/host/open-url"
 
-/** Composes and runs the complete interactive Buli terminal application. */
 export async function runMainTui(): Promise<void> {
     await runTuiRenderer((lifetime: Lifetime) => {
 

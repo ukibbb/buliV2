@@ -473,61 +473,6 @@ test("Agent rejects steering until the initial prompt is durable", async () => {
   })
 })
 
-test("Agent keeps steering recoverable when the iteration limit prevents delivery", async () => {
-  const modelStarted = Promise.withResolvers<void>()
-  const releaseModel = Promise.withResolvers<void>()
-  const agent = new Agent({
-    sessionId: "session-1",
-    systemPrompt: "System",
-    resolveRunConfiguration: () => ({
-      model: {
-        async *stream() {
-          modelStarted.resolve()
-          await releaseModel.promise
-          yield { type: "finish", reason: "stop" }
-        },
-      },
-      reasoningEffort: "medium",
-    }),
-    tools: [],
-    maxProviderIterations: 1,
-  })
-
-  const run = agent.prompt("Initial prompt")
-  await run.accepted
-  await modelStarted.promise
-  agent.steer("Try another approach")
-  agent.followUp("Then summarize it")
-  releaseModel.resolve()
-  await run.settled
-
-  expect(agent.state.lastRunReason).toBe("max-iterations")
-  expect(agent.pendingSteeringMessages).toEqual([
-    expect.objectContaining({
-      runId: run.runId,
-      source: "steer",
-      content: "Try another approach",
-    }),
-  ])
-  expect(agent.pendingFollowUpMessages).toEqual([
-    expect.objectContaining({
-      runId: run.runId,
-      source: "followUp",
-      content: "Then summarize it",
-    }),
-  ])
-  expect(() => agent.prompt("Another prompt")).toThrow(
-    "Restore queued messages before starting another prompt",
-  )
-  const queued = agent.clearQueuedMessages()
-  expect(queued.steering.map((message) => message.content)).toEqual([
-    "Try another approach",
-  ])
-  expect(queued.followUp.map((message) => message.content)).toEqual([
-    "Then summarize it",
-  ])
-})
-
 test("Agent publishes an immutable approval and approve resumes the pending run", async () => {
   const draftPaths = ["src/domain.ts"]
   const decisions: TToolApprovalDecision[] = []

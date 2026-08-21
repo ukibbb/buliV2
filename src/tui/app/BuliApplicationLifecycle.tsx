@@ -19,8 +19,6 @@ type TBuliLifecycleState =
     | { type: "error"; message: string }
 
 interface IBuliApplicationLifecycleProps {
-    // Widok zna tylko pożyczane porty potrzebne do renderowania. Ownership i
-    // dispose kompletnego startupu pozostają w zewnętrznym entrypoincie.
     runtimeTask: Promise<{
         runtime: IBuliApplication
         authentication: IAuthenticationService

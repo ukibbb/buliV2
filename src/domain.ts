@@ -147,7 +147,6 @@ export type TAgentRunEndReason =
     | "aborted"
     | "error"
     | "internal-error"
-    | "max-iterations"
 
 export interface ISessionInfo {
     readonly id: string

@@ -15,15 +15,14 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import {
-  applyWorkspacePatch,
-  planWorkspacePatch,
+  prepareWorkspacePatch,
   StaleWorkspacePatchError,
   WORKSPACE_PATCH_MAX_AGGREGATE_BYTES,
   WORKSPACE_PATCH_MAX_DIFF_BYTES,
   WORKSPACE_PATCH_MAX_OPERATIONS,
   WORKSPACE_PATCH_MAX_PATCH_BYTES,
   WORKSPACE_PATCH_MAX_SOURCE_BYTES,
-  type IWorkspacePatchPlan,
+  type IPreparedWorkspacePatch,
 } from "@/tools/patch-engine"
 
 test("plans and applies add, update, delete, and move as exact file states", async () => {
@@ -33,7 +32,7 @@ test("plans and applies add, update, delete, and move as exact file states", asy
     await writeFile(join(workspace, "delete.txt"), "remove me\n")
     await writeFile(join(workspace, "move.txt"), "old location\n")
 
-    const patchPlan = await plan(workspace, `*** Add File: nested/added.txt
+    const proposal = await plan(workspace, `*** Add File: nested/added.txt
 +added
 +file
 *** Update File: update.txt
@@ -48,26 +47,24 @@ test("plans and applies add, update, delete, and move as exact file states", asy
 +new location`)
 
     expect(await readFile(join(workspace, "update.txt"), "utf8")).toBe("alpha\nbeta\n")
-    expect(Object.isFrozen(patchPlan)).toBe(true)
-    expect(Object.isFrozen(patchPlan.summary)).toBe(true)
-    expect(Object.isFrozen(patchPlan.affectedPaths)).toBe(true)
-    expect(Object.keys(patchPlan).sort()).toEqual(["affectedPaths", "diff", "summary"])
-    expect(patchPlan.affectedPaths).toEqual([
+    expect(Object.isFrozen(proposal)).toBe(true)
+    expect(Object.isFrozen(proposal.preview)).toBe(true)
+    expect(Object.isFrozen(proposal.preview.summary)).toBe(true)
+    expect(Object.isFrozen(proposal.preview.affectedPaths)).toBe(true)
+    expect(Object.keys(proposal.preview).sort()).toEqual(["affectedPaths", "diff", "summary"])
+    expect(proposal.preview.affectedPaths).toEqual([
       "nested/added.txt",
       "update.txt",
       "delete.txt",
       "move.txt",
       "moved/renamed.txt",
     ])
-    expect(patchPlan.summary.filesChanged).toBe(4)
-    expect(patchPlan.diff).toContain("--- /dev/null\n+++ b/nested/added.txt")
-    expect(patchPlan.diff).toContain("--- a/move.txt\n+++ b/moved/renamed.txt")
-    expect(patchPlan.diff).toContain("-beta\n+BETA")
+    expect(proposal.preview.summary.filesChanged).toBe(4)
+    expect(proposal.preview.diff).toContain("--- /dev/null\n+++ b/nested/added.txt")
+    expect(proposal.preview.diff).toContain("--- a/move.txt\n+++ b/moved/renamed.txt")
+    expect(proposal.preview.diff).toContain("-beta\n+BETA")
 
-    const clonedPlan = structuredClone(patchPlan)
-    await expect(applyWorkspacePatch({ plan: clonedPlan, signal: signal() }))
-      .rejects.toThrow(/not issued by this module/i)
-    const result = await applyWorkspacePatch({ plan: patchPlan, signal: signal() })
+    const result = await proposal.applyOnce(signal())
 
     expect(result.applied).toBe(true)
     expect(result.filesChanged).toBe(4)
@@ -80,7 +77,20 @@ test("plans and applies add, update, delete, and move as exact file states", asy
     expect(await readFile(join(workspace, "moved", "renamed.txt"), "utf8")).toBe(
       "new location\n",
     )
-    expect(await stagingFiles(workspace)).toEqual([])
+    await expect(proposal.applyOnce(signal())).rejects.toThrow(/no longer available/i)
+  } finally {
+    await removeWorkspace(workspace)
+  }
+})
+
+test("discard makes an in-memory proposal permanently unavailable", async () => {
+  const workspace = await temporaryWorkspace()
+  try {
+    const proposal = await plan(workspace, "*** Add File: discarded.txt\n+content")
+    proposal.discard()
+
+    await expect(proposal.applyOnce(signal())).rejects.toThrow(/no longer available/i)
+    expect(await readdir(workspace)).toEqual([])
   } finally {
     await removeWorkspace(workspace)
   }
@@ -90,7 +100,7 @@ test("enforces patch, operation, aggregate-content, and rendered-diff limits", a
   const workspace = await temporaryWorkspace()
   try {
     const oversizedUtf8 = "é".repeat(Math.floor(WORKSPACE_PATCH_MAX_PATCH_BYTES / 2) + 1)
-    await expect(planWorkspacePatch({
+    await expect(prepareWorkspacePatch({
       patchText: oversizedUtf8,
       workspaceRoot: workspace,
       signal: signal(),
@@ -142,7 +152,6 @@ test("enforces patch, operation, aggregate-content, and rendered-diff limits", a
 -old
 +new`)).rejects.toThrow(/approval diff.*500 KiB limit/i)
     expect(await readFile(join(workspace, "large-diff.txt"), "utf8")).toBe(diffSource)
-    expect(await stagingFiles(workspace)).toEqual([])
   } finally {
     await removeWorkspace(workspace)
   }
@@ -164,7 +173,7 @@ test("rejects malformed envelopes, hunks, numeric anchors, and no-op chunks", as
     ]
 
     for (const patch of malformed) {
-      await expect(planWorkspacePatch({
+      await expect(prepareWorkspacePatch({
         patchText: patch,
         workspaceRoot: workspace,
         signal: signal(),
@@ -198,7 +207,7 @@ test("uses exact context, rejects ambiguity and whitespace mismatch, and honors 
 @@ section two
 -needle
 +changed`)
-    await applyWorkspacePatch({ plan: anchored, signal: signal() })
+    await anchored.applyOnce(signal())
     expect(await readFile(join(workspace, "repeated.txt"), "utf8")).toBe(
       "section one\nneedle\nsection two\nchanged\n",
     )
@@ -211,7 +220,7 @@ test("uses exact context, rejects ambiguity and whitespace mismatch, and honors 
 -changed
 +second changed
 *** End of File`)
-    await applyWorkspacePatch({ plan: multipleChunks, signal: signal() })
+    await multipleChunks.applyOnce(signal())
     expect(await readFile(join(workspace, "repeated.txt"), "utf8")).toBe(
       "section one\nfirst changed\nsection two\nsecond changed\n",
     )
@@ -232,7 +241,7 @@ test("preserves a UTF-8 BOM, dominant CRLF endings, and update mode", async () =
 @@ first
 -second
 +changed`)
-    await applyWorkspacePatch({ plan: patch, signal: signal() })
+    await patch.applyOnce(signal())
 
     expect(await readFile(file)).toEqual(
       Buffer.concat([bom, Buffer.from("first\r\nchanged\r\n")]),
@@ -253,7 +262,7 @@ test("preserves the replaced line ending in a mixed-EOL file", async () => {
 @@ one
 -mixed
 +changed`)
-    await applyWorkspacePatch({ plan: patch, signal: signal() })
+    await patch.applyOnce(signal())
 
     expect(await readFile(file, "utf8")).toBe("one\r\nchanged\nthree\r\n")
   } finally {
@@ -300,8 +309,8 @@ test("canonicalizes safe symlinks and rejects existing and missing symlink escap
 @@
 -before
 +after`)
-    expect(safePlan.affectedPaths).toEqual(["actual.txt"])
-    await applyWorkspacePatch({ plan: safePlan, signal: signal() })
+    expect(safePlan.preview.affectedPaths).toEqual(["actual.txt"])
+    await safePlan.applyOnce(signal())
     expect(await readFile(actual, "utf8")).toBe("after\n")
     expect((await lstat(join(workspace, "inside-link.txt"))).isSymbolicLink()).toBe(true)
 
@@ -337,7 +346,7 @@ test("rejects binary, invalid UTF-8, oversized sources, and binary additions", a
   }
 })
 
-test("rejects stale plans before staging or mutating any target", async () => {
+test("rejects stale proposals before mutating any target", async () => {
   const workspace = await temporaryWorkspace()
   try {
     const file = join(workspace, "file.txt")
@@ -348,10 +357,9 @@ test("rejects stale plans before staging or mutating any target", async () => {
 +after`)
     await writeFile(file, "changed externally\n")
 
-    await expect(applyWorkspacePatch({ plan: patch, signal: signal() }))
+    await expect(patch.applyOnce(signal()))
       .rejects.toBeInstanceOf(StaleWorkspacePatchError)
     expect(await readFile(file, "utf8")).toBe("changed externally\n")
-    expect(await stagingFiles(workspace)).toEqual([])
   } finally {
     await removeWorkspace(workspace)
   }
@@ -362,7 +370,7 @@ test("rejects add and move destinations created after planning without overwriti
   try {
     const addPlan = await plan(workspace, "*** Add File: claimed.txt\n+planned")
     await writeFile(join(workspace, "claimed.txt"), "external\n")
-    await expect(applyWorkspacePatch({ plan: addPlan, signal: signal() }))
+    await expect(addPlan.applyOnce(signal()))
       .rejects.toBeInstanceOf(StaleWorkspacePatchError)
     expect(await readFile(join(workspace, "claimed.txt"), "utf8")).toBe("external\n")
 
@@ -373,26 +381,25 @@ test("rejects add and move destinations created after planning without overwriti
 -before
 +after`)
     await writeFile(join(workspace, "destination.txt"), "external destination\n")
-    await expect(applyWorkspacePatch({ plan: movePlan, signal: signal() }))
+    await expect(movePlan.applyOnce(signal()))
       .rejects.toBeInstanceOf(StaleWorkspacePatchError)
     expect(await readFile(join(workspace, "source.txt"), "utf8")).toBe("before\n")
     expect(await readFile(join(workspace, "destination.txt"), "utf8")).toBe(
       "external destination\n",
     )
-    expect(await stagingFiles(workspace)).toEqual([])
   } finally {
     await removeWorkspace(workspace)
   }
 })
 
-test("aborts before commit without files, directories, or staging remnants", async () => {
+test("aborts before commit without creating files or directories", async () => {
   const workspace = await temporaryWorkspace()
   try {
     const patch = await plan(workspace, "*** Add File: nested/new.txt\n+content")
     const controller = new AbortController()
     controller.abort(new DOMException("Stopped before commit", "AbortError"))
 
-    await expect(applyWorkspacePatch({ plan: patch, signal: controller.signal }))
+    await expect(patch.applyOnce(controller.signal))
       .rejects.toMatchObject({ name: "AbortError", message: "Stopped before commit" })
     expect(await readdir(workspace)).toEqual([])
   } finally {
@@ -413,7 +420,6 @@ test("preflights every file and never partially mutates when a later hunk fails"
 
     expect(await pathExists(join(workspace, "would-be-added.txt"))).toBe(false)
     expect(await readFile(join(workspace, "existing.txt"), "utf8")).toBe("original\n")
-    expect(await stagingFiles(workspace)).toEqual([])
   } finally {
     await removeWorkspace(workspace)
   }
@@ -475,13 +481,12 @@ test("rolls back committed writes when a later move-source deletion fails", asyn
 +after`)
     await chmod(lockedDirectory, 0o555)
 
-    await expect(applyWorkspacePatch({ plan: patch, signal: signal() }))
+    await expect(patch.applyOnce(signal()))
       .rejects.toThrow(/rolled back/i)
 
     expect(await readFile(source, "utf8")).toBe("before\n")
     expect(await pathExists(destination)).toBe(false)
     expect(await pathExists(join(workspace, "rolled-back"))).toBe(false)
-    expect(await stagingFiles(workspace)).toEqual([])
   } finally {
     await chmod(lockedDirectory, 0o755).catch(() => {})
     await removeWorkspace(workspace)
@@ -492,8 +497,8 @@ async function plan(
   workspaceRoot: string,
   body: string,
   abortSignal: AbortSignal = signal(),
-): Promise<IWorkspacePatchPlan> {
-  return await planWorkspacePatch({
+): Promise<IPreparedWorkspacePatch> {
+  return await prepareWorkspacePatch({
     patchText: patchText(body),
     workspaceRoot,
     signal: abortSignal,
@@ -524,13 +529,4 @@ async function pathExists(path: string): Promise<boolean> {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return false
     throw error
   }
-}
-
-async function stagingFiles(root: string): Promise<readonly string[]> {
-  const matches: string[] = []
-  const glob = new Bun.Glob("**/.buli-patch-*.tmp")
-  for await (const path of glob.scan({ cwd: root, onlyFiles: true, dot: true })) {
-    matches.push(path)
-  }
-  return matches.sort()
 }

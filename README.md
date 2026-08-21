@@ -45,6 +45,19 @@ bun run typecheck
 bun test
 ```
 
+## Workspace changes
+
+`apply_patch` prepares one proposal in memory and shows its exact diff before
+changing the workspace. Rejecting or cancelling before approval discards that
+proposal; the separate `Apply` action consumes it once after checking that the
+source files still match the preview. Once application starts, Buli finishes
+the patch and reports if cancellation raced with a committed change.
+
+Buli writes approved changes directly to their final paths and does not create
+temporary source-file copies. A forced process exit during that write can leave
+a missing, partial, or partially applied file, so inspect the workspace before
+retrying after a crash.
+
 ## Authentication
 
 Buli uses ChatGPT/Codex OAuth for OpenAI models. This is separate from the

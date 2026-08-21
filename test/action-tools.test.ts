@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   realpath,
   rename,
   rm,
@@ -28,6 +29,12 @@ test("action tools publish bounded strict schemas", () => {
   expect(applyPatch.name).toBe("apply_patch")
   expect(applyPatch.description).toContain("*** Begin Patch")
   expect(applyPatch.description).toContain("before changing any file")
+  expect(applyPatch.description.indexOf("*** Move to:")).toBeGreaterThan(
+    applyPatch.description.indexOf("*** Update File:"),
+  )
+  expect(applyPatch.description.indexOf("@@ optional exact anchor")).toBeGreaterThan(
+    applyPatch.description.indexOf("*** Move to:"),
+  )
   expect(applyPatch.inputSchema).toMatchObject({
     type: "object",
     required: ["patchText", "explanation"],
@@ -125,6 +132,7 @@ test("apply_patch shows the exact plan before mutation and applies only after ap
 
     await requested.promise
     expect(await readFile(file, "utf8")).toBe("before\n")
+    expect(await readdir(workspace)).toEqual(["file.txt"])
     const draft = drafts[0]
     if (!draft || draft.kind !== "patch") throw new Error("Expected patch approval")
     expect(draft).toEqual({
@@ -142,6 +150,7 @@ test("apply_patch shows the exact plan before mutation and applies only after ap
       summary: "Applied workspace patch: 1 file changed, 1 insertion(+), 1 deletion(-)",
     })
     expect(await readFile(file, "utf8")).toBe("after\n")
+    expect(await readdir(workspace)).toEqual(["file.txt"])
   } finally {
     await removeWorkspace(workspace)
   }

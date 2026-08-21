@@ -30,7 +30,6 @@ interface IAgentOptions {
     readonly projectContext?: TAgentContextProjector
     readonly criticalEventSink?: TAgentCriticalEventSink
     readonly onObserverError?: (error: unknown) => void
-    readonly maxProviderIterations?: number
     readonly now?: () => number
     readonly generateId?: () => string
 }
@@ -68,7 +67,6 @@ export class Agent {
     private readonly criticalEventSink: TAgentCriticalEventSink | undefined
     private readonly onObserverError: ((error: unknown) => void) | undefined
     private readonly listeners = new Set<TAgentEventListener>()
-    private readonly maxProviderIterations: number | undefined
     private readonly now: () => number
     private readonly generateId: () => string
     private readonly projectContext: TAgentContextProjector | undefined
@@ -82,7 +80,6 @@ export class Agent {
         this.resolveRunConfiguration = options.resolveRunConfiguration
         this.criticalEventSink = options.criticalEventSink
         this.onObserverError = options.onObserverError
-        this.maxProviderIterations = options.maxProviderIterations
         this.now = options.now ?? Date.now
         this.generateId = options.generateId ?? generateRandomId
         this.projectContext = options.projectContext
@@ -139,8 +136,8 @@ export class Agent {
         const accepted = Promise.withResolvers<void>()
         const settled = Promise.withResolvers<void>()
         // Consumers may intentionally observe only one phase of the run.
-        void accepted.promise.catch(() => {})
-        void settled.promise.catch(() => {})
+        void accepted.promise.catch(() => { })
+        void settled.promise.catch(() => { })
         const activeRun: IActiveAgentRun = {
             runId,
             promptId: prompt.id,
@@ -318,13 +315,11 @@ export class Agent {
                 restoreQueuedMessage: (message) =>
                     this.restoreQueuedMessage(activeRun, message),
                 closeQueuedInput: () => this.closeQueuedInput(activeRun),
-                ...(this.maxProviderIterations === undefined
-                    ? {}
-                    : { maxProviderIterations: this.maxProviderIterations }),
                 now: this.now,
                 generateId: this.generateId,
             })
             reason = result.reason
+
         } catch (error) {
             failed = true
             failure = error
@@ -332,6 +327,7 @@ export class Agent {
                 activeRun.acceptedCompleted = true
                 activeRun.rejectAccepted(error)
             }
+
         } finally {
             this.abortPendingToolApproval(activeRun)
             if (!activeRun.acceptedCompleted) {
@@ -495,7 +491,7 @@ export class Agent {
             toolCallId,
         )
         const deferred = Promise.withResolvers<TToolApprovalDecision>()
-        void deferred.promise.catch(() => {})
+        void deferred.promise.catch(() => { })
         const pending: IPendingToolApproval = {
             activeRun,
             request,

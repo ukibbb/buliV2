@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer"
-import { createHash, randomUUID } from "node:crypto"
-import { chmod, link, lstat, mkdir, open, readFile, realpath, rename, rmdir, stat, unlink } from "node:fs/promises"
-import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep, win32 } from "node:path"
+import { createHash } from "node:crypto"
+import { lstat, mkdir, open, readFile, realpath, rmdir, stat, unlink } from "node:fs/promises"
+import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from "node:path"
 
 import { createUnifiedDiff, UnifiedDiffTooLargeError } from "@/tools/diff"
 
@@ -13,7 +13,7 @@ export const WORKSPACE_PATCH_MAX_DIFF_BYTES = 500 * 1024
 const WORKSPACE_PATCH_MAX_PATCH_LINES = 50_000
 const WORKSPACE_PATCH_MAX_SOURCE_LINES = 100_000
 
-export interface IPlanWorkspacePatchOptions {
+export interface IPrepareWorkspacePatchOptions {
     readonly patchText: string
     readonly workspaceRoot: string
     readonly signal: AbortSignal
@@ -26,15 +26,10 @@ export interface IWorkspacePatchSummary {
     readonly text: string
 }
 
-export interface IWorkspacePatchPlan {
+export interface IWorkspacePatchPreview {
     readonly diff: string
     readonly affectedPaths: readonly string[]
     readonly summary: IWorkspacePatchSummary
-}
-
-export interface IApplyWorkspacePatchOptions {
-    readonly plan: IWorkspacePatchPlan
-    readonly signal: AbortSignal
 }
 
 export interface IWorkspacePatchApplyResult {
@@ -42,6 +37,12 @@ export interface IWorkspacePatchApplyResult {
     readonly affectedPaths: readonly string[]
     readonly filesChanged: number
     readonly summary: string
+}
+
+export interface IPreparedWorkspacePatch {
+    readonly preview: IWorkspacePatchPreview
+    readonly applyOnce: (signal: AbortSignal) => Promise<IWorkspacePatchApplyResult>
+    readonly discard: () => void
 }
 
 export class StaleWorkspacePatchError extends Error {
@@ -132,26 +133,34 @@ type TWriteChange = IExactChange & { readonly destination: IExactFileState }
 type TDeleteChange = IExactChange & { readonly source: IExactFileState }
 interface IInternalPatchPlan { readonly workspaceRoot: string; readonly changes: readonly IExactChange[] }
 interface ILineReplacement { readonly start: number; readonly oldLength: number; readonly lines: readonly IMutableSourceLine[] }
-interface IStagedWrite {
+interface IFileIdentity {
+    readonly device: number
+    readonly inode: number
+}
+interface IDirectFileWriteState {
+    destinationCreated: boolean
+    destinationComplete: boolean
+    createdIdentity: IFileIdentity | undefined
+    initialMode: number | undefined
+}
+interface IWriteJournalEntry extends IDirectFileWriteState {
     readonly change: TWriteChange
     readonly path: string
     readonly absolutePath: string
-    readonly temporaryPath: string
+    sourceRemoved: boolean
 }
 
 interface IFileState { readonly bytes: Buffer; readonly mode: number }
 
 const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf])
 const MODE_MASK = 0o7777
-const TEMP_FILE_ATTEMPTS = 10
-const privatePlans = new WeakMap<IWorkspacePatchPlan, IInternalPatchPlan>()
 
 let mutationQueue: Promise<void> = Promise.resolve()
 
-/** Parses and fully preflights a patch without mutating the workspace. */
-export async function planWorkspacePatch(
-    options: IPlanWorkspacePatchOptions,
-): Promise<IWorkspacePatchPlan> {
+/** Prepares one exact, in-memory patch proposal without mutating the workspace. */
+export async function prepareWorkspacePatch(
+    options: IPrepareWorkspacePatchOptions,
+): Promise<IPreparedWorkspacePatch> {
     assertSignal(options.signal)
     options.signal.throwIfAborted()
     if (typeof options.patchText !== "string") {
@@ -289,29 +298,32 @@ export async function planWorkspacePatch(
     const affectedPaths = affectedPathsFor(changes)
     const rendered = renderPlanDiff(changes)
     const summary = patchSummary(changes.length, rendered.additions, rendered.deletions)
-    const plan: IWorkspacePatchPlan = {
+    const preview: IWorkspacePatchPreview = {
         diff: rendered.text,
         affectedPaths,
         summary,
     }
-    deepFreeze(plan)
-    privatePlans.set(plan, { workspaceRoot, changes })
-    return plan
-}
+    deepFreeze(preview)
 
-/** Applies an ephemeral plan after stale-state checks under a global mutation lock. */
-export async function applyWorkspacePatch(
-    options: IApplyWorkspacePatchOptions,
-): Promise<IWorkspacePatchApplyResult> {
-    assertSignal(options.signal)
-    options.signal.throwIfAborted()
-    const internalPlan = privatePlans.get(options.plan)
-    if (internalPlan === undefined) {
-        throw new Error("Workspace patch plan was not issued by this module")
-    }
-    return await serializeMutation(async () => {
-        options.signal.throwIfAborted()
-        return await applyInternalPatch(internalPlan, options.plan, options.signal)
+    let availablePlan: IInternalPatchPlan | undefined = { workspaceRoot, changes }
+    return Object.freeze({
+        preview,
+        applyOnce: async (signal: AbortSignal): Promise<IWorkspacePatchApplyResult> => {
+            assertSignal(signal)
+            signal.throwIfAborted()
+            const plan = availablePlan
+            if (plan === undefined) {
+                throw new Error("Workspace patch proposal is no longer available")
+            }
+            availablePlan = undefined
+            return await serializeMutation(async () => {
+                signal.throwIfAborted()
+                return await applyInternalPatch(plan, preview, signal)
+            })
+        },
+        discard: (): void => {
+            availablePlan = undefined
+        },
     })
 }
 
@@ -1060,41 +1072,42 @@ function patchSummary(
 
 async function applyInternalPatch(
     patch: IInternalPatchPlan,
-    publicPlan: IWorkspacePatchPlan,
+    preview: IWorkspacePatchPreview,
     signal: AbortSignal,
 ): Promise<IWorkspacePatchApplyResult> {
     await revalidatePlan(patch, signal)
     signal.throwIfAborted()
 
-    const stagedWrites: IStagedWrite[] = []
+    const writes: IWriteJournalEntry[] = patch.changes
+        .filter(isWriteChange)
+        .sort((left, right) => compareStrings(left.destination.path, right.destination.path))
+        .map((change) => ({
+            change,
+            path: change.destination.path,
+            absolutePath: absolutePlanPath(patch.workspaceRoot, change.destination.path),
+            sourceRemoved: false,
+            destinationCreated: false,
+            destinationComplete: false,
+            createdIdentity: undefined,
+            initialMode: undefined,
+        }))
     const createdDirectories: string[] = []
     try {
-        const writes = patch.changes
-            .filter(isWriteChange)
-            .sort((left, right) => compareStrings(left.destination.path, right.destination.path))
-        for (const change of writes) {
+        for (const write of writes) {
             signal.throwIfAborted()
-            const path = change.destination.path
-            const absolutePath = absolutePlanPath(patch.workspaceRoot, path)
             await ensureTargetDirectory(
                 patch.workspaceRoot,
-                dirname(absolutePath),
+                dirname(write.absolutePath),
                 createdDirectories,
                 signal,
             )
-            const temporaryPath = await stagePrivateFile(
-                dirname(absolutePath),
-                change.destination.content,
-                signal,
-            )
-            stagedWrites.push({ change, path, absolutePath, temporaryPath })
         }
 
         signal.throwIfAborted()
         await revalidatePlan(patch, signal)
         signal.throwIfAborted()
     } catch (error) {
-        const cleanupErrors = await cleanupPreparation(stagedWrites, createdDirectories)
+        const cleanupErrors = await cleanupCreatedDirectories(createdDirectories)
         if (cleanupErrors.length > 0) {
             throw new WorkspacePatchSideEffectsUnknownError(
                 [error, ...cleanupErrors],
@@ -1104,40 +1117,11 @@ async function applyInternalPatch(
         throw error
     }
 
-    const committedWrites: IStagedWrite[] = []
     const committedDeletions: TDeleteChange[] = []
-    // Portable Node APIs cannot bind validation to rename/link/unlink. External parent swaps
-    // remain possible, as does the final check-to-mutation gap for replacements and deletions.
+    // Portable Node APIs cannot bind validation to unlink/open. External parent swaps and
+    // final check-to-mutation gaps therefore remain possible.
     try {
-        for (const staged of stagedWrites) {
-            const change = staged.change
-            const destination = change.destination
-            const source = change.source
-            await chmod(staged.temporaryPath, destination.mode)
-            if (source !== null && source.path === destination.path) {
-                await assertSourceCurrent(patch.workspaceRoot, source)
-                try {
-                    await rename(staged.temporaryPath, staged.absolutePath)
-                } catch (error) {
-                    throw new Error(`Failed to commit write ${quote(staged.path)}`, { cause: error })
-                }
-            } else {
-                await assertDestinationMissing(patch.workspaceRoot, destination)
-                try {
-                    // A same-filesystem hard link publishes the staged inode without replacement.
-                    await link(staged.temporaryPath, staged.absolutePath)
-                } catch (error) {
-                    if (errno(error) === "EEXIST") {
-                        throw new StaleWorkspacePatchError(
-                            `Workspace patch plan is stale at ${quote(staged.path)}: path state changed`,
-                            error,
-                        )
-                    }
-                    throw new Error(`Failed to commit write ${quote(staged.path)}`, { cause: error })
-                }
-            }
-            committedWrites.push(staged)
-        }
+        for (const write of writes) await commitDirectWrite(patch.workspaceRoot, write)
 
         const deletions = patch.changes
             .filter(isDeleteChange)
@@ -1155,13 +1139,15 @@ async function applyInternalPatch(
             committedDeletions.push(change)
         }
     } catch (commitError) {
-        const mutationCount = committedWrites.length + committedDeletions.length
+        const mutationCount = writes.filter(
+            (write) => write.sourceRemoved || write.destinationCreated,
+        ).length + committedDeletions.length
         const rollbackErrors = await rollbackCommittedChanges(
             patch.workspaceRoot,
-            committedWrites,
+            writes,
             committedDeletions,
         )
-        rollbackErrors.push(...await cleanupPreparation(stagedWrites, createdDirectories))
+        rollbackErrors.push(...await cleanupCreatedDirectories(createdDirectories))
         if (rollbackErrors.length > 0) {
             throw new WorkspacePatchSideEffectsUnknownError(
                 [commitError, ...rollbackErrors],
@@ -1175,27 +1161,88 @@ async function applyInternalPatch(
         )
     }
 
-    const cleanupErrors = await cleanupTemporaryFiles(stagedWrites)
-    const cleanupWarning = cleanupErrors.length === 0
-        ? ""
-        : `; warning: ${cleanupErrors.length} temporary staging file(s) could not be removed`
     const result: IWorkspacePatchApplyResult = {
         applied: true,
-        affectedPaths: [...publicPlan.affectedPaths],
-        filesChanged: publicPlan.summary.filesChanged,
-        summary: `Applied workspace patch: ${publicPlan.summary.text}${cleanupWarning}`,
+        affectedPaths: [...preview.affectedPaths],
+        filesChanged: preview.summary.filesChanged,
+        summary: `Applied workspace patch: ${preview.summary.text}`,
     }
     deepFreeze(result)
     if (signal.aborted) {
-        const cause = cleanupErrors.length === 0
-            ? signal.reason
-            : new AggregateError(
-                [signal.reason, ...cleanupErrors],
-                "Patch committed after cancellation and staging cleanup was incomplete",
-            )
-        throw new WorkspacePatchCommittedAfterAbortError(result, cause)
+        throw new WorkspacePatchCommittedAfterAbortError(result, signal.reason)
     }
     return result
+}
+
+async function commitDirectWrite(
+    root: string,
+    write: IWriteJournalEntry,
+): Promise<void> {
+    const destination = write.change.destination
+    const source = write.change.source
+    if (source !== null && source.path === destination.path) {
+        await assertSourceCurrent(root, source)
+        try {
+            await unlink(write.absolutePath)
+            write.sourceRemoved = true
+        } catch (error) {
+            throw new Error(`Failed to replace ${quote(write.path)}`, { cause: error })
+        }
+    } else {
+        await assertDestinationMissing(root, destination)
+    }
+
+    try {
+        await writeExclusiveFile(
+            write.absolutePath,
+            destination.content,
+            destination.mode,
+            write,
+        )
+    } catch (error) {
+        if (!write.destinationCreated && errno(error) === "EEXIST") {
+            throw new StaleWorkspacePatchError(
+                `Workspace patch plan is stale at ${quote(write.path)}: path state changed`,
+                error,
+            )
+        }
+        throw new Error(`Failed to commit write ${quote(write.path)}`, { cause: error })
+    }
+}
+
+async function writeExclusiveFile(
+    target: string,
+    content: Uint8Array,
+    mode: number,
+    state: IDirectFileWriteState,
+): Promise<void> {
+    const handle = await open(target, "wx", 0o600)
+    state.destinationCreated = true
+
+    let writeError: unknown
+    try {
+        const metadata = await handle.stat()
+        if (!metadata.isFile()) throw new Error("Patch destination is not a regular file")
+        state.createdIdentity = {
+            device: metadata.dev,
+            inode: metadata.ino,
+        }
+        state.initialMode = metadata.mode & MODE_MASK
+        await handle.writeFile(content)
+        await handle.chmod(mode)
+        await handle.sync()
+        state.destinationComplete = true
+    } catch (error) {
+        writeError = error
+    }
+    try {
+        await handle.close()
+    } catch (error) {
+        writeError = writeError === undefined
+            ? error
+            : new AggregateError([writeError, error], "Failed to write and close patch content")
+    }
+    if (writeError !== undefined) throw writeError
 }
 
 async function revalidatePlan(
@@ -1312,7 +1359,7 @@ async function ensureTargetDirectory(
         } catch (error) {
             if (!isMissingPathError(error)) throw error
         }
-        if (current === root) throw new Error("Workspace root disappeared during patch staging")
+        if (current === root) throw new Error("Workspace root disappeared during patch preparation")
         missing.unshift(current)
         current = dirname(current)
     }
@@ -1326,79 +1373,13 @@ async function ensureTargetDirectory(
     const canonicalDirectory = await realpath(targetDirectory)
     signal.throwIfAborted()
     if (canonicalDirectory !== targetDirectory || !isPathInside(root, canonicalDirectory)) {
-        throw new Error("Patch target directory changed through a symlink during staging")
+        throw new Error("Patch target directory changed through a symlink during preparation")
     }
-}
-
-async function stagePrivateFile(
-    directory: string,
-    content: Uint8Array,
-    signal?: AbortSignal,
-): Promise<string> {
-    for (let attempt = 0; attempt < TEMP_FILE_ATTEMPTS; attempt += 1) {
-        throwIfAborted(signal)
-        const temporaryPath = join(
-            directory,
-            `.buli-patch-${process.pid}-${randomUUID()}.tmp`,
-        )
-        let handle: Awaited<ReturnType<typeof open>>
-        try {
-            handle = await open(temporaryPath, "wx", 0o600)
-        } catch (error) {
-            if (errno(error) === "EEXIST") continue
-            throw error
-        }
-
-        let writeError: unknown
-        try {
-            await handle.writeFile(content)
-            await handle.sync()
-        } catch (error) {
-            writeError = error
-        }
-        try {
-            await handle.close()
-        } catch (error) {
-            writeError = writeError === undefined
-                ? error
-                : new AggregateError([writeError, error], "Failed to stage patch content")
-        }
-        if (writeError !== undefined) {
-            try {
-                await unlink(temporaryPath)
-            } catch (cleanupError) {
-                if (errno(cleanupError) !== "ENOENT") {
-                    throw new WorkspacePatchSideEffectsUnknownError(
-                        [writeError, cleanupError],
-                        "Failed to stage and clean patch content",
-                    )
-                }
-            }
-            throw writeError
-        }
-        try {
-            throwIfAborted(signal)
-        } catch (abortError) {
-            try {
-                await unlink(temporaryPath)
-            } catch (cleanupError) {
-                if (errno(cleanupError) !== "ENOENT") {
-                    throw new WorkspacePatchSideEffectsUnknownError(
-                        [abortError, cleanupError],
-                        "Patch staging was aborted and temporary-file cleanup failed",
-                    )
-                }
-            }
-            throw abortError
-        }
-        return temporaryPath
-    }
-    throw new Error("Could not allocate a private patch staging file")
 }
 
 async function rollbackCommittedChanges(
     root: string,
-    writes: readonly IStagedWrite[],
+    writes: readonly IWriteJournalEntry[],
     deletions: readonly TDeleteChange[],
 ): Promise<unknown[]> {
     const errors: unknown[] = []
@@ -1411,7 +1392,6 @@ async function rollbackCommittedChanges(
                 absolutePlanPath(root, source.path),
                 source.content,
                 source.mode,
-                false,
             )
         } catch (error) {
             errors.push(new Error(`Failed to roll back deletion ${quote(source.path)}`, {
@@ -1422,29 +1402,21 @@ async function rollbackCommittedChanges(
 
     for (let index = writes.length - 1; index >= 0; index -= 1) {
         const write = writes[index]
-        if (!write) continue
+        if (!write || (!write.sourceRemoved && !write.destinationCreated)) continue
         try {
-            const destination = write.change.destination
-            const current = await readFileState(
-                write.absolutePath,
-                write.path,
-                WORKSPACE_PATCH_MAX_AGGREGATE_BYTES,
-            )
-            if (
-                fileRevision(current.bytes) !== destination.revision
-                || current.mode !== destination.mode
-            ) {
-                throw new Error("Committed file changed before rollback")
-            }
+            if (write.destinationCreated) await removeDirectDestination(write)
             const source = write.change.source
-            if (source !== null && source.path === destination.path) {
+            if (write.sourceRemoved) {
+                if (source === null || source.path !== write.change.destination.path) {
+                    throw new Error("Patch write journal has an invalid removed source")
+                }
                 await restoreFile(
                     write.absolutePath,
                     source.content,
                     source.mode,
-                    true,
                 )
-            } else await unlink(write.absolutePath)
+                write.sourceRemoved = false
+            }
         } catch (error) {
             errors.push(new Error(`Failed to roll back write ${quote(write.path)}`, {
                 cause: error,
@@ -1454,31 +1426,75 @@ async function rollbackCommittedChanges(
     return errors
 }
 
+async function removeDirectDestination(write: IWriteJournalEntry): Promise<void> {
+    let metadata: Awaited<ReturnType<typeof lstat>>
+    try {
+        metadata = await lstat(write.absolutePath)
+    } catch (error) {
+        if (errno(error) === "ENOENT") {
+            write.destinationCreated = false
+            return
+        }
+        throw error
+    }
+
+    const identity = write.createdIdentity
+    if (
+        identity === undefined
+        || !metadata.isFile()
+        || metadata.dev !== identity.device
+        || metadata.ino !== identity.inode
+    ) {
+        throw new Error("Committed file identity changed before rollback")
+    }
+
+    const current = await readFileState(
+        write.absolutePath,
+        write.path,
+        WORKSPACE_PATCH_MAX_AGGREGATE_BYTES,
+    )
+    const destination = write.change.destination
+    const contentMatches = write.destinationComplete
+        ? current.bytes.equals(destination.content)
+        : current.bytes.byteLength <= destination.content.byteLength
+            && current.bytes.equals(destination.content.subarray(0, current.bytes.byteLength))
+    const modeMatches = write.destinationComplete
+        ? current.mode === destination.mode
+        : current.mode === write.initialMode || current.mode === destination.mode
+    if (!contentMatches || !modeMatches) {
+        throw new Error("Committed file changed before rollback")
+    }
+
+    const latestMetadata = await lstat(write.absolutePath)
+    if (
+        !latestMetadata.isFile()
+        || latestMetadata.dev !== identity.device
+        || latestMetadata.ino !== identity.inode
+    ) {
+        throw new Error("Committed file identity changed before rollback")
+    }
+    await unlink(write.absolutePath)
+    write.destinationCreated = false
+}
+
 async function restoreFile(
     target: string,
     content: Uint8Array,
     mode: number,
-    replace: boolean,
 ): Promise<void> {
-    const temporaryPath = await stagePrivateFile(dirname(target), content)
-    try {
-        await chmod(temporaryPath, mode)
-        if (replace) await rename(temporaryPath, target)
-        else await link(temporaryPath, target)
-    } finally {
-        try {
-            await unlink(temporaryPath)
-        } catch (error) {
-            if (errno(error) !== "ENOENT") throw error
-        }
+    const state: IDirectFileWriteState = {
+        destinationCreated: false,
+        destinationComplete: false,
+        createdIdentity: undefined,
+        initialMode: undefined,
     }
+    await writeExclusiveFile(target, content, mode, state)
 }
 
-async function cleanupPreparation(
-    stagedWrites: readonly IStagedWrite[],
+async function cleanupCreatedDirectories(
     createdDirectories: readonly string[],
 ): Promise<unknown[]> {
-    const errors = await cleanupTemporaryFiles(stagedWrites)
+    const errors: unknown[] = []
     for (let index = createdDirectories.length - 1; index >= 0; index -= 1) {
         const directory = createdDirectories[index]
         if (!directory) continue
@@ -1487,24 +1503,6 @@ async function cleanupPreparation(
         } catch (error) {
             if (errno(error) !== "ENOENT") {
                 errors.push(new Error(`Failed to clean patch directory ${quote(directory)}`, {
-                    cause: error,
-                }))
-            }
-        }
-    }
-    return errors
-}
-
-async function cleanupTemporaryFiles(
-    stagedWrites: readonly IStagedWrite[],
-): Promise<unknown[]> {
-    const errors: unknown[] = []
-    for (const staged of stagedWrites) {
-        try {
-            await unlink(staged.temporaryPath)
-        } catch (error) {
-            if (errno(error) !== "ENOENT") {
-                errors.push(new Error(`Failed to clean patch staging file for ${quote(staged.path)}`, {
                     cause: error,
                 }))
             }

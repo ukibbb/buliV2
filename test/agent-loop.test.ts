@@ -782,7 +782,7 @@ test("gives abort precedence over a racing provider finish", async () => {
   })
 })
 
-test("gives abort precedence over an iteration limit during turn_end", async () => {
+test("stops a tool continuation when aborted during turn_end", async () => {
   const controller = new AbortController()
   const model = new ScriptedModel([
     {
@@ -813,7 +813,6 @@ test("gives abort precedence over an iteration limit during turn_end", async () 
     emit: (event) => {
       if (event.type === "turn_end") controller.abort("Stopped during turn_end")
     },
-    maxProviderIterations: 1,
     now: timeGenerator(),
     generateId: idGenerator(),
   })

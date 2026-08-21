@@ -23,7 +23,6 @@ import type {
     TToolExecutionOutcome,
 } from "@/domain"
 
-const DEFAULT_MAX_PROVIDER_ITERATIONS = 5
 const COMMITTED_AFTER_ABORT_SUMMARY =
     "WARNING: Workspace changes were committed despite cancellation."
 const SIDE_EFFECTS_UNKNOWN_SUMMARY =
@@ -57,7 +56,6 @@ interface IRunAgentLoopOptions {
     readonly takeFollowUpMessage?: () => IUserMessage | undefined
     readonly restoreQueuedMessage?: (message: IUserMessage) => void
     readonly closeQueuedInput?: () => void
-    readonly maxProviderIterations?: number
     readonly now?: () => number
     readonly generateId?: () => string
 }
@@ -68,8 +66,6 @@ export async function runAgentLoop(
 ): Promise<IAgentLoopResult> {
     const now = options.now ?? Date.now
     const generateId = options.generateId ?? (() => crypto.randomUUID())
-    const maximumIterations = options.maxProviderIterations
-        ?? DEFAULT_MAX_PROVIDER_ITERATIONS
     // Jedna mapa jest wspólnym źródłem descriptorów i lokalnych executorów.
     // Odrzucenie duplikatu zapobiega sytuacji, w której model widzi inny tool
     // niż ten znaleziony później przez hosta.
@@ -82,7 +78,7 @@ export async function runAgentLoop(
     await emitCompletedMessage(options.prompt, options.runId, options.emit)
 
     let continueForTools = false
-    for (let iteration = 0; iteration < maximumIterations; iteration += 1) {
+    for (let iteration = 0; ; iteration += 1) {
         const steeringMessage = iteration > 0
             ? options.takeSteeringMessage?.()
             : undefined
@@ -187,18 +183,9 @@ export async function runAgentLoop(
         const wantsContinuation = toolResults.length > 0
             || hasSteeringMessages
             || hasFollowUpMessages
-        const reachedLimit = wantsContinuation
-            && iteration + 1 >= maximumIterations
+        const willContinue = wantsContinuation && !options.signal.aborted
 
-        const runReason = options.signal.aborted
-            ? "aborted"
-            : reachedLimit
-                ? "max-iterations"
-                : undefined
-
-        const willContinue = wantsContinuation && runReason === undefined
-
-        if (runReason || !willContinue) options.closeQueuedInput?.()
+        if (!willContinue) options.closeQueuedInput?.()
 
         await options.emit({
             type: "turn_end",
@@ -213,17 +200,11 @@ export async function runAgentLoop(
             options.closeQueuedInput?.()
             return finishRun("aborted", newMessages, options.runId, options.emit)
         }
-        if (runReason) {
-            return finishRun(runReason, newMessages, options.runId, options.emit)
-        }
         if (!willContinue) {
             return finishRun("completed", newMessages, options.runId, options.emit)
         }
         continueForTools = toolResults.length > 0
     }
-
-    options.closeQueuedInput?.()
-    return finishRun("max-iterations", newMessages, options.runId, options.emit)
 }
 
 async function streamAssistantMessage(

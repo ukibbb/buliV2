@@ -198,9 +198,6 @@ export function Chat(props: IChatProps) {
                 {!props.isRunning && props.lastRunReason === "aborted" ? (
                     <text fg={theme.textMuted}>Operation aborted</text>
                 ) : null}
-                {!props.isRunning && props.lastRunReason === "max-iterations" ? (
-                    <text fg={theme.amber}>Stopped after reaching the iteration limit</text>
-                ) : null}
                 {props.errorMessage ? (
                     <text fg={theme.red}>{props.errorMessage}</text>
                 ) : null}

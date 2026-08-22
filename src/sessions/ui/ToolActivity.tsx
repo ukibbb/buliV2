@@ -21,7 +21,16 @@ export function ToolCallLine(props: {
         `[${status}] ${props.call.toolName} ${JSON.stringify(props.call.input)}`,
         TOOL_LINE_MAX_CHARACTERS,
     )
-    return <text fg={props.running ? theme.amber : theme.textMuted}>{line}</text>
+    return (
+        <text
+            fg={props.running ? theme.amber : theme.blue}
+            selectionBg={theme.selectionBg}
+            selectionFg={theme.selectionFg}
+            wrapMode="word"
+        >
+            {line}
+        </text>
+    )
 }
 
 /** Presents a compact status line for a tool execution result. */
@@ -51,7 +60,23 @@ export function ToolResultLine(props: { readonly message: IToolResultMessage }):
     const isCritical = props.message.isError
         || props.message.outcome === "committed-after-abort"
         || props.message.outcome === "effects-unknown"
-    return <text fg={isCritical ? theme.red : theme.textMuted}>{line}</text>
+    const color = isCritical
+        ? theme.red
+        : props.message.outcome === "rejected"
+            ? theme.amber
+            : props.message.outcome === "manual"
+                ? theme.blue
+                : theme.green
+    return (
+        <text
+            fg={color}
+            selectionBg={theme.selectionBg}
+            selectionFg={theme.selectionFg}
+            wrapMode="word"
+        >
+            {line}
+        </text>
+    )
 }
 
 function compactText(value: string, maximumCharacters: number): string {

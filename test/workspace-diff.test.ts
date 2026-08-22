@@ -25,12 +25,14 @@ test("splits every exact workspace diff section without losing input", () => {
     {
       diff: first,
       label: "src/first.ts",
+      filePath: "src/first.ts",
       hasHunks: true,
       hasNoNewlineMetadata: false,
     },
     {
       diff: second,
       label: "Added src/second.ts",
+      filePath: "src/second.ts",
       hasHunks: true,
       hasNoNewlineMetadata: false,
     },
@@ -54,6 +56,7 @@ test("does not split hunk content that resembles file headers", () => {
     {
       diff,
       label: "content.txt",
+      filePath: "content.txt",
       hasHunks: true,
       hasNoNewlineMetadata: false,
     },
@@ -118,12 +121,14 @@ test("keeps valid no-newline markers and header-only file changes exact", () => 
   expect(splitWorkspaceDiff(noNewlineDiff)).toEqual([{
     diff: noNewlineDiff,
     label: "file",
+    filePath: "file",
     hasHunks: true,
     hasNoNewlineMetadata: true,
   }])
   expect(splitWorkspaceDiff(emptyDeletion)).toEqual([{
     diff: emptyDeletion,
     label: "Deleted empty.txt",
+    filePath: "empty.txt",
     hasHunks: false,
     hasNoNewlineMetadata: false,
   }])
@@ -141,6 +146,7 @@ test("does not confuse literal file content with no-newline metadata", () => {
   expect(splitWorkspaceDiff(diff)).toEqual([{
     diff,
     label: "file",
+    filePath: "file",
     hasHunks: true,
     hasNoNewlineMetadata: false,
   }])

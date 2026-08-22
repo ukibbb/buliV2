@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test"
-import { parseKeypress } from "@opentui/core"
+import {
+  parseKeypress,
+  type Renderable,
+  TextRenderable,
+} from "@opentui/core"
 import { testRender } from "@opentui/react/test-utils"
 import { act, type ReactNode } from "react"
 
@@ -21,8 +25,20 @@ const LOGIN_PROVIDER: IAuthProviderInfo = {
   }],
 }
 
+function linkTargets(root: Renderable): string[] {
+  return [
+    ...(root instanceof TextRenderable
+      ? root.textNode.gatherWithInheritedStyle().flatMap((chunk) =>
+        chunk.link ? [chunk.link.url] : []
+      )
+      : []),
+    ...root.getChildren().flatMap(linkTargets),
+  ]
+}
+
 test("selects provider and method before showing progress and manual input", async () => {
   const continueLogin = Promise.withResolvers<void>()
+  const updateAuthorization = Promise.withResolvers<void>()
   const openedUrls: string[] = []
   const manualInputs: string[] = []
   const loginCalls: Array<{ providerId: string; methodId: string }> = []
@@ -36,6 +52,12 @@ test("selects provider and method before showing progress and manual input", asy
         message: "Preparing secure login",
       })
       await continueLogin.promise
+      await interaction.notify({
+        type: "authorization",
+        url: "https://auth.example.test/preflight",
+        instructions: "Begin authorization in your browser.",
+      })
+      await updateAuthorization.promise
       await interaction.notify({
         type: "authorization",
         url: "https://auth.example.test/authorize",
@@ -103,13 +125,35 @@ test("selects provider and method before showing progress and manual input", asy
       await setup.renderOnce()
     })
     frame = await setup.waitForFrame((value) =>
-      value.includes("Paste the callback URL:")
+      value.includes("https://auth.example.test/preflight")
       && value.includes("Could not open the browser automatically")
+    )
+    expect(frame).toContain("Could not open the browser automatically")
+    expect(linkTargets(setup.renderer.root)).toContain(
+      "https://auth.example.test/preflight",
+    )
+
+    await act(async () => {
+      updateAuthorization.resolve()
+      await updateAuthorization.promise
+      await Promise.resolve()
+      await setup.renderOnce()
+    })
+    frame = await setup.waitForFrame((value) =>
+      value.includes("Paste the callback URL:")
     )
     expect(frame).toContain("Complete authorization in your browser.")
     expect(frame).toContain("https://auth.example.test/authorize")
-    expect(frame).toContain("Could not open the browser automatically")
-    expect(openedUrls).toEqual(["https://auth.example.test/authorize"])
+    expect(linkTargets(setup.renderer.root)).toContain(
+      "https://auth.example.test/authorize",
+    )
+    expect(linkTargets(setup.renderer.root)).not.toContain(
+      "https://auth.example.test/preflight",
+    )
+    expect(openedUrls).toEqual([
+      "https://auth.example.test/preflight",
+      "https://auth.example.test/authorize",
+    ])
 
     await act(async () => {
       await setup.mockInput.typeText("callback-code#state")
@@ -316,17 +360,53 @@ test("an empty provider picker closes cleanly on Enter", async () => {
   }
 })
 
+test("scrolls authentication choices inside a short card", async () => {
+  const authentication: IAuthenticationService = {
+    listProviders: async () => [LOGIN_PROVIDER],
+    login: async () => {
+      throw new Error("Unexpected login")
+    },
+    logout: async () => false,
+    dispose: async () => {},
+  }
+  const setup = await renderAuthenticationFlow(
+    <AuthenticationFlow
+      mode="login"
+      authentication={authentication}
+      onClose={() => undefined}
+      openUrl={() => undefined}
+    />,
+    { width: 35, height: 14 },
+  )
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+      await Promise.resolve()
+      await setup.renderOnce()
+    })
+    expect(setup.captureCharFrame()).toContain("Select a provider")
+
+    await pressKey(setup, "\u001b[6~")
+    expect(setup.captureCharFrame()).toContain("enter select  esc close")
+  } finally {
+    act(() => {
+      setup.renderer.destroy()
+    })
+  }
+})
+
 async function pressKey(
   setup: Awaited<ReturnType<typeof testRender>>,
   input: string,
 ): Promise<void> {
   await act(async () => {
     if (input === "\r") setup.mockInput.pressEnter()
-    else if (input === "\u001b") {
-      const escape = parseKeypress(input)
-      if (!escape) throw new Error("Could not parse Escape")
-      setup.renderer.keyInput.processParsedKey(escape)
-    } else throw new Error(`Unsupported test key: ${JSON.stringify(input)}`)
+    else {
+      const key = parseKeypress(input)
+      if (!key) throw new Error(`Could not parse key: ${JSON.stringify(input)}`)
+      setup.renderer.keyInput.processParsedKey(key)
+    }
     await Promise.resolve()
     await setup.flush()
     await setup.renderOnce()
@@ -335,10 +415,14 @@ async function pressKey(
 
 async function renderAuthenticationFlow(
   node: ReactNode,
+  options: { readonly width: number; readonly height: number } = {
+    width: 80,
+    height: 24,
+  },
 ): Promise<Awaited<ReturnType<typeof testRender>>> {
   let setup: Awaited<ReturnType<typeof testRender>> | undefined
   await act(async () => {
-    setup = await testRender(node, { width: 80, height: 24 })
+    setup = await testRender(node, options)
     await Promise.resolve()
   })
   if (!setup) throw new Error("Authentication flow did not render")

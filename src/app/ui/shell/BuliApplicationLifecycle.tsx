@@ -62,13 +62,54 @@ export function BuliApplicationLifecycle(
     }, [props.runtimeTask])
 
     if (state.type === "startup") {
-        return <text fg={theme.textMuted}>Starting Buli...</text>
+        return <box
+            width="100%"
+            height="100%"
+            alignItems="center"
+            justifyContent="center"
+            backgroundColor={theme.background}
+        >
+            <text
+                fg={theme.textMuted}
+                selectionBg={theme.selectionBg}
+                selectionFg={theme.selectionFg}
+            >Starting Buli...</text>
+        </box>
     }
     if (state.type === "error") {
-        return <box flexDirection="column">
-            <text fg={theme.red}>Failed to start Buli</text>
-            <text fg={theme.red}>{state.message}</text>
-            <text fg={theme.textMuted}>Press Ctrl+C to exit</text>
+        return <box
+            width="100%"
+            height="100%"
+            alignItems="center"
+            justifyContent="center"
+            backgroundColor={theme.background}
+        >
+          <box
+            maxWidth={72}
+            flexDirection="column"
+            border={["left"]}
+            borderColor={theme.red}
+            backgroundColor={theme.surface}
+            padding={2}
+            gap={1}
+          >
+            <text
+              fg={theme.red}
+              selectionBg={theme.selectionBg}
+              selectionFg={theme.selectionFg}
+            ><strong>Failed to start Buli</strong></text>
+            <text
+              fg={theme.text}
+              selectionBg={theme.selectionBg}
+              selectionFg={theme.selectionFg}
+              wrapMode="word"
+            >{state.message}</text>
+            <text
+              fg={theme.textMuted}
+              selectionBg={theme.selectionBg}
+              selectionFg={theme.selectionFg}
+            >Press Ctrl+C to exit</text>
+          </box>
         </box>
     }
 

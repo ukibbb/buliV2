@@ -1,4 +1,5 @@
 import type { SelectOption } from "@opentui/core"
+import { useTerminalDimensions } from "@opentui/react"
 import type { ReactNode } from "react"
 
 import type {
@@ -26,9 +27,9 @@ const SELECT_STYLE = {
     textColor: theme.text,
     focusedTextColor: theme.text,
     selectedBackgroundColor: theme.green,
-    selectedTextColor: theme.text,
+    selectedTextColor: theme.greenContrast,
     descriptionColor: theme.textMuted,
-    selectedDescriptionColor: theme.text,
+    selectedDescriptionColor: theme.greenContrast,
 } as const
 
 const CONFIRM_OPTIONS: SelectOption[] = [
@@ -46,6 +47,7 @@ export function AuthenticationChoices(
     props: IAuthenticationChoicesProps,
 ): ReactNode {
     const { controller, state } = props
+    const { height } = useTerminalDimensions()
 
     if (state.type === "providers") {
         const options = state.providers.map((provider): SelectOption => ({
@@ -59,12 +61,14 @@ export function AuthenticationChoices(
 
         return (
             <box flexDirection="column" gap={1}>
-                <text>Select a provider</text>
+                <text fg={theme.textStrong} selectable={false}>
+                    Select a provider
+                </text>
                 {state.providers.length > 0 ? (
                     <select
                         {...SELECT_STYLE}
                         options={options}
-                        height={selectHeight(options.length)}
+                        height={selectHeight(options.length, height)}
                         onSelect={(index) => {
                             const provider = state.providers[index]
                             if (provider) {
@@ -73,11 +77,11 @@ export function AuthenticationChoices(
                         }}
                     />
                 ) : (
-                    <text fg={theme.textMuted}>
+                    <text fg={theme.textMuted} selectable={false}>
                         No authentication providers are available.
                     </text>
                 )}
-                <text fg={theme.textMuted}>
+                <text fg={theme.textMuted} selectable={false}>
                     {state.providers.length > 0
                         ? "enter select  esc close"
                         : "enter or esc close"}
@@ -94,24 +98,30 @@ export function AuthenticationChoices(
 
         return (
             <box flexDirection="column" gap={1}>
-                <text>{state.provider.name}</text>
-                <text>Select a login method</text>
+                <text fg={theme.textStrong} selectable={false}>
+                    {state.provider.name}
+                </text>
+                <text fg={theme.text} selectable={false}>
+                    Select a login method
+                </text>
                 {state.provider.methods.length > 0 ? (
                     <select
                         {...SELECT_STYLE}
                         options={options}
-                        height={selectHeight(options.length)}
+                        height={selectHeight(options.length, height)}
                         onSelect={(index) => {
                             const method = state.provider.methods[index]
                             if (method) controller.selectMethod(method.id)
                         }}
                     />
                 ) : (
-                    <text fg={theme.textMuted}>
+                    <text fg={theme.textMuted} selectable={false}>
                         No login methods are available for this provider.
                     </text>
                 )}
-                <text fg={theme.textMuted}>enter select  esc back</text>
+                <text fg={theme.textMuted} selectable={false}>
+                    enter select  esc back
+                </text>
             </box>
         )
     }
@@ -119,41 +129,51 @@ export function AuthenticationChoices(
     if (state.type === "confirm") {
         return (
             <box flexDirection="column" gap={1}>
-                <text>{`Disconnect ${state.provider.name}?`}</text>
-                <text fg={theme.textMuted}>
+                <text fg={theme.textStrong} selectable={false}>
+                    {`Disconnect ${state.provider.name}?`}
+                </text>
+                <text fg={theme.textMuted} selectable={false}>
                     {`Account: ${state.provider.accountId ?? "unavailable"}`}
                 </text>
                 <select
                     {...SELECT_STYLE}
                     options={CONFIRM_OPTIONS}
-                    height={selectHeight(CONFIRM_OPTIONS.length)}
+                    height={selectHeight(CONFIRM_OPTIONS.length, height)}
                     onSelect={(index) => {
                         if (index === 0) controller.confirmLogout()
                         else controller.back()
                     }}
                 />
-                <text fg={theme.textMuted}>enter select  esc back</text>
+                <text fg={theme.textMuted} selectable={false}>
+                    enter select  esc back
+                </text>
             </box>
         )
     }
 
     return (
         <box flexDirection="column" gap={1}>
-            <text fg={theme.red}>{state.message}</text>
+            <text
+                fg={theme.red}
+                selectionBg={theme.selectionBg}
+                selectionFg={theme.selectionFg}
+            >{state.message}</text>
             <select
                 {...SELECT_STYLE}
                 options={RETRY_OPTIONS}
-                height={selectHeight(RETRY_OPTIONS.length)}
+                height={selectHeight(RETRY_OPTIONS.length, height)}
                 onSelect={(index) => {
                     if (index === 0) controller.retry()
                     else controller.back()
                 }}
             />
-            <text fg={theme.textMuted}>enter select  esc back</text>
+            <text fg={theme.textMuted} selectable={false}>
+                enter select  esc back
+            </text>
         </box>
     )
 }
 
-function selectHeight(optionCount: number): number {
-    return Math.max(3, Math.min(optionCount * 2, 10))
+function selectHeight(optionCount: number, terminalHeight: number): number {
+    return Math.max(3, Math.min(optionCount * 2, 10, terminalHeight - 14))
 }

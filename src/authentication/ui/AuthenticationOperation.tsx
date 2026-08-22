@@ -1,8 +1,6 @@
 import type {
     InputRenderable,
-    ScrollBoxRenderable,
 } from "@opentui/core"
-import { useKeyboard } from "@opentui/react"
 import {
     useRef,
     type ReactNode,
@@ -13,7 +11,6 @@ import type {
     AuthenticationFlowController,
     TAuthenticationFlowState,
 } from "@/authentication/ui/authentication-flow-controller"
-import { authenticationKeyboardShortcuts } from "@/authentication/ui/keyboard-shortcuts"
 import { theme } from "@/terminal/theme"
 
 type TAuthenticationOperationState = Extract<
@@ -32,48 +29,44 @@ export function AuthenticationOperation(
 ): ReactNode {
     const { controller, state } = props
     const promptInputRef = useRef<InputRenderable | null>(null)
-    const loginScrollRef = useRef<ScrollBoxRenderable | null>(null)
-
-    useKeyboard((key) => {
-        const action = authenticationKeyboardShortcuts.resolve("flow", key)
-        if (
-            state.type !== "login"
-            || (action !== "scroll.up" && action !== "scroll.down")
-        ) return
-
-        key.preventDefault()
-        key.stopPropagation()
-        loginScrollRef.current?.scrollBy(
-            action === "scroll.up" ? -1 : 1,
-            "viewport",
-        )
-    })
 
     if (state.type === "login") {
         return (
-            <scrollbox
-                ref={loginScrollRef}
-                height={14}
-                scrollY
-                stickyScroll
-                stickyStart="bottom"
-                viewportCulling={false}
-                verticalScrollbarOptions={{ visible: false }}
-                contentOptions={{ flexDirection: "column", gap: 1 }}
+            <box
+                width="100%"
+                flexDirection="column"
+                gap={1}
+                backgroundColor={theme.surface}
             >
-                <text>{`Signing in to ${state.provider.name}...`}</text>
+                <text
+                    fg={theme.textStrong}
+                    selectionBg={theme.selectionBg}
+                    selectionFg={theme.selectionFg}
+                >{`Signing in to ${state.provider.name}...`}</text>
                 {state.event ? <AuthenticationEvent event={state.event} /> : (
-                    <text fg={theme.textMuted}>Starting authentication...</text>
+                    <text
+                        fg={theme.textMuted}
+                        selectionBg={theme.selectionBg}
+                        selectionFg={theme.selectionFg}
+                    >Starting authentication...</text>
                 )}
                 {state.browserOpenFailed ? (
-                    <text fg={theme.amber}>
+                    <text
+                        fg={theme.amber}
+                        selectionBg={theme.selectionBg}
+                        selectionFg={theme.selectionFg}
+                    >
                         Could not open the browser automatically. Use the URL above.
                     </text>
                 ) : null}
                 {state.prompt ? (
                     <box flexDirection="column" gap={1}>
-                        <text>{state.prompt.message}</text>
-                        <box border={["bottom"]} borderColor={theme.textMuted}>
+                        <text
+                            fg={theme.text}
+                            selectionBg={theme.selectionBg}
+                            selectionFg={theme.selectionFg}
+                        >{state.prompt.message}</text>
+                        <box border={["bottom"]} borderColor={theme.green}>
                             <input
                                 key={state.prompt.id}
                                 ref={promptInputRef}
@@ -82,8 +75,12 @@ export function AuthenticationOperation(
                                 textColor={theme.text}
                                 focusedTextColor={theme.text}
                                 placeholderColor={theme.textMuted}
-                                backgroundColor="transparent"
-                                focusedBackgroundColor="transparent"
+                                backgroundColor={theme.surface}
+                                focusedBackgroundColor={theme.surface}
+                                cursorColor={theme.green}
+                                cursorStyle={{ style: "line", blinking: true }}
+                                selectionBg={theme.selectionBg}
+                                selectionFg={theme.selectionFg}
                                 onSubmit={() => {
                                     controller.submitPrompt(
                                         promptInputRef.current?.value ?? "",
@@ -91,56 +88,114 @@ export function AuthenticationOperation(
                                 }}
                             />
                         </box>
-                        <text fg={theme.textMuted}>enter submit  esc cancel</text>
+                        <text fg={theme.textMuted} selectable={false}>
+                            enter submit  esc cancel
+                        </text>
                     </box>
                 ) : (
-                    <text fg={theme.textMuted}>Waiting...  esc cancel</text>
+                    <text fg={theme.textMuted} selectable={false}>
+                        Waiting...  esc cancel
+                    </text>
                 )}
-                <text fg={theme.textMuted}>page up/down scroll</text>
-            </scrollbox>
+                <text fg={theme.textMuted} selectable={false}>
+                    page up/down scroll
+                </text>
+            </box>
         )
     }
 
     if (state.type === "logout") {
         return (
             <box flexDirection="column" gap={1}>
-                <text>{`Disconnecting ${state.provider.name}...`}</text>
-                <text fg={theme.textMuted}>Please wait  esc cancel</text>
+                <text
+                    fg={theme.textStrong}
+                    selectionBg={theme.selectionBg}
+                    selectionFg={theme.selectionFg}
+                >{`Disconnecting ${state.provider.name}...`}</text>
+                <text fg={theme.textMuted} selectable={false}>
+                    Please wait  esc cancel
+                </text>
             </box>
         )
     }
 
     return (
         <box flexDirection="column" gap={1}>
-            <text fg={theme.green}>
+            <text
+                fg={theme.green}
+                selectionBg={theme.selectionBg}
+                selectionFg={theme.selectionFg}
+            ><strong>
                 {state.mode === "login"
                     ? "Sign-in complete"
                     : "Sign-out complete"}
+            </strong></text>
+            <text
+                fg={theme.text}
+                selectionBg={theme.selectionBg}
+                selectionFg={theme.selectionFg}
+            >{`Provider: ${state.providerName}`}</text>
+            <text
+                fg={theme.text}
+                selectionBg={theme.selectionBg}
+                selectionFg={theme.selectionFg}
+            >{`Account: ${state.accountId ?? "unavailable"}`}</text>
+            <text fg={theme.textMuted} selectable={false}>
+                enter or esc close
             </text>
-            <text>{`Provider: ${state.providerName}`}</text>
-            <text>{`Account: ${state.accountId ?? "unavailable"}`}</text>
-            <text fg={theme.textMuted}>enter or esc close</text>
         </box>
     )
 }
 
 function AuthenticationEvent(props: { readonly event: TAuthEvent }): ReactNode {
     if (props.event.type === "progress") {
-        return <text fg={theme.textMuted}>{props.event.message}</text>
+        return <text
+            fg={theme.textMuted}
+            selectionBg={theme.selectionBg}
+            selectionFg={theme.selectionFg}
+        >{props.event.message}</text>
     }
     if (props.event.type === "authorization") {
         return (
             <box flexDirection="column" gap={1}>
-                <text>{props.event.instructions}</text>
-                <text fg={theme.green} wrapMode="word">{props.event.url}</text>
+                <text
+                    fg={theme.text}
+                    selectionBg={theme.selectionBg}
+                    selectionFg={theme.selectionFg}
+                >{props.event.instructions}</text>
+                <text
+                    selectionBg={theme.selectionBg}
+                    selectionFg={theme.selectionFg}
+                    wrapMode="word"
+                >
+                    <a key={props.event.url} href={props.event.url} fg={theme.blue}>
+                        {props.event.url}
+                    </a>
+                </text>
             </box>
         )
     }
     return (
         <box flexDirection="column" gap={1}>
-            <text>{props.event.instructions}</text>
-            <text fg={theme.green} wrapMode="word">{props.event.url}</text>
-            <text>{`Device code: ${props.event.userCode}`}</text>
+            <text
+                fg={theme.text}
+                selectionBg={theme.selectionBg}
+                selectionFg={theme.selectionFg}
+            >{props.event.instructions}</text>
+            <text
+                selectionBg={theme.selectionBg}
+                selectionFg={theme.selectionFg}
+                wrapMode="word"
+            >
+                <a key={props.event.url} href={props.event.url} fg={theme.blue}>
+                    {props.event.url}
+                </a>
+            </text>
+            <text
+                fg={theme.textStrong}
+                selectionBg={theme.selectionBg}
+                selectionFg={theme.selectionFg}
+            >{`Device code: ${props.event.userCode}`}</text>
         </box>
     )
 }

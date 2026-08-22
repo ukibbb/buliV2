@@ -1,5 +1,6 @@
+import type { ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard } from "@opentui/react"
-import type { ReactNode } from "react"
+import { useRef, type ReactNode } from "react"
 
 import type { IAuthenticationService } from "@/authentication/contracts"
 import { AuthenticationChoices } from "@/authentication/ui/AuthenticationChoices"
@@ -28,9 +29,19 @@ export function AuthenticationFlow(
     props: IAuthenticationFlowProps,
 ): ReactNode {
     const { controller, state } = useAuthenticationFlow(props)
+    const bodyScrollRef = useRef<ScrollBoxRenderable | null>(null)
 
     useKeyboard((key) => {
         const action = authenticationKeyboardShortcuts.resolve("flow", key)
+        if (action === "scroll.up" || action === "scroll.down") {
+            key.preventDefault()
+            key.stopPropagation()
+            bodyScrollRef.current?.scrollBy(
+                action === "scroll.up" ? -1 : 1,
+                "viewport",
+            )
+            return
+        }
         const isEmptyProviderList = state.type === "providers"
             && state.providers.length === 0
         const acceptsFlow = action === "accept"
@@ -57,20 +68,43 @@ export function AuthenticationFlow(
         >
             <box
                 width="100%"
+                height="100%"
+                minHeight={0}
                 maxWidth={76}
                 maxHeight="100%"
                 flexDirection="column"
                 border
                 borderStyle="single"
-                borderColor={theme.textMuted}
+                borderColor={theme.border}
+                backgroundColor={theme.surface}
                 padding={1}
                 gap={1}
             >
-                <text fg={theme.green}>Buli Authentication</text>
-                <text fg={theme.textMuted}>
+                <text fg={theme.green} selectable={false}>
+                    <strong>Buli Authentication</strong>
+                </text>
+                <text fg={theme.textMuted} selectable={false}>
                     {controller.mode === "login" ? "Sign in" : "Sign out"}
                 </text>
-                {renderActiveState(controller, state)}
+                <scrollbox
+                    key={state.type}
+                    id="authentication-body"
+                    ref={bodyScrollRef}
+                    width="100%"
+                    minHeight={0}
+                    flexGrow={1}
+                    scrollY
+                    stickyScroll={state.type === "login"}
+                    stickyStart="bottom"
+                    viewportCulling={false}
+                    contentOptions={{
+                        flexDirection: "column",
+                        backgroundColor: theme.surface,
+                    }}
+                    verticalScrollbarOptions={{ visible: false }}
+                >
+                    {renderActiveState(controller, state)}
+                </scrollbox>
             </box>
         </box>
     )
@@ -82,7 +116,9 @@ function renderActiveState(
 ): ReactNode {
     switch (state.type) {
         case "loading":
-            return <text fg={theme.textMuted}>Loading providers...</text>
+            return <text fg={theme.textMuted} selectable={false}>
+                Loading providers...
+            </text>
         case "providers":
         case "methods":
         case "confirm":

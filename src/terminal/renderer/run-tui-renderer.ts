@@ -8,7 +8,9 @@ import { createRoot } from "@opentui/react"
 import { createElement, type ReactNode } from "react"
 
 import { TerminalSelectionClipboardRoot } from "@/terminal/clipboard/ClipboardOverlay"
+import { registerTerminalParsers } from "@/terminal/parsers"
 import { Lifetime } from "@/terminal/renderer/lifetime"
+import { theme } from "@/terminal/theme"
 
 type TRendererComposition = (
     lifetime: Lifetime,
@@ -18,6 +20,7 @@ type TRendererComposition = (
 export async function runTuiRenderer(
     compose: TRendererComposition,
 ): Promise<void> {
+    registerTerminalParsers()
     const lifetime = new Lifetime()
     // `finally` obejmuje cały setup: błąd po zdobyciu zasobu nadal uruchomi jego
     // cleanup, więc terminal nie zostanie pozostawiony w trybie OpenTUI.
@@ -34,11 +37,24 @@ export async function runTuiRenderer(
             openConsoleOnError: false,
             useMouse: true,
             clearOnShutdown: true,
+            backgroundColor: theme.background,
             onDestroy: () => {
                 void lifetime.close().catch(() => {})
             },
             consoleOptions: {
                 sizePercent: 100,
+                colorInfo: theme.blue,
+                colorWarn: theme.amber,
+                colorError: theme.red,
+                colorDebug: theme.violet,
+                colorDefault: theme.text,
+                backgroundColor: theme.background,
+                title: "Buli console",
+                titleBarColor: theme.surfaceRaised,
+                titleBarTextColor: theme.green,
+                cursorColor: theme.green,
+                selectionColor: theme.selectionBg,
+                copyButtonColor: theme.cyan,
                 keyBindings: [{ name: "y", ctrl: true, action: "copy-selection" }],
             },
         })

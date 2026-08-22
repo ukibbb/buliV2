@@ -45,6 +45,9 @@ bun run typecheck
 bun test
 ```
 
+Rendering conventions, syntax parsers, and planned OpenTUI primitives are
+documented in [`docs/opentui-rendering.md`](docs/opentui-rendering.md).
+
 ## Architecture
 
 Source code is grouped by feature and dependency direction rather than by

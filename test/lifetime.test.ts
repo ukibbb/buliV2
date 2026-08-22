@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 
-import { Lifetime } from "@/lifetime"
+import { Lifetime } from "@/terminal/renderer/lifetime"
 
 test("close is idempotent and aborts with the first reason", async () => {
   const lifetime = new Lifetime()

@@ -1,13 +1,12 @@
 import type {
   IAssistantMessage,
-  IModelProfile,
-  IModelUsage,
   IReasoningContent,
   ITextContent,
   IToolCallContent,
   TAssistantContent,
-} from "@/domain"
-import type { IAgentModelEvent } from "@/agent/agent-types"
+} from "@/agent/messages"
+import type { IAgentModelEvent } from "@/agent/model"
+import type { IModelProfile, IModelUsage } from "@/agent/model-values"
 
 interface IAssistantMessageBuilderOptions {
   readonly sessionId: string

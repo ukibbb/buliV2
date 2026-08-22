@@ -12,20 +12,20 @@ import {
 import { homedir, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
-import type { IAgentModelRequest } from "@/agent/agent-types"
 import type {
+  IAgentModelRequest,
   IAssistantMessage,
-  ICompactionCheckpoint,
-  ISessionInfo,
   IToolResultMessage,
   TAgentMessage,
   IUserMessage,
-} from "@/domain"
-import { AgentSession } from "@/session/agent-session"
+} from "@/agent"
 import {
+  AgentSession,
   defaultSessionFilePath,
+  type ICompactionCheckpoint,
+  type ISessionInfo,
   JsonlSessionManager,
-} from "@/session/jsonl-session-manager"
+} from "@/sessions"
 
 test("stages cloned metadata and writes exact version 2 envelopes on first append", async () => {
   const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-"))

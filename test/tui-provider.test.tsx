@@ -2,9 +2,9 @@ import { expect, test } from "bun:test"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
 
-import { createBuliApplication } from "@/application"
-import { BuliRuntimeProvider } from "@/tui/app/application-context"
-import { InMemorySessionManager } from "@/session/session-manager"
+import { createBuliApplication } from "@/app"
+import { BuliRuntimeProvider } from "@/app/ui/context/application-context"
+import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
 
 test("renders provider children without creating root-level text", async () => {
   const startup = await createBuliApplication({

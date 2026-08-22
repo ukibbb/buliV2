@@ -6,15 +6,14 @@ import type {
   IBuliPromptInput,
   IBuliPromptSubmission,
   IBuliQueuedMessages,
-} from "@/application/contracts"
-import type { TReasoningEffort } from "@/agent/agent-types"
+} from "@/app/contracts"
 import type {
-  ISessionInfo,
-  ISessionSnapshot,
+  TReasoningEffort,
   TToolApprovalDecision,
   TToolApprovalRequest,
-} from "@/domain"
-import { BuliUiController } from "@/tui/app/ui-controller"
+} from "@/agent"
+import { BuliUiController } from "@/app/ui/ui-controller"
+import type { ISessionInfo, ISessionSnapshot } from "@/sessions"
 
 const APPLICATION_SNAPSHOT: IBuliApplicationSnapshot = {
   agents: [{ id: "test-agent", name: "Test Agent" }],

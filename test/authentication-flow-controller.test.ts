@@ -3,9 +3,9 @@ import { expect, test } from "bun:test"
 import type {
   IAuthProviderInfo,
   IAuthenticationService,
-} from "@/auth/contracts"
-import { AuthenticationFlowController } from "@/tui/authentication/authentication-flow-controller"
-import type { TAuthenticationOutcome } from "@/tui/authentication/types"
+} from "@/authentication/contracts"
+import { AuthenticationFlowController } from "@/authentication/ui/authentication-flow-controller"
+import type { TAuthenticationOutcome } from "@/authentication/ui/types"
 
 const PROVIDER: IAuthProviderInfo = {
   providerId: "openai",

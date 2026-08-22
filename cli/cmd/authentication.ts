@@ -1,6 +1,6 @@
 import type { CommandModule } from "yargs";
 
-import { runAuthenticationTui } from "@/entrypoints/run-authentication-tui";
+import { runAuthenticationTui } from "@/app/entrypoints/run-authentication-tui";
 
 type AuthenticationCommandArgs = {};
 

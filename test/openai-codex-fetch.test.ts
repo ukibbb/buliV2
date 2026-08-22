@@ -1,15 +1,15 @@
 import { expect, test } from "bun:test"
 
-import type { IOAuthCredential } from "@/auth/types"
+import type { IOAuthCredential } from "@/authentication/credentials"
 import {
     OPENAI_CODEX_RESPONSES_URL,
     OPENAI_OAUTH_DUMMY_API_KEY,
     OPENAI_OAUTH_ORIGINATOR,
-} from "@/providers/openai/openai-constants"
+} from "@/providers/openai/constants"
 import {
     createOpenAiCodexFetch,
     type IOpenAiCodexCredentialProvider,
-} from "@/providers/openai/openai-codex-fetch"
+} from "@/providers/openai/transport/codex-fetch"
 
 test("sends an exact Codex request with OAuth headers and buffered body", async () => {
     const provider = new StubCredentialProvider(

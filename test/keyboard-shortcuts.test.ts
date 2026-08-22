@@ -3,8 +3,8 @@ import { expect, test } from "bun:test"
 import {
   buliKeyboardShortcuts,
   resolveApprovalKeyboardAction,
-} from "@/tui/app/keyboard-shortcuts"
-import { authenticationKeyboardShortcuts } from "@/tui/authentication/keyboard-shortcuts"
+} from "@/app/ui/keyboard-shortcuts"
+import { authenticationKeyboardShortcuts } from "@/authentication/ui/keyboard-shortcuts"
 
 test("resolves keyboard actions by scope and exact modifiers", () => {
   const keyboard = buliKeyboardShortcuts

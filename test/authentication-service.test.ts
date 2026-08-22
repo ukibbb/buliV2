@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 
-import { AuthenticationService } from "@/auth/authentication-service"
-import type { IAuthenticationProvider } from "@/auth/types"
+import { AuthenticationService } from "@/authentication/authentication-service"
+import type { IAuthenticationProvider } from "@/authentication/credentials"
 
 test("keeps a provider available for login when stored status is invalid", async () => {
   const provider = authenticationProvider({

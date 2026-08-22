@@ -1,4 +1,4 @@
-import { runMainTui } from "@/entrypoints/run-main-tui";
+import { runMainTui } from "@/app/entrypoints/run-main-tui";
 import type { CommandModule } from "yargs";
 
 type RunBuliTuiArgs = {};

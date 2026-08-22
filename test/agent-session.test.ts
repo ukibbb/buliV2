@@ -4,18 +4,16 @@ import type {
   IAgentModel,
   IAgentModelRequest,
   IAgentTool,
-} from "@/agent/agent-types"
-import type {
   IAssistantMessage,
   IToolResultMessage,
   IUserMessage,
   TToolApprovalDecision,
-} from "@/domain"
-import { AgentSession } from "@/session/agent-session"
+} from "@/agent"
 import {
+  AgentSession,
   InMemorySessionManager,
   type ISessionManager,
-} from "@/session/session-manager"
+} from "@/sessions"
 
 test("AgentSession restores history, persists completion barriers, and publishes stable snapshots", async () => {
   const manager = new InMemorySessionManager()

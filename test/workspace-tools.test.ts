@@ -15,8 +15,8 @@ import { delimiter as PATH_DELIMITER, join, relative } from "node:path"
 import type {
   IAgentTool,
   IAgentToolExecutionContext,
-} from "@/agent/agent-types"
-import { createWorkspaceTools } from "@/tools/workspace-tools"
+} from "@/agent/tool"
+import { createWorkspaceTools } from "@/tools"
 
 test("registers workspace tools in model-facing order", () => {
   const tools = createWorkspaceTools(process.cwd())

@@ -1,19 +1,19 @@
 import { expect, test } from "bun:test"
-import type { IBuliPromptInput } from "@/application/contracts"
+import type { IBuliPromptInput } from "@/app/contracts"
 import {
   BuliApplicationRuntime,
   type IBuliAgentRuntimeConfig,
-} from "@/application/runtime"
+} from "@/app/runtime"
 import type {
   IAgentModel,
   IAgentModelEvent,
   IAgentModelRequest,
-  IAgentTool,
-} from "@/agent/agent-types"
+} from "@/agent/model"
+import type { IAgentTool } from "@/agent/tool"
 import {
   InMemorySessionManager,
   type ISessionManager,
-} from "@/session/session-manager"
+} from "@/sessions"
 
 const WORKSPACE_ROOT = "/workspace"
 const TEST_AGENT_ID = "test-agent"

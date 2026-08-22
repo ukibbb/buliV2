@@ -11,8 +11,8 @@ import {
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
-import { FileAuthStore } from "@/auth/file-auth-store"
-import type { IOAuthCredential, TAuthCredential } from "@/auth/types"
+import { FileAuthStore } from "@/authentication/file-auth-store"
+import type { IOAuthCredential, TAuthCredential } from "@/authentication/credentials"
 
 test("reads existing OpenAI OAuth credentials", async () => {
   await withAuthPath(async (path) => {

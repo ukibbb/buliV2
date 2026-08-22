@@ -4,11 +4,11 @@
 | --- | --- |
 | Status | WIP decision document |
 | Runtime effect | None |
-| Related implementation | `agents-prompts.ts` |
+| Related implementation | `system-prompt.ts` |
 
 ## Purpose
 
-This document is the working specification for how Buli should behave. It collects the ideas currently stored as comments in `agents-prompts.ts`, turns ambiguous statements into explicit decisions, and separates four different concerns:
+This document is the working specification for how Buli should behave. It collects the ideas currently stored as comments in `system-prompt.ts`, turns ambiguous statements into explicit decisions, and separates four different concerns:
 
 1. Product goals and interaction style.
 2. Instructions that belong in the model prompt.
@@ -52,7 +52,7 @@ The current application is smaller than the behavior described in the WIP notes.
 
 | Area | Current behavior |
 | --- | --- |
-| Active prompt | Only the strings returned by `systemPrompt()` in `agents-prompts.ts` reach the model. All earlier comments are inactive notes. |
+| Active prompt | Only the strings returned by `systemPrompt()` in `system-prompt.ts` reach the model. All earlier comments are inactive notes. |
 | Provider integration | `OpenAiAgentModel` maps provider-neutral requests to the AI SDK Responses API and sends the system prompt through OpenAI `instructions`. |
 | Tools | The default registry exposes only `read_file`, `glob`, and `grep`. |
 | Writes | There is no write tool, patch proposal, patch application, or approval workflow. |
@@ -76,7 +76,7 @@ Consequences:
 
 ## Requirements Recovered From The WIP Notes
 
-This section normalizes the notes from `agents-prompts.ts`. It preserves intent without treating every original sentence as a final instruction.
+This section normalizes the notes from `system-prompt.ts`. It preserves intent without treating every original sentence as a final instruction.
 
 ### Pair programming and ownership
 
@@ -896,7 +896,7 @@ The order intentionally follows Ponytail's minimalism lesson: validate the small
 | D25 | Assumed skill level | `OPEN` | Options documented. |
 | D26 | API/library completeness | `OPEN` | Options documented. |
 
-## Migration Rule For `agents-prompts.ts`
+## Migration Rule For `system-prompt.ts`
 
 Until the decisions above are accepted:
 

@@ -29,6 +29,10 @@ import {
     type TToolApprovalDraft,
     type TToolApprovalRequest,
 } from "@/agent/tool-approval"
+import {
+    createAgentTurnAuthorization,
+    type IAgentTurnAuthorization,
+} from "@/agent/turn-policy"
 import { generateRandomId } from "@/common/ids"
 
 interface IAgentOptions {
@@ -142,6 +146,10 @@ export class Agent {
         }
         const runId = this.generateId()
         const prompt = this.createUserMessage(text, runId, "prompt")
+        const turnAuthorization = createAgentTurnAuthorization(
+            prompt,
+            this.stateValue.messages,
+        )
         const abortController = new AbortController()
         const accepted = Promise.withResolvers<void>()
         const settled = Promise.withResolvers<void>()
@@ -173,7 +181,13 @@ export class Agent {
             lastRunReason: undefined,
         }
 
-        void this.executeRun(activeRun, prompt, runConfiguration, context)
+        void this.executeRun(
+            activeRun,
+            prompt,
+            turnAuthorization,
+            runConfiguration,
+            context,
+        )
 
         return {
             runId,
@@ -274,6 +288,7 @@ export class Agent {
     private async executeRun(
         activeRun: IActiveAgentRun,
         prompt: IUserMessage,
+        initialTurnAuthorization: IAgentTurnAuthorization,
         runConfiguration: IAgentRunConfiguration,
         context: ReturnType<TAgentContextProjector>,
     ): Promise<void> {
@@ -291,6 +306,7 @@ export class Agent {
                     ? {}
                     : { contextSummary: context.contextSummary }),
                 prompt,
+                initialTurnAuthorization,
                 model: runConfiguration.model,
                 ...(runConfiguration.modelProfile === undefined
                     ? {}

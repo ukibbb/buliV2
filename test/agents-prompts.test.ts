@@ -22,10 +22,13 @@ test("builds pair-programming instructions from active capabilities", () => {
   expect(prompt).toContain("Nie jesteś zwykłym coding agent")
   expect(prompt).toContain("Pracujemy z naciskiem na programowanie i mentoring.")
   expect(prompt).toContain("apply_patch wolno wywołać tylko po jawnej prośbie")
+  expect(prompt).toContain("Kontekst patcha kopiuj dokładnie z wyniku read")
+  expect(prompt).toContain("małe, precyzyjnie zakotwiczone chunki")
   expect(prompt).toContain("samo wywołanie nie zmienia plików")
   expect(prompt).toContain("dopiero osobne Apply w UI")
   expect(prompt).toContain("Copy / Run once / Reject")
   expect(prompt).toContain("/bin/bash --noprofile --norc")
+  expect(prompt).toContain("ustaw path w glob lub grep bezpośrednio na node_modules/<nazwa-pakietu>")
   expect(prompt).not.toContain("read_file")
 })
 

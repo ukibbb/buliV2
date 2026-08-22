@@ -1,8 +1,6 @@
 const EXCLUDED_SEARCH_GLOBS = [
     "!**/.git",
     "!**/.git/**",
-    "!**/node_modules",
-    "!**/node_modules/**",
 ] as const
 
 export const SEARCH_DEFAULT_LIMIT = 100
@@ -15,9 +13,7 @@ export function excludedSearchGlobArguments(): string[] {
 
 /** Detects paths that must never appear in search-tool output. */
 export function hasExcludedSearchSegment(path: string): boolean {
-    return path.split("/").some(
-        (segment) => segment === ".git" || segment === "node_modules",
-    )
+    return path.split("/").some((segment) => segment === ".git")
 }
 
 /** Reads a required nonempty string from search-tool input. */

@@ -204,7 +204,7 @@ export const systemPrompt = (
     const instructions = [
         `Aktualny katalog roboczy i root workspace: ${workspaceRoot}.`,
         `Aktywne narzędzia: ${[...names].join(", ") || "brak"}.`,
-        // "Wszystkie ścieżki narzędzi są rozwiązywane względem workspace, chyba że schema narzędzia mówi inaczej.",
+        "Wszystkie ścieżki narzędzi są rozwiązywane względem workspace, chyba że schema narzędzia mówi inaczej.",
         // "Nie jesteś autonomicznym wykonawcą. Jesteś doświadczonym programistą pracującym z użytkownikiem w trybie pair programming.",
         // "Domyślnie użytkownik zachowuje ownership kodu: analizujesz, uczysz, dyskutujesz opcje i proponujesz najmniejszy skuteczny krok.",
         // "Implementujesz dopiero po jednoznacznej prośbie użytkownika. Zgoda na plan nie jest zgodą na zmianę plików.",
@@ -242,9 +242,14 @@ export const systemPrompt = (
     if (names.has("read")) {
         instructions.push("Do czytania plików i katalogów używaj read zamiast cat, head, tail lub sed. Kontynuuj przez offset, gdy wynik jest obcięty.")
     }
+    if (names.has("read") && names.has("glob") && names.has("grep")) {
+        instructions.push("Gdy analizujesz zainstalowaną bibliotekę, odczytaj jej package.json, a następnie ustaw path w glob lub grep bezpośrednio na node_modules/<nazwa-pakietu>; ogólne wyszukiwanie respektuje .gitignore.")
+    }
     if (names.has("apply_patch")) {
         instructions.push(
             "apply_patch wolno wywołać tylko po jawnej prośbie użytkownika o implementację lub zmianę plików. Pytanie, analiza, plan ani zgoda na plan nie są taką prośbą.",
+            "Przed wywołaniem apply_patch upewnij się, że aktualna treść wszystkich zmienianych fragmentów znajduje się w bieżącym kontekście. Użyj read, gdy fragmentu brakuje, odczyt był obcięty albo plik mógł się zmienić.",
+            "Kontekst patcha kopiuj dokładnie z wyniku read; nie odtwarzaj go z pamięci. Duże zmiany dziel na małe, precyzyjnie zakotwiczone chunki.",
             "Wywołanie przygotowuje jednorazową propozycję w pamięci i pokazuje dokładny diff; samo wywołanie nie zmienia plików.",
             "Pliki może zmienić dopiero osobne Apply w UI. Jedno zatwierdzenie dotyczy wyłącznie pokazanego diffu; odrzucenie lub abort przed Apply nie zmieniają workspace, a stale-plan wymaga nowej propozycji.",
         )

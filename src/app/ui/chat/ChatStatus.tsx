@@ -3,6 +3,7 @@ import type {
     TAgentRunEndReason,
     TToolApprovalRequest,
 } from "@/agent"
+import { SnakeAnimation } from "@/app/ui/chat/Snake"
 import { theme } from "@/terminal/theme"
 
 interface IChatStatusProps {
@@ -27,16 +28,19 @@ export function ChatStatus(props: IChatStatusProps) {
         <box
             width="100%"
             flexShrink={0}
-            flexDirection="column"
+            flexDirection="row"
             paddingLeft={1}
             paddingBottom={1}
         >
             {props.pendingToolApproval ? (
                 <text fg={theme.amber}>Waiting for your decision</text>
             ) : props.isRunning ? (
-                <text fg={theme.amber}>
-                    Working... Enter steer | Alt+Enter follow-up | Esc stop
-                </text>
+                <box flexDirection="row">
+                    <SnakeAnimation />
+                    <text fg={theme.textMuted}>
+                        Enter steer | Alt+Enter follow-up | Esc stop
+                    </text>
+                </box>
             ) : null}
             {props.pendingToolApproval && pendingMessageCount > 0 ? (
                 <text fg={theme.textMuted}>
@@ -66,11 +70,8 @@ export function ChatStatus(props: IChatStatusProps) {
                 <text fg={theme.red}>{props.inputError}</text>
             ) : null}
             <text>
-                <span fg={theme.textMuted}>{"model".padEnd(20)}</span>
                 <span fg={theme.green}>{props.selectedModelName}</span>
-            </text>
-            <text>
-                <span fg={theme.textMuted}>{"reasoning".padEnd(20)}</span>
+                <span> / </span>
                 <span fg={theme.amber}>{props.reasoningEffort}</span>
             </text>
         </box>

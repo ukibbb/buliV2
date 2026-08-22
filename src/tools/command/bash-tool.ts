@@ -27,6 +27,7 @@ export function createBashTool(workspaceRoot: string): IAgentTool {
 
     return {
         name: "bash",
+        approvalKind: "command",
         description: `Offer one exact command for Copy, Run once, or Reject. Run once uses ${PROCESS_INTERPRETER_DISPLAY} in a fresh non-interactive process after explicit approval. It is not a sandbox; deliberately detached descendants may outlive the run. Prefer read, glob, and grep for inspection, and apply_patch for file changes.`,
         inputSchema: {
             type: "object",

@@ -25,9 +25,12 @@ test("registers workspace tools in model-facing order", () => {
     "read",
     "glob",
     "grep",
+    "request_patch_handoff",
     "apply_patch",
     "bash",
   ])
+  expect(getTool(tools, "apply_patch").approvalKind).toBe("patch")
+  expect(getTool(tools, "bash").approvalKind).toBe("command")
 
   const read = getTool(tools, "read")
   expect(read.inputSchema).toMatchObject({
@@ -195,7 +198,7 @@ test("glob is sorted, scoped, ignore-aware, hidden-aware, and limited", async ()
       writeFile(join(workspace, "ignored.ts"), "ignored"),
       writeFile(join(workspace, "node_modules", "blocked.ts"), "blocked"),
       writeFile(join(workspace, ".git", "blocked.ts"), "blocked"),
-      writeFile(join(workspace, ".gitignore"), "ignored.ts\n!.hidden.ts\n"),
+      writeFile(join(workspace, ".gitignore"), "ignored.ts\nnode_modules\n!.hidden.ts\n"),
     ])
     const glob = getTool(createWorkspaceTools(workspace), "glob")
 
@@ -228,7 +231,7 @@ test("glob is sorted, scoped, ignore-aware, hidden-aware, and limited", async ()
     await expect(glob.execute(
       { pattern: "**/*", path: "node_modules", hidden: true },
       context(),
-    )).resolves.toBe("No files found")
+    )).resolves.toBe("node_modules/blocked.ts")
     await expect(glob.execute(
       { pattern: "**/*", path: ".git", hidden: true },
       context(),
@@ -305,7 +308,10 @@ if (process.platform !== "win32") {
 test("grep supports include, literal, case, context, limits, and no matches", async () => {
   const workspace = await temporaryWorkspace()
   try {
-    await mkdir(join(workspace, "nested"))
+    await Promise.all([
+      mkdir(join(workspace, "nested")),
+      mkdir(join(workspace, "node_modules")),
+    ])
     await writeFile(
       join(workspace, "a.ts"),
       "Alpha\nbefore\nneedle here\nafter\nneedle again\n",
@@ -318,7 +324,8 @@ test("grep supports include, literal, case, context, limits, and no matches", as
     )
     await writeFile(join(workspace, "long.txt"), `longmatch ${"x".repeat(5000)}\n`)
     await writeFile(join(workspace, "ignored.ts"), "needle ignored\n")
-    await writeFile(join(workspace, ".gitignore"), "ignored.ts\n")
+    await writeFile(join(workspace, "node_modules", "dependency.ts"), "dependency-only\n")
+    await writeFile(join(workspace, ".gitignore"), "ignored.ts\nnode_modules\n")
     const grep = getTool(createWorkspaceTools(workspace), "grep")
 
     await expect(grep.execute(
@@ -360,6 +367,10 @@ test("grep supports include, literal, case, context, limits, and no matches", as
       { pattern: "scoped-only", path: "nested" },
       context(),
     )).resolves.toBe("nested/scoped.txt:1: scoped-only")
+    await expect(grep.execute(
+      { pattern: "dependency-only", path: "node_modules" },
+      context(),
+    )).resolves.toBe("node_modules/dependency.ts:1: dependency-only")
 
     const longLine = textResult(await grep.execute(
       { pattern: "longmatch", path: "long.txt" },

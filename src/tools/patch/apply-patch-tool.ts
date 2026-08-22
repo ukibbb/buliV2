@@ -25,6 +25,7 @@ const APPLY_PATCH_DESCRIPTION = [
 export function createApplyPatchTool(workspaceRoot: string): IAgentTool {
     return {
         name: "apply_patch",
+        approvalKind: "patch",
         description: APPLY_PATCH_DESCRIPTION,
         inputSchema: {
             type: "object",

@@ -6,10 +6,13 @@ import {
   type IAgentModel,
   type IAgentModelRequest,
   type IAgentTool,
+  PATCH_HANDOFF_CONFIRMATION_QUESTION,
   type TToolApprovalDecision,
   type TToolApprovalDraft,
   type TToolApprovalRequest,
 } from "@/agent"
+import { createRequestPatchHandoffTool } from "@/tools"
+import { confirmedPatchHandoffMessages } from "./support/patch-handoff"
 
 test("Agent.prompt returns a synchronous handle and Agent owns live state", async () => {
   const agent = new Agent({
@@ -493,7 +496,7 @@ test("Agent publishes an immutable approval and approve resumes the pending run"
   expect(() => agent.resolveToolApproval("missing", "approve")).toThrow(
     "No tool approval is pending",
   )
-  const run = agent.prompt("Update the domain")
+  const run = agent.prompt("tak")
   await run.accepted
   const request = await requested.promise
   let settled = false
@@ -574,7 +577,7 @@ test("Agent keeps invalid patch decisions and mismatched IDs pending", async () 
     }
   })
 
-  const run = agent.prompt("Apply the patch")
+  const run = agent.prompt("tak")
   const request = await requested.promise
 
   expect(() => agent.resolveToolApproval("other-approval", "approve")).toThrow(
@@ -592,6 +595,106 @@ test("Agent keeps invalid patch decisions and mismatched IDs pending", async () 
   expect(agent.state.pendingToolApproval).toBeUndefined()
 })
 
+test("Agent turns a recorded text handoff into one patch authorization", async () => {
+  const requests: IAgentModelRequest[] = []
+  const decisions: TToolApprovalDecision[] = []
+  const patchTool: IAgentTool = {
+    name: "apply_patch",
+    approvalKind: "patch",
+    description: "Prepare a patch",
+    inputSchema: { type: "object", additionalProperties: false },
+    async execute(_input, context) {
+      if (!context.requestApproval) throw new Error("Missing approval bridge")
+      const decision = await context.requestApproval(patchApprovalDraft())
+      decisions.push(decision)
+      return decision
+    },
+  }
+  const model: IAgentModel = {
+    async *stream(request) {
+      const index = requests.length
+      requests.push({
+        ...request,
+        messages: structuredClone(request.messages),
+        tools: structuredClone(request.tools),
+      })
+      if (index === 0) {
+        yield {
+          type: "tool-call",
+          toolCallId: "handoff-call",
+          toolName: "request_patch_handoff",
+          input: { scope: "Implement parser changes" },
+        }
+        yield { type: "finish", reason: "tool-calls" }
+        return
+      }
+      if (index === 1) {
+        yield { type: "text-start", id: "handoff-question" }
+        yield {
+          type: "text-delta",
+          id: "handoff-question",
+          delta: PATCH_HANDOFF_CONFIRMATION_QUESTION,
+        }
+        yield { type: "text-end", id: "handoff-question" }
+        yield { type: "finish", reason: "stop" }
+        return
+      }
+      if (index === 2) {
+        yield {
+          type: "tool-call",
+          toolCallId: "confirmed-patch-call",
+          toolName: patchTool.name,
+          input: {},
+        }
+        yield { type: "finish", reason: "tool-calls" }
+        return
+      }
+      yield { type: "finish", reason: "stop" }
+    },
+  }
+  const agent = new Agent({
+    sessionId: "session-1",
+    systemPrompt: "System",
+    resolveRunConfiguration: () => ({
+      model,
+      reasoningEffort: "medium",
+    }),
+    tools: [createRequestPatchHandoffTool(), patchTool],
+  })
+  const requested = Promise.withResolvers<TToolApprovalRequest>()
+  agent.subscribe((event) => {
+    if (event.type === "tool_approval_requested") {
+      requested.resolve(event.request)
+    }
+  })
+
+  const handoffRun = agent.prompt("Przejmij proszę implementację parsera")
+  await handoffRun.settled
+
+  expect(requests[0]?.tools.map((tool) => tool.name)).toEqual([
+    "request_patch_handoff",
+  ])
+  expect(requests[1]?.tools).toEqual([])
+  expect(agent.state.messages.map((message) => message.role)).toEqual([
+    "user",
+    "assistant",
+    "toolResult",
+    "assistant",
+  ])
+
+  const patchRun = agent.prompt("tak")
+  const approval = await requested.promise
+
+  expect(requests[2]?.tools.map((tool) => tool.name)).toEqual([
+    "apply_patch",
+  ])
+  agent.resolveToolApproval(approval.id, "reject")
+  await patchRun.settled
+
+  expect(decisions).toEqual(["reject"])
+  expect(requests[3]?.tools).toEqual([])
+})
+
 test("Agent rejects unknown command decisions and delivers copy", async () => {
   const decisions: TToolApprovalDecision[] = []
   const agent = approvalAgent(commandApprovalDraft(), decisions)
@@ -602,7 +705,7 @@ test("Agent rejects unknown command decisions and delivers copy", async () => {
     }
   })
 
-  const run = agent.prompt("Run the command")
+  const run = agent.prompt("Run the required command")
   const request = await requested.promise
 
   expect(() => agent.resolveToolApproval(
@@ -629,7 +732,7 @@ test("Agent abort settles a waiting approval and clears pending state", async ()
     }
   })
 
-  const run = agent.prompt("Run and stop")
+  const run = agent.prompt("Run the command and stop")
   const request = await requested.promise
 
   await Promise.all([agent.abort(), run.settled])
@@ -710,6 +813,7 @@ function approvalAgent(
 ): Agent {
   const tool: IAgentTool = {
     name: "approval_tool",
+    approvalKind: draft.kind,
     description: "Request approval",
     inputSchema: { type: "object", additionalProperties: false },
     async execute(_input, context) {
@@ -743,6 +847,9 @@ function approvalAgent(
       reasoningEffort: "medium",
     }),
     tools: [tool],
+    initialMessages: draft.kind === "patch"
+      ? confirmedPatchHandoffMessages()
+      : [],
   })
 }
 

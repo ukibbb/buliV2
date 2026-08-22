@@ -14,6 +14,7 @@ import type {
     TToolExecutionOutcome,
 } from "@/agent/tool"
 import { truncateToolOutput } from "@/agent/tool-output"
+import type { IAgentTurnAuthorization } from "@/agent/turn-policy"
 
 const COMMITTED_AFTER_ABORT_SUMMARY =
     "WARNING: Workspace changes were committed despite cancellation."
@@ -25,6 +26,7 @@ interface IExecuteToolCallsOptions {
     readonly runId: string
     readonly signal: AbortSignal
     readonly emit: (event: IAgentEvent) => void | Promise<void>
+    readonly authorization: IAgentTurnAuthorization
     readonly requestApproval?: (
         draft: TToolApprovalDraft,
         context: {
@@ -101,6 +103,9 @@ async function executeToolCall(
     } else if (!tool) {
         content = `Unknown tool: ${toolCall.toolName}`
         isError = true
+    } else if (!options.authorization.consumeToolCall(tool)) {
+        content = `Tool "${tool.name}" is not authorized for the current user message; no approval was requested.`
+        isError = true
     } else {
         let acceptingProgress = true
         let acceptingApprovals = true
@@ -136,10 +141,25 @@ async function executeToolCall(
                     "Tool approval is not available in this agent loop",
                 ))
             }
+            if (tool.approvalKind === undefined) {
+                return Promise.reject(new Error(
+                    `Tool "${tool.name}" cannot request approval because it does not declare an approval kind`,
+                ))
+            }
+            if (tool.approvalKind !== draft.kind) {
+                return Promise.reject(new Error(
+                    `Tool "${tool.name}" declares ${tool.approvalKind} approval but requested ${draft.kind} approval`,
+                ))
+            }
 
             let task: Promise<TToolApprovalDecision>
             try {
                 options.signal.throwIfAborted()
+                if (!options.authorization.consumeApproval(tool, draft.kind)) {
+                    throw new Error(
+                        `Tool "${tool.name}" is not authorized to request ${draft.kind} approval for the current user message`,
+                    )
+                }
                 task = Promise.resolve(options.requestApproval(
                     structuredClone(draft),
                     {

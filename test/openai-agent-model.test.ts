@@ -116,11 +116,12 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
     expect.objectContaining({ type: "function", name: "read" }),
     expect.objectContaining({ type: "function", name: "glob" }),
     expect.objectContaining({ type: "function", name: "grep" }),
+    expect.objectContaining({ type: "function", name: "request_patch_handoff" }),
+    expect.objectContaining({ type: "function", name: "bash" }),
   ]))
   expect(JSON.stringify(body.tools)).not.toContain("write_file")
-  expect(body.tools).toEqual(expect.arrayContaining([
+  expect(body.tools).not.toEqual(expect.arrayContaining([
     expect.objectContaining({ type: "function", name: "apply_patch" }),
-    expect.objectContaining({ type: "function", name: "bash" }),
   ]))
 
   expect(body.input).toEqual([

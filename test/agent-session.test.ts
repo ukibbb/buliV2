@@ -14,6 +14,7 @@ import {
   InMemorySessionManager,
   type ISessionManager,
 } from "@/sessions"
+import { confirmedPatchHandoffMessages } from "./support/patch-handoff"
 
 test("AgentSession restores history, persists completion barriers, and publishes stable snapshots", async () => {
   const manager = new InMemorySessionManager()
@@ -72,10 +73,14 @@ test("AgentSession restores history, persists completion barriers, and publishes
 test("AgentSession publishes immutable approval request and resolution snapshots", async () => {
   const manager = new InMemorySessionManager()
   manager.createSession(sessionInfo("session-1", "test-agent", "Approval"))
+  for (const message of confirmedPatchHandoffMessages()) {
+    manager.appendMessage(message)
+  }
   const approvalStarted = Promise.withResolvers<void>()
   const decisions: TToolApprovalDecision[] = []
   const tool: IAgentTool = {
     name: "apply_patch",
+    approvalKind: "patch",
     description: "Apply a patch",
     inputSchema: { type: "object", additionalProperties: false },
     async execute(_input, context) {
@@ -128,7 +133,7 @@ test("AgentSession publishes immutable approval request and resolution snapshots
     approvalTransitions.push(approvalId)
   })
 
-  const run = session.prompt("Apply the patch")
+  const run = session.prompt("tak")
   await approvalStarted.promise
   const waitingSnapshot = session.getSnapshot()
   const request = waitingSnapshot.pendingToolApproval
@@ -148,6 +153,10 @@ test("AgentSession publishes immutable approval request and resolution snapshots
   expect(Object.isFrozen(request.paths)).toBe(true)
   expect(() => (request.paths as string[]).push("src/domain.ts")).toThrow()
   expect(manager.getMessages("session-1").map((message) => message.role)).toEqual([
+    "user",
+    "assistant",
+    "toolResult",
+    "assistant",
     "user",
     "assistant",
   ])

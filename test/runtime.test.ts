@@ -288,7 +288,10 @@ test("application runtime resolves fixed prompt and tools from an agent", async 
   await submission.accepted
   await submission.settled
 
-  expect(requests[0]?.systemPrompt).toBe("Review system")
+  expect(requests[0]?.systemPrompt).toStartWith("Review system\n\n")
+  expect(requests[0]?.systemPrompt).toContain(
+    "Faktycznie aktywne narzędzia w tym turnie: review.",
+  )
   expect(requests[0]?.tools).toEqual([{
     name: "review",
     description: "Review code",
@@ -616,6 +619,7 @@ test("runtime resolves approval only in the addressed session and dispose releas
   let approvalCount = 0
   const tool: IAgentTool = {
     name: "run_command",
+    approvalKind: "command",
     description: "Run a command",
     inputSchema: { type: "object", additionalProperties: false },
     async execute(_input, context) {
@@ -665,7 +669,7 @@ test("runtime resolves approval only in the addressed session and dispose releas
   const secondView = createSession(runtime)
   const firstSubmission = runtime.submitPrompt({
     sessionId: "session-1",
-    text: "Run tests",
+    text: "Run the tests",
   })
   await firstApprovalStarted.promise
   const firstRequest = firstView.getSnapshot().pendingToolApproval
@@ -685,7 +689,7 @@ test("runtime resolves approval only in the addressed session and dispose releas
 
   const secondSubmission = runtime.submitPrompt({
     sessionId: "session-1",
-    text: "Run tests again",
+    text: "Run the tests again",
   })
   await secondApprovalStarted.promise
   expect(firstView.getSnapshot().pendingToolApproval).toBeDefined()

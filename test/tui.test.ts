@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import {
   BoxRenderable,
   CodeRenderable,
+  DiffRenderable,
   parseKeypress,
   type Renderable,
   ScrollBoxRenderable,
@@ -34,6 +35,7 @@ import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
 import { BuliTui } from "@/app/ui/shell/BuliTui"
 import { BuliUiController } from "@/app/ui/ui-controller"
 import { BuliUiControllerProvider } from "@/app/ui/context/ui-controller-context"
+import { glyphs } from "@/terminal/theme"
 
 const WORKSPACE_ROOT = "/workspace"
 const TEST_AGENT_ID = "test-agent"
@@ -71,6 +73,13 @@ function codeRenderables(root: Renderable): CodeRenderable[] {
   return root.getChildren().flatMap((child) => [
     ...(child instanceof CodeRenderable ? [child] : []),
     ...codeRenderables(child),
+  ])
+}
+
+function diffRenderables(root: Renderable): DiffRenderable[] {
+  return root.getChildren().flatMap((child) => [
+    ...(child instanceof DiffRenderable ? [child] : []),
+    ...diffRenderables(child),
   ])
 }
 
@@ -224,12 +233,16 @@ function patchApproval(): IPatchToolApprovalRequest {
     explanation: "Replace the old greeting while preserving the fallback.",
     paths: ["src/greeting.ts", "test/greeting.test.ts"],
     diff: [
-      "diff --git a/src/greeting.ts b/src/greeting.ts",
       "--- a/src/greeting.ts",
       "+++ b/src/greeting.ts",
       "@@ -1 +1 @@",
       "-export const greeting = 'old'",
       "+export const greeting = 'new'",
+      "--- a/test/greeting.test.ts",
+      "+++ b/test/greeting.test.ts",
+      "@@ -1 +1 @@",
+      "-expect(greeting).toBe('old')",
+      "+expect(greeting).toBe('new')",
     ].join("\n"),
   }
 }
@@ -319,6 +332,7 @@ test("provides the runtime above Buli", async () => {
     expect(frame.trim()).not.toBe("")
     expect(frame).not.toContain("Buli runtime not available")
     expect(frame).toContain("____")
+    expect(textareaRenderable(setup.renderer.root).placeholder).toBeNull()
     expect(runtime.listSessions()).toEqual([])
   } finally {
     await startup.dispose()
@@ -711,9 +725,9 @@ test("retains textarea input when a finishing run rejects steering", async () =>
     expect(textareaRenderable(setup.renderer.root).plainText).toBe(
       "Queued prompt",
     )
-    expect(setup.captureCharFrame()).toContain(
-      "Agent is not accepting steering messages",
-    )
+    const frame = setup.captureCharFrame()
+    expect(frame).toContain("Agent is not accepting")
+    expect(frame).toContain("steering messages")
   } finally {
     act(() => {
       setup.renderer.destroy()
@@ -757,12 +771,21 @@ test("renders running and failed session status", async () => {
     await act(async () => {
       await setup.renderOnce()
     })
-    expect(setup.captureCharFrame()).toContain(
-      "Working... Enter steer | Alt+Enter follow-up | Esc stop",
-    )
-    expect(setup.captureCharFrame()).toContain("Steering: Adjust the answer")
-    expect(setup.captureCharFrame()).toContain("Follow-up: Then summarize it")
-    expect(setup.captureCharFrame()).toContain("Esc restores queued input")
+    const runningFrame = setup.captureCharFrame()
+    expect(runningFrame).not.toContain("Working...")
+    expect(runningFrame).toContain("Enter steer")
+    expect(runningFrame).toContain("Alt+Enter follow-up")
+    expect(runningFrame).toContain("Esc stop")
+    expect(runningFrame).toContain(glyphs.snakeHead)
+    expect(runningFrame).toContain(glyphs.snakeBody)
+    expect(runningFrame).toContain(glyphs.snakeEmptyTrack)
+    expect(runningFrame).toContain("Steering:")
+    expect(runningFrame).toContain("Adjust the")
+    expect(runningFrame).toContain("answer")
+    expect(runningFrame).toContain("Follow-up:")
+    expect(runningFrame).toContain("summarize it")
+    expect(runningFrame).toContain("Esc restores")
+    expect(runningFrame).toContain("queued input")
 
     await act(async () => {
       fake.setSessionSnapshot({
@@ -779,8 +802,9 @@ test("renders running and failed session status", async () => {
 
     const frame = setup.captureCharFrame()
     expect(frame).not.toContain(
-      "Working... Enter steer | Alt+Enter follow-up | Esc stop",
+      "Enter steer | Alt+Enter follow-up | Esc stop",
     )
+    expect(frame).not.toContain(glyphs.snakeHead)
     expect(frame).toContain("Provider request failed")
   } finally {
     act(() => {
@@ -808,13 +832,24 @@ test("renders complete patch approval details and patch-only actions", async () 
     const renderedText = textRenderables(setup.renderer.root).map(
       (renderable) => renderable.plainText,
     )
+    const renderedDiffs = diffRenderables(setup.renderer.root)
     expect(frame).toContain("Patch approval")
     expect(frame).toContain(approval.title)
     expect(frame).toContain(approval.explanation)
     expect(frame).toContain("Affected paths")
     expect(frame).toContain("src/greeting.ts")
     expect(frame).toContain("test/greeting.test.ts")
-    expect(renderedText).toContain(approval.diff)
+    expect(frame).toContain("export const greeting")
+    expect(frame).toContain("expect(greeting)")
+    expect(renderedDiffs).toHaveLength(2)
+    expect(renderedDiffs.map((renderable) => renderable.diff).join(""))
+      .toBe(approval.diff)
+    expect(renderedDiffs.every((renderable) => renderable.view === "unified"))
+      .toBe(true)
+    expect(renderedDiffs.every((renderable) => renderable.showLineNumbers))
+      .toBe(true)
+    expect(renderedDiffs.every((renderable) => renderable.wrapMode === "word"))
+      .toBe(true)
     expect(renderedText).toContain("> Reject")
     expect(renderedText).toContain("  Apply")
     expect(renderedText.indexOf("> Reject")).toBeLessThan(
@@ -825,7 +860,52 @@ test("renders complete patch approval details and patch-only actions", async () 
       "PageUp/PageDown review | Arrows select | Enter confirm | Esc stop",
     )
     expect(frame).toContain("Waiting for your decision")
-    expect(frame).not.toContain("Working... Enter steer")
+    expect(frame).not.toContain("Enter steer | Alt+Enter follow-up")
+    expect(frame).not.toContain(glyphs.snakeHead)
+  } finally {
+    act(() => {
+      setup.renderer.destroy()
+    })
+  }
+})
+
+test("keeps exact raw metadata beside every rendered file diff", async () => {
+  const noNewlineDiff = [
+    "--- a/src/no-newline.ts",
+    "+++ b/src/no-newline.ts",
+    "@@ -1,1 +1,1 @@",
+    "-old",
+    "\\ No newline at end of file",
+    "+new",
+    "\\ No newline at end of file",
+    "",
+  ].join("\n")
+  const emptyDeletion = "--- a/src/empty.ts\n+++ /dev/null"
+  const approval: IPatchToolApprovalRequest = {
+    ...patchApproval(),
+    paths: ["src/no-newline.ts", "src/empty.ts"],
+    diff: noNewlineDiff + emptyDeletion,
+  }
+  const fake = fakeApplication({
+    sessionSnapshot: approvalSessionSnapshot(approval),
+  })
+  const setup = await testRender(
+    buliElement(fake.application, "default"),
+    { width: 100, height: 64 },
+  )
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+    })
+
+    const renderedText = textRenderables(setup.renderer.root).map(
+      (renderable) => renderable.plainText,
+    )
+    expect(diffRenderables(setup.renderer.root)).toHaveLength(2)
+    expect(renderedText).toContain(noNewlineDiff)
+    expect(renderedText).toContain(emptyDeletion)
+    expect(setup.captureCharFrame()).toContain("No newline at end of file")
   } finally {
     act(() => {
       setup.renderer.destroy()
@@ -935,13 +1015,16 @@ test("reviews a tall patch from the top without changing its action", async () =
   const approval: IPatchToolApprovalRequest = {
     ...patchApproval(),
     diff: [
-      "diff --git a/src/long.ts b/src/long.ts",
-      "REVIEW TOP",
+      "--- a/src/long.ts",
+      "+++ b/src/long.ts",
+      "@@ -1,1 +1,82 @@",
+      "-old review",
+      "+REVIEW TOP",
       ...Array.from(
         { length: 80 },
         (_, index) => `+review-line-${String(index).padStart(3, "0")}`,
       ),
-      "REVIEW END",
+      "+REVIEW END",
     ].join("\n"),
   }
   const fake = fakeApplication({
@@ -971,6 +1054,7 @@ test("reviews a tall patch from the top without changing its action", async () =
       "tool-approval-details",
     )
     const initialFrame = setup.captureCharFrame()
+    expect(diffRenderables(setup.renderer.root)).toHaveLength(1)
     expect(details.scrollTop).toBe(0)
     expect(initialFrame).toContain("Patch approval")
     expect(initialFrame).toContain(approval.title)
@@ -1376,7 +1460,7 @@ test("keeps command approval pending when default Copy is unavailable", async ()
       inputError: "Clipboard copy is not supported by this terminal",
     })
     expect(setup.captureCharFrame()).toContain(
-      "Clipboard copy is not supported by this terminal",
+      "Clipboard copy is not supported",
     )
     expect(textareaRenderable(setup.renderer.root).plainText).toBe(
       "Still preserved",
@@ -1584,10 +1668,9 @@ test("renders a submitted prompt and streamed response", async () => {
     const frame = setup.captureCharFrame()
     expect(frame).toContain("Rendered prompt")
     expect(frame).toContain("Rendered response")
-    expect(frame).toContain("model")
-    expect(frame).toContain("Test")
-    expect(frame).toContain("reasoning")
-    expect(frame).toContain("medium")
+    expect(frame).not.toContain("model")
+    expect(frame).toContain("Test / medium")
+    expect(frame).not.toContain("reasoning")
   } finally {
     await runtime.dispose()
     act(() => {

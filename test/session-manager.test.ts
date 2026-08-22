@@ -2,12 +2,11 @@ import { expect, test } from "bun:test"
 
 import type {
   IAssistantMessage,
-  ISessionInfo,
   IToolResultMessage,
   IUserMessage,
   TAgentMessage,
-} from "@/domain"
-import { InMemorySessionManager } from "@/session/session-manager"
+} from "@/agent"
+import { InMemorySessionManager, type ISessionInfo } from "@/sessions"
 
 test("stores defensive metadata copies and rejects duplicate session IDs", () => {
   const manager = new InMemorySessionManager()

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
 
-import { BuliApplicationLifecycle } from "@/tui/app/BuliApplicationLifecycle"
+import { BuliApplicationLifecycle } from "@/app/ui/shell/BuliApplicationLifecycle"
 
 test("renders startup failure instead of leaving a blank screen", async () => {
   const startup = Promise.withResolvers<never>()

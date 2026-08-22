@@ -6,9 +6,9 @@ import { act, type ReactNode } from "react"
 import type {
     IAuthProviderInfo,
     IAuthenticationService,
-} from "@/auth/contracts"
-import { AuthenticationFlow } from "@/tui/authentication/AuthenticationFlow"
-import type { TAuthenticationOutcome } from "@/tui/authentication/types"
+} from "@/authentication/contracts"
+import { AuthenticationFlow } from "@/authentication/ui/AuthenticationFlow"
+import type { TAuthenticationOutcome } from "@/authentication/ui/types"
 
 const LOGIN_PROVIDER: IAuthProviderInfo = {
   providerId: "cloud",

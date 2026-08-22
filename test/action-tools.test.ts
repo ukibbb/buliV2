@@ -18,11 +18,10 @@ import type {
   IAgentToolExecutionContext,
   TToolApprovalDecision,
   TToolApprovalDraft,
-} from "@/agent/agent-types"
-import { createApplyPatchTool } from "@/tools/apply-patch-tool"
-import { createBashTool } from "@/tools/bash-tool"
-import { StaleWorkspacePatchError } from "@/tools/patch-engine"
-import { PROCESS_INTERPRETER_DISPLAY } from "@/tools/process-runner"
+} from "@/agent"
+import { createApplyPatchTool, createBashTool } from "@/tools"
+import { StaleWorkspacePatchError } from "@/tools/patch/patch-engine"
+import { PROCESS_INTERPRETER_DISPLAY } from "@/tools/command/process-runner"
 
 test("action tools publish bounded strict schemas", () => {
   const applyPatch = createApplyPatchTool(process.cwd())

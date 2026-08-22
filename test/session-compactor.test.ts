@@ -1,18 +1,16 @@
 import { expect, test } from "bun:test"
 
-import { projectAgentContext } from "@/agent/context-projector"
 import type {
   IAgentModel,
   IAgentModelRequest,
-} from "@/agent/agent-types"
-import type {
-  ICompactionCheckpoint,
   TAgentMessage,
-} from "@/domain"
+} from "@/agent"
 import {
   compactSessionMessages,
   findCompactionCutoff,
-} from "@/session/session-compactor"
+  type ICompactionCheckpoint,
+  projectAgentContext,
+} from "@/sessions"
 
 test("findCompactionCutoff never separates a tool call from its result", () => {
   const messages: readonly TAgentMessage[] = [

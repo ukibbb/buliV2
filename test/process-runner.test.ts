@@ -10,11 +10,11 @@ import {
   PROCESS_PROGRESS_EVENT_LIMIT,
   PROCESS_TIMEOUT_EXIT_CODE,
   runShellProcess,
-} from "@/tools/process-runner"
+} from "@/tools/command/process-runner"
 import type {
   IProcessProgress,
   IProcessRunnerOptions,
-} from "@/tools/process-runner"
+} from "@/tools/command/process-runner"
 
 const DEFAULT_OUTPUT_LIMITS = {
   stdoutBytes: 64 * 1024,

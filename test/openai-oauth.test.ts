@@ -1,8 +1,8 @@
 import { afterEach, expect, jest, test } from "bun:test"
 import { Buffer } from "node:buffer"
 
-import type { IAuthInteraction, TAuthEvent } from "@/auth/contracts"
-import type { IOAuthCredential } from "@/auth/types"
+import type { IAuthInteraction, TAuthEvent } from "@/authentication/contracts"
+import type { IOAuthCredential } from "@/authentication/credentials"
 import {
     OPENAI_OAUTH_AUTHORIZE_URL,
     OPENAI_OAUTH_CALLBACK_URL,
@@ -13,12 +13,12 @@ import {
     OPENAI_OAUTH_DEVICE_USER_CODE_URL,
     OPENAI_OAUTH_ORIGINATOR,
     OPENAI_OAUTH_TOKEN_URL,
-} from "@/providers/openai/openai-constants"
+} from "@/providers/openai/constants"
 import {
     escapeOpenAiOAuthHtml,
     renderOpenAiOAuthCallbackHtml,
     startOpenAiOAuthCallback,
-} from "@/providers/openai/openai-oauth-callback"
+} from "@/providers/openai/auth/oauth-callback"
 import {
     createOpenAiAuthorizationRequest,
     extractOpenAiAccountId,
@@ -26,7 +26,7 @@ import {
     parseOpenAiManualCallback,
     parseOpenAiTokenResponse,
     type TOpenAiOAuthFetch,
-} from "@/providers/openai/openai-oauth"
+} from "@/providers/openai/auth/oauth"
 
 afterEach(() => {
     if (jest.isFakeTimers()) jest.useRealTimers()

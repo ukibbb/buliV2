@@ -3,7 +3,7 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { runRipgrep } from "@/tools/ripgrep"
+import { runRipgrep } from "@/tools/search/ripgrep"
 
 if (process.platform !== "win32") {
   test("ripgrep timeout kills an uncooperative descendant process group", async () => {

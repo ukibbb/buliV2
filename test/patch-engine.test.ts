@@ -23,7 +23,7 @@ import {
   WORKSPACE_PATCH_MAX_PATCH_BYTES,
   WORKSPACE_PATCH_MAX_SOURCE_BYTES,
   type IPreparedWorkspacePatch,
-} from "@/tools/patch-engine"
+} from "@/tools/patch/patch-engine"
 
 test("plans and applies add, update, delete, and move as exact file states", async () => {
   const workspace = await temporaryWorkspace()

@@ -1,17 +1,15 @@
 import { expect, test } from "bun:test"
 
-import { Agent } from "@/agent/agent"
-import type {
-  IAgentEvent,
-  IAgentModel,
-  IAgentModelRequest,
-  IAgentTool,
-} from "@/agent/agent-types"
-import type {
-  TToolApprovalDecision,
-  TToolApprovalDraft,
-  TToolApprovalRequest,
-} from "@/domain"
+import {
+  Agent,
+  type IAgentEvent,
+  type IAgentModel,
+  type IAgentModelRequest,
+  type IAgentTool,
+  type TToolApprovalDecision,
+  type TToolApprovalDraft,
+  type TToolApprovalRequest,
+} from "@/agent"
 
 test("Agent.prompt returns a synchronous handle and Agent owns live state", async () => {
   const agent = new Agent({

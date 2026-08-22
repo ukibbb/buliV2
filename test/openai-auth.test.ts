@@ -4,19 +4,19 @@ import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { FileAuthStore } from "@/auth/file-auth-store"
+import { FileAuthStore } from "@/authentication/file-auth-store"
 import type {
   IAuthStore,
   IOAuthCredential,
   TAuthCredential,
-} from "@/auth/types"
-import { OpenAiAuth } from "@/providers/openai/openai-auth"
+} from "@/authentication/credentials"
+import { OpenAiAuth } from "@/providers/openai/auth/openai-auth"
 import {
   OPENAI_CODEX_RESPONSES_URL,
   OPENAI_OAUTH_CALLBACK_URL,
   OPENAI_OAUTH_TOKEN_URL,
-} from "@/providers/openai/openai-constants"
-import { OpenAiOAuth } from "@/providers/openai/openai-oauth"
+} from "@/providers/openai/constants"
+import { OpenAiOAuth } from "@/providers/openai/auth/oauth"
 
 test("reports and reads an existing OpenAI OAuth credential", async () => {
   await withStore(async (store) => {

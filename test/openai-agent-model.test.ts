@@ -1,20 +1,23 @@
 import { expect, test } from "bun:test"
 import { realpathSync } from "node:fs"
 
-import { systemPrompt } from "@/agent/agents-prompts"
-import type { IAgentModelEvent, IAgentToolDescriptor } from "@/agent/agent-types"
+import type {
+  IAgentModelEvent,
+  IAgentToolDescriptor,
+  TAgentMessage,
+} from "@/agent"
+import { systemPrompt } from "@/agent/system-prompt"
 import type {
   IAuthStore,
   IOAuthCredential,
   TAuthCredential,
-} from "@/auth/types"
-import type { TAgentMessage } from "@/domain"
-import { OpenAiAuth } from "@/providers/openai/openai-auth"
-import { OpenAiAgentModel } from "@/providers/openai/openai-agent-model"
-import { OPENAI_CODEX_RESPONSES_URL } from "@/providers/openai/openai-constants"
-import { AgentSession } from "@/session/agent-session"
-import { InMemorySessionManager } from "@/session/session-manager"
-import { createWorkspaceTools } from "@/tools/workspace-tools"
+} from "@/authentication/credentials"
+import { OpenAiAuth } from "@/providers/openai/auth/openai-auth"
+import { OpenAiAgentModel } from "@/providers/openai/model/openai-agent-model"
+import { OPENAI_CODEX_RESPONSES_URL } from "@/providers/openai/constants"
+import { AgentSession } from "@/sessions/agent-session"
+import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
+import { createWorkspaceTools } from "@/tools"
 
 const WORKSPACE_ROOT = realpathSync(process.cwd())
 

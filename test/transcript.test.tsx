@@ -1,16 +1,17 @@
 import { expect, test } from "bun:test"
 import {
   CodeRenderable,
+  MarkdownRenderable,
   RGBA,
   type Renderable,
   TextRenderable,
 } from "@opentui/core"
 import { testRender } from "@opentui/react/test-utils"
-import { act } from "react"
+import { act, useState } from "react"
 
-import type { IAssistantMessage, TAgentMessage } from "@/domain"
-import { Transcript } from "@/tui/components/Transcript"
-import { theme } from "@/tui/theme"
+import type { IAssistantMessage, TAgentMessage } from "@/agent"
+import { Transcript } from "@/sessions/ui"
+import { theme } from "@/terminal/theme"
 
 function codeRenderables(root: Renderable): CodeRenderable[] {
   return root.getChildren().flatMap((child) => [
@@ -23,6 +24,13 @@ function textRenderables(root: Renderable): TextRenderable[] {
   return root.getChildren().flatMap((child) => [
     ...(child instanceof TextRenderable ? [child] : []),
     ...textRenderables(child),
+  ])
+}
+
+function markdownRenderables(root: Renderable): MarkdownRenderable[] {
+  return root.getChildren().flatMap((child) => [
+    ...(child instanceof MarkdownRenderable ? [child] : []),
+    ...markdownRenderables(child),
   ])
 }
 
@@ -244,6 +252,58 @@ test("renders direct, streaming, and tool messages", async () => {
     )
     expect(unknownLine?.plainText).toContain("Inspect current state before retrying")
     expect(unknownLine?.fg.equals(RGBA.fromHex(theme.red))).toBe(true)
+  } finally {
+    act(() => {
+      setup.renderer.destroy()
+    })
+  }
+})
+
+test("keeps completed markdown blocks stable while streaming grows", async () => {
+  let updateText: ((text: string) => void) | undefined
+
+  function StreamingTranscript(): React.ReactNode {
+    const [text, setText] = useState("# Stable heading\n\nPartial paragraph")
+    updateText = setText
+    const streamingMessage: IAssistantMessage = {
+      id: "streaming-markdown",
+      sessionId: "default",
+      runId: "run-streaming-markdown",
+      role: "assistant",
+      createdAt: 1,
+      stopReason: "pending",
+      content: [{ type: "text", text }],
+    }
+    return <Transcript messages={[]} streamingMessage={streamingMessage} />
+  }
+
+  const setup = await testRender(<StreamingTranscript />, {
+    width: 80,
+    height: 12,
+  })
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+    })
+    const markdownBefore = markdownRenderables(setup.renderer.root)[0]
+    expect(markdownBefore).toBeDefined()
+    expect(markdownBefore?.internalBlockMode).toBe("top-level")
+    expect(markdownBefore?.tableOptions?.style).toBe("grid")
+    const headingBefore = markdownBefore?._blockStates[0]?.renderable
+    expect(headingBefore).toBeDefined()
+
+    act(() => {
+      updateText?.("# Stable heading\n\nPartial paragraph continues")
+    })
+    await act(async () => {
+      await setup.renderOnce()
+    })
+
+    const markdownAfter = markdownRenderables(setup.renderer.root)[0]
+    expect(markdownAfter).toBe(markdownBefore)
+    expect(markdownAfter?._blockStates[0]?.renderable).toBe(headingBefore)
+    expect(setup.captureCharFrame()).toContain("Partial paragraph continues")
   } finally {
     act(() => {
       setup.renderer.destroy()

@@ -45,6 +45,25 @@ bun run typecheck
 bun test
 ```
 
+## Architecture
+
+Source code is grouped by feature and dependency direction rather than by
+technical layer:
+
+- `agent` owns messages, model and tool ports, run state, and approval contracts
+- `sessions` owns persistence, recovery, snapshots, and context compaction
+- `tools` contains the built-in workspace tool implementations and their approval UI
+- `authentication` contains provider-neutral authentication core and UI
+- `providers/openai` adapts OpenAI to the agent and authentication contracts
+- `app` composes features and owns connected application screens and navigation
+- `terminal` provides low-level OpenTUI rendering, clipboard, input, viewport, and theme primitives
+- `common` contains dependency-free primitives shared by multiple features
+
+Core dependencies point toward contracts: sessions, tools, and providers may
+depend on `agent`, while `app` composes every feature. Feature-owned UI may use
+terminal primitives, but feature core does not depend on OpenTUI. Cross-feature
+imports use each feature's public `index.ts` surface.
+
 ## Workspace changes
 
 `apply_patch` prepares one proposal in memory and shows its exact diff before

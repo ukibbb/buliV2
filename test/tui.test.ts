@@ -11,29 +11,29 @@ import {
 import { testRender } from "@opentui/react/test-utils"
 import { act, createElement } from "react"
 
-import { createBuliApplication } from "@/application"
+import { createBuliApplication } from "@/app"
 import type {
   IBuliApplication,
   IBuliApplicationSnapshot,
   IBuliPromptInput,
   IBuliPromptSubmission,
-} from "@/application/contracts"
-import type { IAuthenticationService } from "@/auth/contracts"
-import { BuliApplicationRuntime } from "@/application/runtime"
-import { BuliRuntimeProvider } from "@/tui/app/application-context"
-import type { IAgentModel } from "@/agent/agent-types"
+} from "@/app/contracts"
+import type { IAuthenticationService } from "@/authentication/contracts"
+import { BuliApplicationRuntime } from "@/app/runtime"
+import { BuliRuntimeProvider } from "@/app/ui/context/application-context"
 import type {
+  IAgentModel,
   ICommandToolApprovalRequest,
   IPatchToolApprovalRequest,
-  ISessionSnapshot,
   TToolApprovalDecision,
   TToolApprovalRequest,
   IUserMessage,
-} from "@/domain"
-import { InMemorySessionManager } from "@/session/session-manager"
-import { BuliTui } from "@/tui/app/BuliTui"
-import { BuliUiController } from "@/tui/app/ui-controller"
-import { BuliUiControllerProvider } from "@/tui/app/ui-controller-context"
+} from "@/agent"
+import type { ISessionSnapshot } from "@/sessions"
+import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
+import { BuliTui } from "@/app/ui/shell/BuliTui"
+import { BuliUiController } from "@/app/ui/ui-controller"
+import { BuliUiControllerProvider } from "@/app/ui/context/ui-controller-context"
 
 const WORKSPACE_ROOT = "/workspace"
 const TEST_AGENT_ID = "test-agent"

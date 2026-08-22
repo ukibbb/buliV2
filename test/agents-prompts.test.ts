@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 
-import { systemPrompt } from "@/agent/agents-prompts"
-import type { IAgentToolDescriptor } from "@/agent/agent-types"
+import { systemPrompt } from "@/agent/system-prompt"
+import type { IAgentToolDescriptor } from "@/agent/tool"
 
 const descriptor = (name: string): IAgentToolDescriptor => ({
   name,

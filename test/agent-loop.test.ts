@@ -7,9 +7,9 @@ import type {
   IAgentModelEvent,
   IAgentModelRequest,
   IAgentTool,
-} from "@/agent/agent-types"
+  IUserMessage,
+} from "@/agent"
 import { runAgentLoop } from "@/agent/agent-loop"
-import type { IUserMessage } from "@/domain"
 
 const RUN_ID = "run-1"
 

@@ -124,8 +124,9 @@ export function ToolApprovalPanel(
             border
             borderStyle="single"
             customBorderChars={ASCII_BORDER}
-            borderColor={theme.amber}
+            borderColor={theme.border}
             focusedBorderColor={theme.amber}
+            backgroundColor={theme.surface}
             paddingX={1}
             marginTop={1}
             focusable
@@ -140,7 +141,16 @@ export function ToolApprovalPanel(
                 flexGrow={1}
                 scrollY
                 viewportCulling={false}
-                contentOptions={{ flexDirection: "column" }}
+                contentOptions={{
+                    flexDirection: "column",
+                    backgroundColor: theme.surface,
+                }}
+                verticalScrollbarOptions={{
+                    trackOptions: {
+                        backgroundColor: theme.surfaceRaised,
+                        foregroundColor: theme.border,
+                    },
+                }}
             >
                 <ToolApprovalDetails request={request} />
             </scrollbox>
@@ -148,12 +158,18 @@ export function ToolApprovalPanel(
                 {actions.map((action, index) => (
                     <text
                         key={action.decision}
+                        width="100%"
                         fg={index === selectedIndex ? theme.green : theme.textMuted}
+                        bg={index === selectedIndex
+                            ? theme.surfaceSelected
+                            : theme.surface}
+                        paddingX={1}
+                        selectable={false}
                     >
                         {`${index === selectedIndex ? ">" : " "} ${action.label}`}
                     </text>
                 ))}
-                <text fg={theme.textMuted}>
+                <text fg={theme.textMuted} selectable={false}>
                     PageUp/PageDown review | Arrows select | Enter confirm | Esc stop
                 </text>
             </box>

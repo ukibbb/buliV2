@@ -1,5 +1,7 @@
 import type { ReactNode } from "react"
 
+import { theme } from "@/terminal/theme"
+
 interface TerminalViewportProps {
   width: number
   height: number
@@ -9,8 +11,12 @@ interface TerminalViewportProps {
 /** Constrains application content to the current terminal viewport. */
 export function TerminalViewport(props: TerminalViewportProps): ReactNode {
   return (
-    // I can add backgroundColor in future
-    <box width={props.width} height={props.height} flexDirection="column">
+    <box
+      width={props.width}
+      height={props.height}
+      flexDirection="column"
+      backgroundColor={theme.background}
+    >
       {
         /* minHeight - must be at least this tall.
          * it can grow taller
@@ -21,7 +27,12 @@ export function TerminalViewport(props: TerminalViewportProps): ReactNode {
          *
          */
       }
-      <box minHeight={0} flexGrow={1} flexDirection="column">
+      <box
+        minHeight={0}
+        flexGrow={1}
+        flexDirection="column"
+        backgroundColor={theme.background}
+      >
         {props.children}
       </box>
     </box>

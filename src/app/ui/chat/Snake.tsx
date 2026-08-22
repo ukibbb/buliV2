@@ -59,16 +59,16 @@ export function SnakeAnimation(): ReactNode {
         <box flexDirection="row">
             {Array.from({ length: SNAKE_TRACK_LENGTH }).map((_, idx) => {
                 if (idx === snakeHead) {
-                    return <text key={idx} fg={theme.amber}>{glyphs.snakeHead}</text>
+                    return <text key={idx} fg={theme.amber} selectable={false}>{glyphs.snakeHead}</text>
                 }
                 if (idx === applePosition) {
-                    return <text key={idx} fg={theme.red}>{glyphs.apple}</text>
+                    return <text key={idx} fg={theme.red} selectable={false}>{glyphs.apple}</text>
                 }
                 if (snake.has(idx)) {
-                    return <text key={idx} fg={theme.pink}>{glyphs.snakeBody}</text>
+                    return <text key={idx} fg={theme.pink} selectable={false}>{glyphs.snakeBody}</text>
                 }
                 return (
-                    <text key={idx} fg={theme.green}>
+                    <text key={idx} fg={theme.green} selectable={false}>
                         {glyphs.snakeEmptyTrack}
                     </text>
                 )

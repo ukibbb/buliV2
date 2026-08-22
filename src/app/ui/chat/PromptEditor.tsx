@@ -10,6 +10,7 @@ import type {
     TBuliInputDelivery,
     TBuliInputSubmitResult,
 } from "@/app/ui/ui-controller"
+import { theme } from "@/terminal/theme"
 
 const CHAT_MIN_ROW_COUNT = 3
 const CHAT_MAX_ROW_COUNT = 6
@@ -101,9 +102,14 @@ export function PromptEditor(props: IPromptEditorProps) {
             width="100%"
             border={["top", "bottom"]}
             borderStyle="single"
+            borderColor={props.blocked ? theme.amber : theme.border}
+            backgroundColor={theme.surface}
+            paddingX={1}
             style={{
                 minHeight: CHAT_MIN_ROW_COUNT,
-                maxHeight: CHAT_MAX_ROW_COUNT,
+                maxHeight: props.menuOpen
+                    ? CHAT_MIN_ROW_COUNT
+                    : CHAT_MAX_ROW_COUNT,
             }}
         >
             <textarea
@@ -118,6 +124,16 @@ export function PromptEditor(props: IPromptEditorProps) {
                     }
                 }}
                 focused={!props.blocked}
+                textColor={theme.text}
+                focusedTextColor={theme.text}
+                backgroundColor={theme.surface}
+                focusedBackgroundColor={theme.surface}
+                placeholderColor={theme.textMuted}
+                cursorColor={theme.green}
+                cursorStyle={{ style: "line", blinking: true }}
+                showCursor={!props.blocked}
+                selectionBg={theme.selectionBg}
+                selectionFg={theme.selectionFg}
                 style={{ keyBindings: chatTextAreaKeybindings }}
             />
         </box>

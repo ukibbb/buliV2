@@ -18,6 +18,7 @@ interface IHunkCounts {
 export interface IWorkspaceDiffSection {
     readonly diff: string
     readonly label: string
+    readonly filePath: string
     readonly hasHunks: boolean
     readonly hasNoNewlineMetadata: boolean
 }
@@ -135,6 +136,7 @@ export function splitWorkspaceDiff(
         sections.push({
             diff: sectionDiff,
             label: diffLabel(oldPath, newPath),
+            filePath: newPath.path ?? oldPath.path ?? "",
             hasHunks,
             hasNoNewlineMetadata,
         })

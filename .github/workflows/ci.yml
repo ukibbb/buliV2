@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+# minimalne uprawnienia
+# token utworzony przez github actions moze tylko odczytac
+# repozytorium
+# Workflow wydania dostanie pozniej osobne szersze uprawnienia
+#
+permissions:
+  contents: read
+
+# otwiera ustawienia wspolbieznosci, czyli zasad dotyczacych
+# kilku uruchomien tego samego workflow
+concurrency:
+  # buduje identyfikator grupy z nazwy workflow i brancha lub referencji
+  # pull requesta
+  # uruchomienia roznych branch nie beda sobie przeszkadzac
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # jezeli wypcheniesz kolejny commit github analuje starsze
+  # dzialajace ci dla tej same referencji
+  cancel-in-progress: true
+
+
+# mapa zadan wykonywana przez workflow
+#
+#
+jobs:
+  # definiuje zadanie o technicznym idenyfikatorze verify
+  verify:
+    name: Typecheck, test and build
+    # tworzy masznye wirtualna
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        # pobiera zawartosc wlasciwego commita
+        # do maszyny CI
+        uses: actions/checkout@v4
+      - name: Install Bun
+        # uruchamia akcje utrzymywana przez projekt Bun.
+        # instaluje bun i dodaje jego plik wykonywalny do PATH
+        uses: oven-sh/setup-bun@v2
+        # otwiera argument przekazywane do setup bun
+        with:
+          bun-version: 1.3.12
+
+      - name: Install dependencies
+        # run przekazuje polecenie do shella maszyny CI
+        # bun install - instaluje zaleznosci z package.json i bun.lock
+        # --frozen-lockfile zabranie modyfikowania lockfile
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Run tests
+        run: bun run test
+
+      - name: Build standalone binary
+        run: bun run build:local
+      - name: Smoke-test standalone binary
+        run: ./dist/buli --help

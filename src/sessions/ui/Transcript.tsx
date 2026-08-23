@@ -7,7 +7,19 @@ import type {
 import { ToolCallLine, ToolResultLine } from "@/sessions/ui/ToolActivity"
 import { syntax, theme } from "@/terminal/theme"
 
-const MARKDOWN_TABLE_OPTIONS = { style: "grid" } as const
+const MARKDOWN_TABLE_OPTIONS = {
+    style: "grid",
+    widthMode: "full",
+    columnFitter: "proportional",
+    wrapMode: "word",
+    cellPaddingX: 1,
+    cellPaddingY: 0,
+    borders: true,
+    outerBorder: true,
+    borderStyle: "single",
+    borderColor: theme.textMuted,
+    selectable: true,
+} as const
 
 export interface ITranscriptProps {
     readonly messages: readonly TAgentMessage[]
@@ -31,6 +43,7 @@ function AssistantCard(props: {
                         syntaxStyle={syntax}
                         streaming={props.streaming}
                         conceal
+                        concealCode={false}
                         internalBlockMode="top-level"
                         tableOptions={MARKDOWN_TABLE_OPTIONS}
                     />

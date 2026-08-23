@@ -35,7 +35,7 @@ import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
 import { BuliTui } from "@/app/ui/shell/BuliTui"
 import { BuliUiController } from "@/app/ui/ui-controller"
 import { BuliUiControllerProvider } from "@/app/ui/context/ui-controller-context"
-import { glyphs } from "@/terminal/theme"
+import { glyphs, syntax } from "@/terminal/theme"
 
 const WORKSPACE_ROOT = "/workspace"
 const TEST_AGENT_ID = "test-agent"
@@ -848,6 +848,12 @@ test("renders complete patch approval details and patch-only actions", async () 
       .toBe(approval.diff)
     expect(renderedDiffs.every((renderable) => renderable.view === "unified"))
       .toBe(true)
+    expect(renderedDiffs.every((renderable) =>
+      renderable.filetype === "typescript"
+    )).toBe(true)
+    expect(renderedDiffs.every((renderable) =>
+      renderable.syntaxStyle === syntax
+    )).toBe(true)
     expect(renderedDiffs.every((renderable) => renderable.showLineNumbers))
       .toBe(true)
     expect(renderedDiffs.every((renderable) => renderable.wrapMode === "word"))
@@ -934,10 +940,14 @@ test("renders complete command approval details and command actions", async () =
     const renderedText = textRenderables(setup.renderer.root).map(
       (renderable) => renderable.plainText,
     )
+    const commandPreview = codeRenderables(setup.renderer.root).find(
+      (renderable) => renderable.content === approval.command,
+    )
     expect(frame).toContain("Command approval")
     expect(frame).toContain(approval.title)
     expect(frame).toContain(approval.purpose)
-    expect(renderedText).toContain(approval.command)
+    expect(commandPreview?.filetype).toBe("bash")
+    expect(commandPreview?.syntaxStyle).toBe(syntax)
     expect(frame).toContain(approval.explanation)
     expect(frame).toContain(approval.cwd)
     expect(frame).toContain(`${approval.timeoutSeconds} seconds`)

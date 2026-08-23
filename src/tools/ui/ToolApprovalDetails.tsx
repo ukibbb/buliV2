@@ -1,7 +1,8 @@
+import { pathToFiletype } from "@opentui/core"
 import type { ReactNode } from "react"
 
 import type { TToolApprovalRequest } from "@/agent"
-import { theme } from "@/terminal/theme"
+import { syntax, theme } from "@/terminal/theme"
 import { splitWorkspaceDiff } from "@/tools/ui/workspace-diff"
 
 interface IToolApprovalDetailsProps {
@@ -50,6 +51,9 @@ export function ToolApprovalDetails(
                         flexShrink={0}
                         wrapMode="word"
                         showLineNumbers
+                        filetype={pathToFiletype(section.filePath) ?? "plaintext"}
+                        syntaxStyle={syntax}
+                        conceal={false}
                         fg={theme.text}
                         lineNumberFg={theme.textMuted}
                         lineNumberBg={theme.surface}
@@ -78,7 +82,15 @@ export function ToolApprovalDetails(
             <text fg={theme.textMuted}>Purpose</text>
             <text wrapMode="char">{request.purpose}</text>
             <text fg={theme.textMuted}>Command</text>
-            <text wrapMode="char">{request.command}</text>
+            <code
+                content={request.command}
+                filetype="bash"
+                syntaxStyle={syntax}
+                conceal={false}
+                drawUnstyledText
+                fg={theme.text}
+                wrapMode="word"
+            />
             <text fg={theme.textMuted}>Explanation</text>
             <text wrapMode="char">{request.explanation}</text>
             <text fg={theme.textMuted}>Working directory</text>

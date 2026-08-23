@@ -20,9 +20,22 @@ choices that are easy to lose when adding screens or upgrading OpenTUI.
 
 ## Syntax highlighting
 
-`syntax` is a single `SyntaxStyle` instance shared by Markdown and code blocks.
-It uses the classic Buli palette and lets OpenTUI resolve detailed Tree-sitter
-scopes through their broader token names.
+`syntax` is a single `SyntaxStyle` instance shared by Markdown, fenced code,
+command approvals, and workspace diffs. It covers the detailed Tree-sitter
+scopes for comments, constants, functions, keywords, operators, punctuation,
+strings, types, variables, and Markdown markup while using only the classic
+Buli palette. Scope fallback still lets unknown subtypes inherit their broader
+token style.
+
+Markdown keeps OpenTUI's native renderer and top-level streaming block reuse.
+Headings, emphasis, links, lists, quotes, inline code, and fenced code therefore
+receive syntax styling without a custom `renderNode` callback. Fenced code does
+not add a card, background, or padding. Tables use the full available width,
+proportional columns, word wrapping, and the muted single-line grid.
+
+Command approvals render their preview as Bash code. Patch approvals choose the
+diff parser from each file path and fall back to plain text when the extension
+is unknown; they remain unified at every terminal width.
 
 OpenTUI includes the TypeScript parser. `src/terminal/parsers.ts` registers
 tag-pinned Python 0.23.6 and Bash 0.25.0 WASM grammars and highlight queries
@@ -40,7 +53,8 @@ parser still displays unstyled content.
 | `<input>` | Manual authentication callback entry |
 | `<select>` | Authentication choices |
 | `<markdown>` | Assistant responses and tool output with shared syntax highlighting |
-| `<diff>` | Unified per-file workspace patches |
+| `<code>` | Native fenced blocks and Bash command approval previews |
+| `<diff>` | Unified per-file workspace patches with path-based syntax highlighting |
 | `<a>` | Clickable authentication URLs while preserving visible fallback text |
 
 ## Reserved primitives

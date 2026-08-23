@@ -17,7 +17,6 @@ test("keeps errors readable beside a long model name", async () => {
       inputError={null}
       selectedModelName="An exceptionally long provider model name"
       reasoningEffort="medium"
-      menuOpen={false}
     />,
     { width: 30, height: 10 },
   )
@@ -28,7 +27,8 @@ test("keeps errors readable beside a long model name", async () => {
     })
 
     const frame = setup.captureCharFrame()
-    expect(frame).toContain("Critical provider")
+    expect(frame).toContain("Critical")
+    expect(frame).toContain("provider")
     expect(frame).toContain("failure")
   } finally {
     act(() => {

@@ -6,7 +6,6 @@ import { resolveApprovalKeyboardAction } from "@/app/ui/keyboard-shortcuts"
 import { useBuliUiController } from "@/app/ui/context/ui-controller-context"
 import { Transcript } from "@/sessions/ui"
 import { ToolApprovalPanel } from "@/tools/ui"
-import { theme } from "@/terminal/theme"
 
 interface ISessionScreenProps {
   sessionId: string
@@ -38,14 +37,6 @@ export function SessionScreen(props: ISessionScreenProps): ReactNode {
           flexGrow={1}
           stickyScroll
           stickyStart="bottom"
-          backgroundColor={theme.background}
-          viewportOptions={{ paddingRight: 1 }}
-          verticalScrollbarOptions={{
-            trackOptions: {
-              backgroundColor: theme.surface,
-              foregroundColor: theme.border,
-            },
-          }}
         >
           <Transcript
             messages={session.messages}

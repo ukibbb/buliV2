@@ -65,6 +65,7 @@ export interface IBuliApplication
     extends ISnapshotSource<IBuliApplicationSnapshot> {
     readonly workspaceRoot: string
 
+    readonly refreshModels: (signal?: AbortSignal) => Promise<void>
     readonly selectModel: (modelId: string) => void
     readonly selectReasoningEffort: (
         reasoningEffort: TReasoningEffort,

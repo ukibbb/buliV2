@@ -47,6 +47,8 @@ interface IApplicationSpyOptions {
   readonly followUp?: (sessionId: string, text: string) => void
   readonly clearQueuedMessages?: (sessionId: string) => IBuliQueuedMessages
   readonly compactSession?: IBuliApplication["compactSession"]
+  readonly refreshModels?: IBuliApplication["refreshModels"]
+  readonly getSnapshot?: IBuliApplication["getSnapshot"]
   readonly pendingToolApprovals?: Readonly<Record<string, TToolApprovalRequest>>
   readonly resolveToolApproval?: IBuliApplication["resolveToolApproval"]
 }
@@ -59,6 +61,7 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
   const created: Array<{ agentId: string; title: string }> = []
   const selectedModels: string[] = []
   const selectedReasoningEfforts: TReasoningEffort[] = []
+  const modelRefreshes: number[] = []
   const steering: Array<{ sessionId: string; text: string }> = []
   const followUps: Array<{ sessionId: string; text: string }> = []
   const clearedQueues: string[] = []
@@ -97,7 +100,11 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
   const application: IBuliApplication = {
     workspaceRoot: "/workspace",
     subscribe: () => () => undefined,
-    getSnapshot: () => APPLICATION_SNAPSHOT,
+    getSnapshot: () => options.getSnapshot?.() ?? APPLICATION_SNAPSHOT,
+    refreshModels: async (signal) => {
+      modelRefreshes.push(modelRefreshes.length + 1)
+      await options.refreshModels?.(signal)
+    },
     selectModel: (modelId) => {
       options.selectModel?.(modelId)
       selectedModels.push(modelId)
@@ -170,6 +177,7 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
     created,
     selectedModels,
     selectedReasoningEfforts,
+    modelRefreshes,
     steering,
     followUps,
     clearedQueues,
@@ -521,9 +529,66 @@ test("opens model picker at the current model and activates a selection", async 
   await controller.activateSelectedMenuItem()
 
   expect(spy.selectedModels).toEqual(["other"])
+  expect(spy.modelRefreshes).toEqual([1])
   expect(controller.getSnapshot().menu).toBeNull()
   expect(spy.prompts).toEqual([])
   expect(spy.created).toEqual([])
+})
+
+test("keeps the model picker usable when catalog refresh fails", async () => {
+  const spy = applicationSpy({
+    refreshModels: async () => {
+      throw new Error("catalog offline")
+    },
+  })
+  const controller = new BuliUiController({ application: spy.application })
+
+  expect(await controller.submitInput("/model")).toBe("consumed")
+
+  expect(controller.getSnapshot().menu).toMatchObject({
+    mode: "picker",
+    commandName: "model",
+    items: [
+      { id: "test", label: "Test" },
+      { id: "other", label: "Other" },
+    ],
+    errorMessage: "Model catalog refresh failed: catalog offline",
+  })
+  expect(spy.modelRefreshes).toEqual([1])
+})
+
+test("does not reopen a model picker dismissed during refresh", async () => {
+  let refreshAborted = false
+  const spy = applicationSpy({
+    refreshModels: async (signal) => {
+      if (!signal) throw new Error("Expected model refresh signal")
+      await new Promise<void>((_resolve, reject) => {
+        const rejectOnAbort = (): void => {
+          refreshAborted = true
+          reject(signal.reason)
+        }
+        signal.addEventListener("abort", rejectOnAbort, { once: true })
+        if (signal.aborted) rejectOnAbort()
+      })
+    },
+  })
+  const controller = new BuliUiController({ application: spy.application })
+
+  const submission = controller.submitInput("/model")
+  await Promise.resolve()
+  await Promise.resolve()
+  expect(controller.getSnapshot().menu).toMatchObject({
+    mode: "picker",
+    commandName: "model",
+    items: [],
+    emptyMessage: "Loading models...",
+  })
+
+  controller.escape()
+  expect(controller.getSnapshot().menu).toBeNull()
+  expect(await submission).toBe("consumed")
+  expect(controller.getSnapshot().menu).toBeNull()
+  expect(refreshAborted).toBe(true)
 })
 
 test("opens reasoning picker with efforts supported by the current model", async () => {

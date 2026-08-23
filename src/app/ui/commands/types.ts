@@ -24,6 +24,7 @@ export interface IBuliPickerContent {
     readonly items: readonly IBuliMenuItem[]
     readonly selectedItemId?: string
     readonly emptyMessage?: string
+    readonly errorMessage?: string
 }
 
 type TBuliCommandHandler = (
@@ -38,8 +39,10 @@ export type TBuliCommand = IBuliCommandInfo & (
     }
     | {
         readonly kind: "picker"
+        readonly loadingMessage?: string
         readonly load: (
             context: IBuliCommandContext,
+            signal: AbortSignal,
         ) => IBuliPickerContent | Promise<IBuliPickerContent>
         readonly select: (
             itemId: string,

@@ -16,7 +16,15 @@ export const BULI_COMMANDS: readonly TBuliCommand[] = [
         kind: "picker",
         name: "model",
         description: "Select the model used for new prompts",
-        load: ({ application }) => {
+        loadingMessage: "Loading models...",
+        load: async ({ application }, signal) => {
+            let refreshError: string | undefined
+            try {
+                await application.refreshModels(signal)
+            } catch (error) {
+                signal.throwIfAborted()
+                refreshError = commandErrorMessage(error)
+            }
             const snapshot = application.getSnapshot()
 
             return {
@@ -26,6 +34,12 @@ export const BULI_COMMANDS: readonly TBuliCommand[] = [
                     description: model.id,
                 })),
                 selectedItemId: snapshot.selection.modelId,
+                ...(refreshError === undefined
+                    ? {}
+                    : {
+                        errorMessage:
+                            `Model catalog refresh failed: ${refreshError}`,
+                    }),
             }
         },
         select: (modelId, { application }) => {
@@ -143,4 +157,8 @@ function formatSessionTime(timestamp: number): string {
     const date = new Date(timestamp)
     if (Number.isNaN(date.getTime())) return String(timestamp)
     return date.toISOString().slice(0, 16).replace("T", " ")
+}
+
+function commandErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error)
 }

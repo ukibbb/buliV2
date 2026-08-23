@@ -29,13 +29,19 @@ export const DEFAULT_OPENAI_MODEL_ID = "gpt-5.6-sol"
 /** Narrow authentication transport required by the OpenAI model adapter. */
 export interface IOpenAiModelTransport {
     readonly authenticatedFetch: typeof fetch
-    readonly requireCredential: (signal?: AbortSignal) => Promise<unknown>
+    readonly authenticatedFetchForAccount?: (
+        accountId: string,
+    ) => typeof fetch
+    readonly requireCredential: (
+        signal?: AbortSignal,
+    ) => Promise<{ readonly accountId?: string }>
 }
 
 export interface IOpenAiAgentModelOptions {
     // The model borrows this transport and never owns authentication resources.
     readonly auth: IOpenAiModelTransport
     readonly modelId?: string
+    readonly expectedAccountId?: string
 }
 
 // ?? please explain me this types line by line how it works
@@ -61,23 +67,39 @@ type AIAssistantPart = Exclude<AssistantContent, string>[number]
 export class OpenAiAgentModel implements IAgentModel {
     private readonly auth: IOpenAiModelTransport
     private readonly modelId: string
+    private readonly expectedAccountId: string | undefined
 
     constructor(options: IOpenAiAgentModelOptions) {
         this.auth = options.auth
         this.modelId = options.modelId ?? DEFAULT_OPENAI_MODEL_ID
+        this.expectedAccountId = options.expectedAccountId
     }
 
     async *stream(
         request: IAgentModelRequest,
     ): AsyncIterable<IAgentModelEvent> {
         request.signal.throwIfAborted()
-        await this.auth.requireCredential(request.signal)
+        const credential = await this.auth.requireCredential(request.signal)
+        if (
+            this.expectedAccountId
+            && credential.accountId !== this.expectedAccountId
+        ) {
+            throw new Error(
+                "OpenAI account changed; run `/model` to refresh available models",
+            )
+        }
         request.signal.throwIfAborted()
+        const requestAccountId = this.expectedAccountId
+            ?? credential.accountId?.trim()
+        const authenticatedFetch = requestAccountId
+            && this.auth.authenticatedFetchForAccount
+            ? this.auth.authenticatedFetchForAccount(requestAccountId)
+            : this.auth.authenticatedFetch
 
         const provider = createOpenAI({
             baseURL: OPENAI_CODEX_BASE_URL,
             apiKey: OPENAI_OAUTH_DUMMY_API_KEY,
-            fetch: this.auth.authenticatedFetch,
+            fetch: authenticatedFetch,
         })
         const result = streamText({
             model: provider.responses(this.modelId),

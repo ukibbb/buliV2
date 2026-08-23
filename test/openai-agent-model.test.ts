@@ -465,6 +465,67 @@ test("sends projected context summaries and compaction output limits", async () 
   })
 })
 
+test("rejects a discovered model after the authenticated account changes", async () => {
+  let networkCalls = 0
+  const model = new OpenAiAgentModel({
+    auth: {
+      authenticatedFetch: fetchImplementation(async () => {
+        networkCalls += 1
+        return streamResponse()
+      }),
+      requireCredential: async () => ({ accountId: "account-b" }),
+    },
+    modelId: "account-a-model",
+    expectedAccountId: "account-a",
+  })
+  const consume = async (): Promise<void> => {
+    for await (const _event of model.stream({
+      sessionId: "session-1",
+      runId: "run-1",
+      systemPrompt: "System",
+      messages: [userMessage("Hello")],
+      tools: [],
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+    })) {
+      // The account check must fail before a provider event can arrive.
+    }
+  }
+
+  await expect(consume()).rejects.toThrow(
+    "OpenAI account changed; run `/model` to refresh available models",
+  )
+  expect(networkCalls).toBe(0)
+})
+
+test("binds a fallback model request to its preflight account", async () => {
+  let boundAccountId: string | undefined
+  let genericNetworkCalls = 0
+  const model = new OpenAiAgentModel({
+    auth: {
+      authenticatedFetch: fetchImplementation(async () => {
+        genericNetworkCalls += 1
+        return streamResponse()
+      }),
+      authenticatedFetchForAccount: (accountId) => {
+        boundAccountId = accountId
+        return fetchImplementation(async () => streamResponse())
+      },
+      requireCredential: async () => ({ accountId: "account-a" }),
+    },
+  })
+
+  const events = await collectEvents(
+    model,
+    [userMessage("Hello")],
+    [],
+  )
+
+  expect(boundAccountId).toBe("account-a")
+  expect(genericNetworkCalls).toBe(0)
+  expect(events.at(-1)?.type).toBe("finish")
+})
+
 test("emits every tool call from one provider response for the host loop", async () => {
   const model = createModel(async () => multiToolCallResponse([
     {

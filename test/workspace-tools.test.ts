@@ -242,6 +242,30 @@ test("glob is sorted, scoped, ignore-aware, hidden-aware, and limited", async ()
 })
 
 if (process.platform !== "win32") {
+  test("glob uses an explicit ripgrep sidecar without searching PATH", async () => {
+    const workspace = await temporaryWorkspace()
+    const sidecarRoot = await temporaryWorkspace("buli-sidecar-rg-")
+    try {
+      await writeFile(join(workspace, "sidecar.ts"), "sidecar")
+      const sidecar = join(sidecarRoot, "rg")
+      await writeExecutable(
+        sidecar,
+        "#!/bin/sh\n[ \"$1\" = \"--files\" ] || exit 91\nprintf 'sidecar.ts\\000'\n",
+      )
+      const glob = getTool(createWorkspaceTools(workspace, {
+        ripgrepExecutablePath: sidecar,
+        ripgrepSearchPath: "",
+      }), "glob")
+
+      await expect(glob.execute(
+        { pattern: "**/*.ts" },
+        context(),
+      )).resolves.toBe("sidecar.ts")
+    } finally {
+      await Promise.all([removeWorkspace(workspace), removeWorkspace(sidecarRoot)])
+    }
+  })
+
   test("glob skips a workspace rg and uses the next safe absolute PATH candidate", async () => {
     const workspace = await temporaryWorkspace()
     const safeRoot = await temporaryWorkspace("buli-safe-rg-")

@@ -15,7 +15,8 @@
     "dev": "BULI_DEVELOPMENT=1 SHOW_CONSOLE=1 bun cli/main.ts",
     "dev:quiet": "BULI_DEVELOPMENT=1 bun --watch cli/main.ts",
     "start": "BULI_DEVELOPMENT=1 bun cli/main.ts",
-    "build:local": "mkdir -p dist && bun build --compile ./cli/main.ts --outfile ./dist/buli"
+    "build:local": "mkdir -p dist && bun build --compile ./cli/main.ts --outfile ./dist/buli",
+    "bundle:local": "bun scripts/build-release.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.16",

@@ -1,11 +1,9 @@
 import { expect, test } from "bun:test"
 import {
-  ASCIIFontRenderable,
   BoxRenderable,
   CodeRenderable,
   DiffRenderable,
   parseKeypress,
-  RGBA,
   type Renderable,
   ScrollBoxRenderable,
   TextRenderable,
@@ -37,7 +35,7 @@ import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
 import { BuliTui } from "@/app/ui/shell/BuliTui"
 import { BuliUiController } from "@/app/ui/ui-controller"
 import { BuliUiControllerProvider } from "@/app/ui/context/ui-controller-context"
-import { glyphs, syntax, theme } from "@/terminal/theme"
+import { glyphs } from "@/terminal/theme"
 
 const WORKSPACE_ROOT = "/workspace"
 const TEST_AGENT_ID = "test-agent"
@@ -75,13 +73,6 @@ function codeRenderables(root: Renderable): CodeRenderable[] {
   return root.getChildren().flatMap((child) => [
     ...(child instanceof CodeRenderable ? [child] : []),
     ...codeRenderables(child),
-  ])
-}
-
-function asciiFontRenderables(root: Renderable): ASCIIFontRenderable[] {
-  return root.getChildren().flatMap((child) => [
-    ...(child instanceof ASCIIFontRenderable ? [child] : []),
-    ...asciiFontRenderables(child),
   ])
 }
 
@@ -340,51 +331,11 @@ test("provides the runtime above Buli", async () => {
 
     expect(frame.trim()).not.toBe("")
     expect(frame).not.toContain("Buli runtime not available")
-    const logos = asciiFontRenderables(setup.renderer.root)
-    expect(logos).toHaveLength(1)
-    expect(logos[0]?.text).toBe("BULI")
-    expect(logos[0]?.font).toBe("huge")
+    expect(frame).toContain("____")
     expect(textareaRenderable(setup.renderer.root).placeholder).toBeNull()
     expect(runtime.listSessions()).toEqual([])
   } finally {
     await startup.dispose()
-    act(() => {
-      setup.renderer.destroy()
-    })
-  }
-})
-
-test("uses a compact OpenTUI font on a small Home screen", async () => {
-  const fake = fakeApplication()
-  const setup = await testRender(
-    buliElement(fake.application),
-    { width: 35, height: 14 },
-  )
-
-  try {
-    await act(async () => {
-      await setup.renderOnce()
-    })
-
-    const logos = asciiFontRenderables(setup.renderer.root)
-    expect(logos).toHaveLength(1)
-    expect(logos[0]?.text).toBe("BULI")
-    expect(logos[0]?.font).toBe("tiny")
-
-    await act(async () => {
-      await setup.mockInput.typeText("/")
-      await setup.renderOnce()
-    })
-    expect(asciiFontRenderables(setup.renderer.root)).toHaveLength(0)
-
-    const up = parseKeypress("\u001b[A")
-    if (!up) throw new Error("Expected Up to parse as a keypress")
-    await act(async () => {
-      setup.renderer.keyInput.processParsedKey(up)
-      await setup.renderOnce()
-    })
-    expect(setup.captureCharFrame()).toContain("→ compact")
-  } finally {
     act(() => {
       setup.renderer.destroy()
     })
@@ -869,7 +820,7 @@ test("renders complete patch approval details and patch-only actions", async () 
   })
   const setup = await testRender(
     buliElement(fake.application, "default"),
-    { width: 132, height: 48 },
+    { width: 100, height: 48 },
   )
 
   try {
@@ -893,22 +844,8 @@ test("renders complete patch approval details and patch-only actions", async () 
     expect(renderedDiffs).toHaveLength(2)
     expect(renderedDiffs.map((renderable) => renderable.diff).join(""))
       .toBe(approval.diff)
-    expect(renderedDiffs.every((renderable) => renderable.view === "split"))
+    expect(renderedDiffs.every((renderable) => renderable.view === "unified"))
       .toBe(true)
-    expect(renderedDiffs.every((renderable) =>
-      renderable.filetype === "typescript"
-    )).toBe(true)
-    expect(renderedDiffs.every((renderable) =>
-      renderable.syntaxStyle === syntax
-    )).toBe(true)
-    expect(renderedDiffs.every((renderable) =>
-      renderable.addedContentBg?.equals(RGBA.fromHex(theme.diffAddedContentBg))
-    )).toBe(true)
-    expect(renderedDiffs.every((renderable) =>
-      renderable.removedContentBg?.equals(
-        RGBA.fromHex(theme.diffRemovedContentBg),
-      )
-    )).toBe(true)
     expect(renderedDiffs.every((renderable) => renderable.showLineNumbers))
       .toBe(true)
     expect(renderedDiffs.every((renderable) => renderable.wrapMode === "word"))
@@ -995,15 +932,10 @@ test("renders complete command approval details and command actions", async () =
     const renderedText = textRenderables(setup.renderer.root).map(
       (renderable) => renderable.plainText,
     )
-    const commandPreview = codeRenderables(setup.renderer.root).find(
-      (renderable) => renderable.content === approval.command,
-    )
     expect(frame).toContain("Command approval")
     expect(frame).toContain(approval.title)
     expect(frame).toContain(approval.purpose)
-    expect(commandPreview).toBeDefined()
-    expect(commandPreview?.filetype).toBe("bash")
-    expect(commandPreview?.syntaxStyle).toBe(syntax)
+    expect(renderedText).toContain(approval.command)
     expect(frame).toContain(approval.explanation)
     expect(frame).toContain(approval.cwd)
     expect(frame).toContain(`${approval.timeoutSeconds} seconds`)

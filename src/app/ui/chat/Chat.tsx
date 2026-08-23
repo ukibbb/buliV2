@@ -13,7 +13,6 @@ import type {
     TAgentRunEndReason,
     TToolApprovalRequest,
 } from "@/agent"
-import { theme } from "@/terminal/theme"
 
 interface IChatProps {
     readonly isRunning?: boolean
@@ -43,16 +42,7 @@ export function Chat(props: IChatProps) {
 
     return (
         <box width="100%" flexShrink={0} flexDirection="column">
-            <text
-                fg={theme.textSubtle}
-                selectionBg={theme.selectionBg}
-                selectionFg={theme.selectionFg}
-                paddingLeft={1}
-                truncate
-                wrapMode="none"
-            >
-                {controller.workspaceRoot}
-            </text>
+            <text>{controller.workspaceRoot}</text>
             <PromptEditor
                 value={ui.input}
                 blocked={props.pendingToolApproval !== undefined}
@@ -73,7 +63,6 @@ export function Chat(props: IChatProps) {
                 inputError={ui.inputError}
                 selectedModelName={selectedModelName}
                 reasoningEffort={application.selection.reasoningEffort}
-                menuOpen={menu !== null}
             />
             <CommandMenu menu={menu} />
         </box>

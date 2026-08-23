@@ -56,12 +56,7 @@ export function TerminalSelectionClipboardRoot(
     }, [])
 
     return (
-        <box
-            width="100%"
-            height="100%"
-            position="relative"
-            backgroundColor={theme.background}
-        >
+        <box width="100%" height="100%" position="relative">
             {props.children}
             <SelectionClipboardBridge
                 clipboard={props.clipboard}
@@ -91,7 +86,7 @@ function ClipboardCopyToast(props: { readonly isVisible: boolean }): ReactNode {
             )}
             border={["left"]}
             borderColor={theme.green}
-            backgroundColor={theme.surfaceRaised}
+            backgroundColor={theme.surface}
             paddingX={2}
             paddingY={1}
         >
@@ -101,7 +96,7 @@ function ClipboardCopyToast(props: { readonly isVisible: boolean }): ReactNode {
                 truncate
                 wrapMode="none"
             >
-                <strong>Copied to clipboard</strong>
+                Copied to clipboard
             </text>
         </box>
     )

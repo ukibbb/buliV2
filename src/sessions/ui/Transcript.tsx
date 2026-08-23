@@ -7,17 +7,7 @@ import type {
 import { ToolCallLine, ToolResultLine } from "@/sessions/ui/ToolActivity"
 import { syntax, theme } from "@/terminal/theme"
 
-const MARKDOWN_TABLE_OPTIONS = {
-    style: "grid",
-    widthMode: "full",
-    columnFitter: "proportional",
-    wrapMode: "word",
-    cellPaddingX: 1,
-    borderColor: theme.border,
-    selectable: true,
-    selectionBg: theme.selectionBg,
-    selectionFg: theme.selectionFg,
-} as const
+const MARKDOWN_TABLE_OPTIONS = { style: "grid" } as const
 
 export interface ITranscriptProps {
     readonly messages: readonly TAgentMessage[]
@@ -31,13 +21,12 @@ function AssistantCard(props: {
     readonly pendingToolCallIds: ReadonlySet<string>
 }): ReactNode {
     return (
-        <box width="100%" flexDirection="column" paddingLeft={1}>
+        <box width="100%" flexDirection="column">
             {props.message.content.map((content, index) => {
                 if (content.type === "text") {
                     return <markdown
                         key={`${props.message.id}-text-${index}`}
                         fg={theme.text}
-                        bg={theme.background}
                         content={content.text}
                         syntaxStyle={syntax}
                         streaming={props.streaming}
@@ -58,23 +47,7 @@ function AssistantCard(props: {
                 return null
             })}
             {props.message.errorMessage
-                ? (
-                    <box
-                        border={["left"]}
-                        borderColor={theme.red}
-                        backgroundColor={theme.surface}
-                        paddingX={1}
-                    >
-                        <text
-                            fg={theme.red}
-                            selectionBg={theme.selectionBg}
-                            selectionFg={theme.selectionFg}
-                            wrapMode="word"
-                        >
-                            {props.message.errorMessage}
-                        </text>
-                    </box>
-                )
+                ? <text fg={theme.red}>{props.message.errorMessage}</text>
                 : null}
         </box>
     )
@@ -83,38 +56,18 @@ function AssistantCard(props: {
 /** Renders persisted and streaming session messages for the terminal UI. */
 export function Transcript(props: ITranscriptProps): ReactNode {
     if (props.messages.length === 0 && !props.streamingMessage) {
-        return <text fg={theme.textMuted} padding={1} selectable={false}>
+        return <text fg={theme.textMuted} selectable={false}>
             Start conversation
         </text>
     }
 
     const pendingToolCallIds = new Set(props.pendingToolCallIds ?? [])
     return (
-        <box width="100%" flexDirection="column" paddingX={1}>
+        <box width="100%" flexDirection="column">
             {props.messages.map((message) => {
                 switch (message.role) {
                     case "user":
-                        return (
-                            <box
-                                key={message.id}
-                                width="100%"
-                                flexDirection="column"
-                                border={["left"]}
-                                borderColor={theme.green}
-                                backgroundColor={theme.userBackground}
-                                paddingX={2}
-                                paddingY={1}
-                            >
-                                <text
-                                    fg={theme.textStrong}
-                                    selectionBg={theme.selectionBg}
-                                    selectionFg={theme.selectionFg}
-                                    wrapMode="word"
-                                >
-                                    {message.content.trim()}
-                                </text>
-                            </box>
-                        )
+                        return <text bg={theme.green} key={message.id} margin={1}>{message.content.trim()}</text>
                     case "assistant":
                         return <AssistantCard
                             key={message.id}

@@ -75,13 +75,12 @@ export function AuthenticationFlow(
                 flexDirection="column"
                 border
                 borderStyle="single"
-                borderColor={theme.border}
-                backgroundColor={theme.surface}
+                borderColor={theme.textMuted}
                 padding={1}
                 gap={1}
             >
                 <text fg={theme.green} selectable={false}>
-                    <strong>Buli Authentication</strong>
+                    Buli Authentication
                 </text>
                 <text fg={theme.textMuted} selectable={false}>
                     {controller.mode === "login" ? "Sign in" : "Sign out"}
@@ -97,10 +96,7 @@ export function AuthenticationFlow(
                     stickyScroll={state.type === "login"}
                     stickyStart="bottom"
                     viewportCulling={false}
-                    contentOptions={{
-                        flexDirection: "column",
-                        backgroundColor: theme.surface,
-                    }}
+                    contentOptions={{ flexDirection: "column" }}
                     verticalScrollbarOptions={{ visible: false }}
                 >
                     {renderActiveState(controller, state)}

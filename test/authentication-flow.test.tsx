@@ -128,7 +128,6 @@ test("selects provider and method before showing progress and manual input", asy
       value.includes("https://auth.example.test/preflight")
       && value.includes("Could not open the browser automatically")
     )
-    expect(frame).toContain("Could not open the browser automatically")
     expect(linkTargets(setup.renderer.root)).toContain(
       "https://auth.example.test/preflight",
     )
@@ -144,6 +143,7 @@ test("selects provider and method before showing progress and manual input", asy
     )
     expect(frame).toContain("Complete authorization in your browser.")
     expect(frame).toContain("https://auth.example.test/authorize")
+    expect(frame).toContain("Could not open the browser automatically")
     expect(linkTargets(setup.renderer.root)).toContain(
       "https://auth.example.test/authorize",
     )

@@ -1,6 +1,4 @@
-import type {
-    InputRenderable,
-} from "@opentui/core"
+import type { InputRenderable } from "@opentui/core"
 import {
     useRef,
     type ReactNode,
@@ -36,37 +34,20 @@ export function AuthenticationOperation(
                 width="100%"
                 flexDirection="column"
                 gap={1}
-                backgroundColor={theme.surface}
             >
-                <text
-                    fg={theme.textStrong}
-                    selectionBg={theme.selectionBg}
-                    selectionFg={theme.selectionFg}
-                >{`Signing in to ${state.provider.name}...`}</text>
+                <text>{`Signing in to ${state.provider.name}...`}</text>
                 {state.event ? <AuthenticationEvent event={state.event} /> : (
-                    <text
-                        fg={theme.textMuted}
-                        selectionBg={theme.selectionBg}
-                        selectionFg={theme.selectionFg}
-                    >Starting authentication...</text>
+                    <text fg={theme.textMuted}>Starting authentication...</text>
                 )}
                 {state.browserOpenFailed ? (
-                    <text
-                        fg={theme.amber}
-                        selectionBg={theme.selectionBg}
-                        selectionFg={theme.selectionFg}
-                    >
+                    <text fg={theme.amber}>
                         Could not open the browser automatically. Use the URL above.
                     </text>
                 ) : null}
                 {state.prompt ? (
                     <box flexDirection="column" gap={1}>
-                        <text
-                            fg={theme.text}
-                            selectionBg={theme.selectionBg}
-                            selectionFg={theme.selectionFg}
-                        >{state.prompt.message}</text>
-                        <box border={["bottom"]} borderColor={theme.green}>
+                        <text>{state.prompt.message}</text>
+                        <box border={["bottom"]} borderColor={theme.textMuted}>
                             <input
                                 key={state.prompt.id}
                                 ref={promptInputRef}
@@ -75,12 +56,8 @@ export function AuthenticationOperation(
                                 textColor={theme.text}
                                 focusedTextColor={theme.text}
                                 placeholderColor={theme.textMuted}
-                                backgroundColor={theme.surface}
-                                focusedBackgroundColor={theme.surface}
-                                cursorColor={theme.green}
-                                cursorStyle={{ style: "line", blinking: true }}
-                                selectionBg={theme.selectionBg}
-                                selectionFg={theme.selectionFg}
+                                backgroundColor="transparent"
+                                focusedBackgroundColor="transparent"
                                 onSubmit={() => {
                                     controller.submitPrompt(
                                         promptInputRef.current?.value ?? "",
@@ -107,11 +84,7 @@ export function AuthenticationOperation(
     if (state.type === "logout") {
         return (
             <box flexDirection="column" gap={1}>
-                <text
-                    fg={theme.textStrong}
-                    selectionBg={theme.selectionBg}
-                    selectionFg={theme.selectionFg}
-                >{`Disconnecting ${state.provider.name}...`}</text>
+                <text>{`Disconnecting ${state.provider.name}...`}</text>
                 <text fg={theme.textMuted} selectable={false}>
                     Please wait  esc cancel
                 </text>
@@ -121,25 +94,13 @@ export function AuthenticationOperation(
 
     return (
         <box flexDirection="column" gap={1}>
-            <text
-                fg={theme.green}
-                selectionBg={theme.selectionBg}
-                selectionFg={theme.selectionFg}
-            ><strong>
+            <text fg={theme.green}>
                 {state.mode === "login"
                     ? "Sign-in complete"
                     : "Sign-out complete"}
-            </strong></text>
-            <text
-                fg={theme.text}
-                selectionBg={theme.selectionBg}
-                selectionFg={theme.selectionFg}
-            >{`Provider: ${state.providerName}`}</text>
-            <text
-                fg={theme.text}
-                selectionBg={theme.selectionBg}
-                selectionFg={theme.selectionFg}
-            >{`Account: ${state.accountId ?? "unavailable"}`}</text>
+            </text>
+            <text>{`Provider: ${state.providerName}`}</text>
+            <text>{`Account: ${state.accountId ?? "unavailable"}`}</text>
             <text fg={theme.textMuted} selectable={false}>
                 enter or esc close
             </text>
@@ -149,26 +110,14 @@ export function AuthenticationOperation(
 
 function AuthenticationEvent(props: { readonly event: TAuthEvent }): ReactNode {
     if (props.event.type === "progress") {
-        return <text
-            fg={theme.textMuted}
-            selectionBg={theme.selectionBg}
-            selectionFg={theme.selectionFg}
-        >{props.event.message}</text>
+        return <text fg={theme.textMuted}>{props.event.message}</text>
     }
     if (props.event.type === "authorization") {
         return (
             <box flexDirection="column" gap={1}>
-                <text
-                    fg={theme.text}
-                    selectionBg={theme.selectionBg}
-                    selectionFg={theme.selectionFg}
-                >{props.event.instructions}</text>
-                <text
-                    selectionBg={theme.selectionBg}
-                    selectionFg={theme.selectionFg}
-                    wrapMode="word"
-                >
-                    <a key={props.event.url} href={props.event.url} fg={theme.blue}>
+                <text>{props.event.instructions}</text>
+                <text wrapMode="word">
+                    <a key={props.event.url} href={props.event.url} fg={theme.green}>
                         {props.event.url}
                     </a>
                 </text>
@@ -177,25 +126,13 @@ function AuthenticationEvent(props: { readonly event: TAuthEvent }): ReactNode {
     }
     return (
         <box flexDirection="column" gap={1}>
-            <text
-                fg={theme.text}
-                selectionBg={theme.selectionBg}
-                selectionFg={theme.selectionFg}
-            >{props.event.instructions}</text>
-            <text
-                selectionBg={theme.selectionBg}
-                selectionFg={theme.selectionFg}
-                wrapMode="word"
-            >
-                <a key={props.event.url} href={props.event.url} fg={theme.blue}>
+            <text>{props.event.instructions}</text>
+            <text wrapMode="word">
+                <a key={props.event.url} href={props.event.url} fg={theme.green}>
                     {props.event.url}
                 </a>
             </text>
-            <text
-                fg={theme.textStrong}
-                selectionBg={theme.selectionBg}
-                selectionFg={theme.selectionFg}
-            >{`Device code: ${props.event.userCode}`}</text>
+            <text>{`Device code: ${props.event.userCode}`}</text>
         </box>
     )
 }

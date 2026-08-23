@@ -27,9 +27,9 @@ const SELECT_STYLE = {
     textColor: theme.text,
     focusedTextColor: theme.text,
     selectedBackgroundColor: theme.green,
-    selectedTextColor: theme.greenContrast,
+    selectedTextColor: theme.text,
     descriptionColor: theme.textMuted,
-    selectedDescriptionColor: theme.greenContrast,
+    selectedDescriptionColor: theme.text,
 } as const
 
 const CONFIRM_OPTIONS: SelectOption[] = [
@@ -61,9 +61,7 @@ export function AuthenticationChoices(
 
         return (
             <box flexDirection="column" gap={1}>
-                <text fg={theme.textStrong} selectable={false}>
-                    Select a provider
-                </text>
+                <text selectable={false}>Select a provider</text>
                 {state.providers.length > 0 ? (
                     <select
                         {...SELECT_STYLE}
@@ -98,12 +96,8 @@ export function AuthenticationChoices(
 
         return (
             <box flexDirection="column" gap={1}>
-                <text fg={theme.textStrong} selectable={false}>
-                    {state.provider.name}
-                </text>
-                <text fg={theme.text} selectable={false}>
-                    Select a login method
-                </text>
+                <text selectable={false}>{state.provider.name}</text>
+                <text selectable={false}>Select a login method</text>
                 {state.provider.methods.length > 0 ? (
                     <select
                         {...SELECT_STYLE}
@@ -129,9 +123,7 @@ export function AuthenticationChoices(
     if (state.type === "confirm") {
         return (
             <box flexDirection="column" gap={1}>
-                <text fg={theme.textStrong} selectable={false}>
-                    {`Disconnect ${state.provider.name}?`}
-                </text>
+                <text selectable={false}>{`Disconnect ${state.provider.name}?`}</text>
                 <text fg={theme.textMuted} selectable={false}>
                     {`Account: ${state.provider.accountId ?? "unavailable"}`}
                 </text>
@@ -153,11 +145,7 @@ export function AuthenticationChoices(
 
     return (
         <box flexDirection="column" gap={1}>
-            <text
-                fg={theme.red}
-                selectionBg={theme.selectionBg}
-                selectionFg={theme.selectionFg}
-            >{state.message}</text>
+            <text fg={theme.red}>{state.message}</text>
             <select
                 {...SELECT_STYLE}
                 options={RETRY_OPTIONS}

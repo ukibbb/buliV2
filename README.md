@@ -45,8 +45,8 @@ bun run typecheck
 bun test
 ```
 
-Rendering conventions, syntax parsers, and planned OpenTUI primitives are
-documented in [`docs/opentui-rendering.md`](docs/opentui-rendering.md).
+OpenTUI rendering conventions are documented in
+[`docs/opentui-rendering.md`](docs/opentui-rendering.md).
 
 ## Architecture
 

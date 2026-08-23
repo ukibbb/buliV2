@@ -11,3 +11,12 @@ export {
     DEFAULT_OPENAI_MODEL_ID,
     OpenAiAgentModel,
 } from "@/providers/openai/model/openai-agent-model"
+export {
+    createOpenAiModelCatalog,
+} from "@/providers/openai/model/openai-model-catalog"
+export type {
+    IOpenAiCatalogModel,
+    IOpenAiModelCatalog,
+    IOpenAiModelCatalogAuth,
+    IOpenAiModelCatalogOptions,
+} from "@/providers/openai/model/openai-model-catalog"

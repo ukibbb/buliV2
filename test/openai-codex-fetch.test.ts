@@ -2,14 +2,102 @@ import { expect, test } from "bun:test"
 
 import type { IOAuthCredential } from "@/authentication/credentials"
 import {
+    OPENAI_CODEX_CLIENT_VERSION,
+    OPENAI_CODEX_MODELS_URL,
     OPENAI_CODEX_RESPONSES_URL,
     OPENAI_OAUTH_DUMMY_API_KEY,
     OPENAI_OAUTH_ORIGINATOR,
 } from "@/providers/openai/constants"
 import {
     createOpenAiCodexFetch,
+    createOpenAiCodexModelsFetch,
     type IOpenAiCodexCredentialProvider,
 } from "@/providers/openai/transport/codex-fetch"
+
+test("sends an exact Codex models GET with isolated OAuth headers", async () => {
+    const provider = new StubCredentialProvider(
+        credential("models-access", "models-account"),
+    )
+    let outbound: Request | undefined
+    const codexFetch = createOpenAiCodexFetch({
+        credentials: provider,
+        fetch: fetchImplementation(async (input, init) => {
+            outbound = new Request(input, init)
+            return Response.json({ models: [] })
+        }),
+    })
+
+    await codexFetch(OPENAI_CODEX_MODELS_URL, {
+        method: "GET",
+        headers: {
+            Authorization: "Bearer caller-token",
+            cookie: "session=secret",
+            "x-caller-header": "discarded",
+        },
+    })
+
+    if (!outbound) throw new Error("Expected one models request")
+    expect(outbound.url).toBe(OPENAI_CODEX_MODELS_URL)
+    expect(outbound.method).toBe("GET")
+    expect(outbound.body).toBeNull()
+    expect(outbound.headers.get("accept")).toBe("application/json")
+    expect(outbound.headers.get("authorization")).toBe("Bearer models-access")
+    expect(outbound.headers.get("chatgpt-account-id")).toBe("models-account")
+    expect(outbound.headers.get("originator")).toBe(OPENAI_OAUTH_ORIGINATOR)
+    expect(outbound.headers.get("openai-beta")).toBe("responses=experimental")
+    expect(outbound.headers.get("version")).toBe(OPENAI_CODEX_CLIENT_VERSION)
+    expect(outbound.headers.get("cookie")).toBeNull()
+    expect(outbound.headers.get("x-caller-header")).toBeNull()
+})
+
+test("reports the credential account that authorized model discovery", async () => {
+    const provider = new StubCredentialProvider(
+        credential("old-access", "account-id"),
+        credential("new-access", "account-id"),
+    )
+    const requests: Request[] = []
+    const modelsFetch = createOpenAiCodexModelsFetch({
+        credentials: provider,
+        fetch: fetchImplementation(async (input, init) => {
+            requests.push(new Request(input, init))
+            return requests.length === 1
+                ? new Response("unauthorized", { status: 401 })
+                : Response.json({ models: [] })
+        }),
+    })
+
+    const result = await modelsFetch()
+
+    expect(result.accountId).toBe("account-id")
+    expect(result.response.status).toBe(200)
+    expect(requests).toHaveLength(2)
+    expect(requests[0]?.headers.get("authorization")).toBe("Bearer old-access")
+    expect(requests[1]?.headers.get("authorization")).toBe("Bearer new-access")
+    expect(provider.refreshCalls).toHaveLength(1)
+})
+
+test("an account-bound response transport rejects a switched credential", async () => {
+    const provider = new StubCredentialProvider(
+        credential("account-b-access", "account-b"),
+    )
+    let networkCalls = 0
+    const codexFetch = createOpenAiCodexFetch({
+        credentials: provider,
+        expectedAccountId: "account-a",
+        fetch: fetchImplementation(async () => {
+            networkCalls += 1
+            return new Response("unexpected")
+        }),
+    })
+
+    await expect(codexFetch(
+        OPENAI_CODEX_RESPONSES_URL,
+        jsonPost(),
+    )).rejects.toThrow(
+        "OpenAI account changed; run `/model` to refresh available models",
+    )
+    expect(networkCalls).toBe(0)
+})
 
 test("sends an exact Codex request with OAuth headers and buffered body", async () => {
     const provider = new StubCredentialProvider(
@@ -86,6 +174,11 @@ test("rejects requests outside the exact JSON POST contract before auth", async 
         [`${OPENAI_CODEX_RESPONSES_URL}#fragment`, jsonPost()],
         ["https://user@chatgpt.com/backend-api/codex/responses", jsonPost()],
         ["https://chatgpt.com:444/backend-api/codex/responses", jsonPost()],
+        [OPENAI_CODEX_MODELS_URL.replace("?", "?unexpected=true&"), {
+            method: "GET",
+        }],
+        [`${OPENAI_CODEX_MODELS_URL}#fragment`, { method: "GET" }],
+        [OPENAI_CODEX_MODELS_URL, { method: "POST" }],
         [OPENAI_CODEX_RESPONSES_URL, {
             method: "GET",
             headers: { "Content-Type": "application/json" },

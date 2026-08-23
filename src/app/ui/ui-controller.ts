@@ -80,6 +80,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     }
 
     readonly dispose = (): void => {
+        this.commandMenu.cancelPendingLoad()
         this.store.dispose()
     }
 
@@ -117,6 +118,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
 
     readonly dismissMenu = (): void => {
         if (this.store.isDisposed || this.store.getSnapshot().menu === null) return
+        this.commandMenu.cancelPendingLoad()
         this.store.setMenu(null)
     }
 
@@ -130,6 +132,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
         }
 
         if (snapshot.menu) {
+            this.commandMenu.cancelPendingLoad()
             this.store.setMenu(null)
             const sessionId = this.activeSessionId()
             if (!sessionId) return
@@ -173,6 +176,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
 
     readonly goHome = (): void => {
         if (this.store.isDisposed) return
+        this.commandMenu.cancelPendingLoad()
         const snapshot = this.store.getSnapshot()
         if (snapshot.route.type === "home") {
             this.store.setMenu(null)
@@ -190,6 +194,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
 
     readonly openAuthentication = (mode: TAuthenticationMode): void => {
         if (this.store.isDisposed) return
+        this.commandMenu.cancelPendingLoad()
         this.store.setSnapshot({
             ...this.store.getSnapshot(),
             authenticationMode: mode,
@@ -210,6 +215,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
 
     readonly activateSession = (sessionId: string): void => {
         if (this.store.isDisposed) return
+        this.commandMenu.cancelPendingLoad()
         const snapshot = this.store.getSnapshot()
         if (
             snapshot.route.type === "session"

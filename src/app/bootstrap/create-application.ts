@@ -14,6 +14,7 @@ import {
     DEFAULT_OPENAI_MODEL_ID,
     OPENAI_PROVIDER_ID,
     OpenAiAgentModel,
+    createOpenAiModelCatalog,
 } from "@/providers/openai"
 import {
     defaultSessionFilePath,
@@ -61,6 +62,7 @@ export async function createBuliApplication(
         const model: IAgentModel = options.model ?? new OpenAiAgentModel({
             auth: auth.openAi,
         })
+        const modelCatalog = createOpenAiModelCatalog({ auth: auth.openAi })
         const models: readonly IBuliModelRuntimeConfig[] = [{
             id: DEFAULT_OPENAI_MODEL_ID,
             name: "GPT-5.6 Sol",
@@ -77,6 +79,7 @@ export async function createBuliApplication(
                 "xhigh",
                 "max",
             ],
+            defaultReasoningEffort: "medium",
         }]
         const selection: IBuliModelSelection = {
             modelId: DEFAULT_OPENAI_MODEL_ID,
@@ -100,6 +103,34 @@ export async function createBuliApplication(
             defaultAgentId: BULI_AGENT_ID,
             models,
             selection,
+            ...(options.model === undefined
+                ? {
+                    loadModels: async (signal: AbortSignal) => (
+                        await modelCatalog.load(signal)
+                    ).map((entry): IBuliModelRuntimeConfig => ({
+                        id: entry.id,
+                        name: entry.name,
+                        model: new OpenAiAgentModel({
+                            auth: auth.openAi,
+                            modelId: entry.id,
+                            expectedAccountId: entry.accountId,
+                        }),
+                        modelProfile: {
+                            providerId: OPENAI_PROVIDER_ID,
+                            modelId: entry.id,
+                            ...(entry.contextWindowTokens === undefined
+                                ? {}
+                                : {
+                                    contextWindowTokens:
+                                        entry.contextWindowTokens,
+                                }),
+                        },
+                        reasoningEfforts: entry.reasoningEfforts,
+                        defaultReasoningEffort:
+                            entry.defaultReasoningEffort,
+                    })),
+                }
+                : {}),
         })
         runtime = applicationRuntime
 

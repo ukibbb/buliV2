@@ -44,6 +44,7 @@ function runtimeWith(
       name: "Test",
       model: modelOverride,
       reasoningEfforts: ["medium"],
+      defaultReasoningEffort: "medium",
     }],
     selection: {
       modelId: "test",
@@ -319,6 +320,7 @@ test("application runtime applies global selection to the next prompt", async ()
         id: "first",
         name: "First",
         reasoningEfforts: ["low", "medium"],
+        defaultReasoningEffort: "medium",
         model: {
           async *stream(request) {
             runs.push(`first:${request.reasoningEffort}`)
@@ -330,6 +332,7 @@ test("application runtime applies global selection to the next prompt", async ()
         id: "second",
         name: "Second",
         reasoningEfforts: ["medium", "high"],
+        defaultReasoningEffort: "medium",
         model: {
           async *stream(request) {
             runs.push(`second:${request.reasoningEffort}`)
@@ -395,6 +398,298 @@ test("application runtime applies global selection to the next prompt", async ()
 
   unsubscribe()
   await runtime.dispose()
+})
+
+test("application runtime replaces models atomically and reconciles selection", async () => {
+  const loadedModel: IAgentModel = {
+    async *stream() {
+      yield { type: "finish", reason: "stop" }
+    },
+  }
+  const runtime = new BuliApplicationRuntime({
+    workspaceRoot: WORKSPACE_ROOT,
+    manager: new InMemorySessionManager(),
+    agents: TEST_AGENTS,
+    defaultAgentId: TEST_AGENT_ID,
+    models: [{
+      id: "initial",
+      name: "Initial",
+      model,
+      reasoningEfforts: ["low"],
+      defaultReasoningEffort: "low",
+    }],
+    selection: { modelId: "initial", reasoningEffort: "low" },
+    loadModels: async () => [{
+      id: "loaded",
+      name: "Loaded",
+      model: loadedModel,
+      modelProfile: {
+        providerId: "openai",
+        modelId: "loaded-wire-id",
+        contextWindowTokens: 200_000,
+      },
+      reasoningEfforts: ["high"],
+      defaultReasoningEffort: "high",
+    }],
+    generateId: () => "session-1",
+  })
+  const previous = runtime.getSnapshot()
+  let notifications = 0
+  runtime.subscribe(() => {
+    notifications += 1
+  })
+
+  await runtime.refreshModels()
+
+  expect(runtime.getSnapshot()).not.toBe(previous)
+  expect(previous.models).toEqual([{
+    id: "initial",
+    name: "Initial",
+    reasoningEfforts: ["low"],
+  }])
+  expect(runtime.getSnapshot()).toMatchObject({
+    models: [{
+      id: "loaded",
+      name: "Loaded",
+      reasoningEfforts: ["high"],
+    }],
+    selection: { modelId: "loaded", reasoningEffort: "high" },
+  })
+  expect(Object.isFrozen(runtime.getSnapshot().models[0])).toBe(true)
+  expect(Object.isFrozen(runtime.getSnapshot().models[0]?.reasoningEfforts)).toBe(true)
+  expect(notifications).toBe(1)
+
+  await runtime.dispose()
+})
+
+test("model selection adopts the target default when efforts do not overlap", async () => {
+  const runtime = new BuliApplicationRuntime({
+    workspaceRoot: WORKSPACE_ROOT,
+    manager: new InMemorySessionManager(),
+    agents: TEST_AGENTS,
+    defaultAgentId: TEST_AGENT_ID,
+    models: [
+      {
+        id: "low-only",
+        name: "Low only",
+        model,
+        reasoningEfforts: ["low"],
+        defaultReasoningEffort: "low",
+      },
+      {
+        id: "high-only",
+        name: "High only",
+        model,
+        reasoningEfforts: ["high", "max"],
+        defaultReasoningEffort: "high",
+      },
+    ],
+    selection: { modelId: "low-only", reasoningEffort: "low" },
+  })
+
+  runtime.selectModel("high-only")
+
+  expect(runtime.getSnapshot().selection).toEqual({
+    modelId: "high-only",
+    reasoningEffort: "high",
+  })
+  await runtime.dispose()
+})
+
+test("application runtime preserves models when refresh validation fails", async () => {
+  const runtime = new BuliApplicationRuntime({
+    workspaceRoot: WORKSPACE_ROOT,
+    manager: new InMemorySessionManager(),
+    agents: TEST_AGENTS,
+    defaultAgentId: TEST_AGENT_ID,
+    models: [{
+      id: "initial",
+      name: "Initial",
+      model,
+      reasoningEfforts: ["medium"],
+      defaultReasoningEffort: "medium",
+    }],
+    selection: { modelId: "initial", reasoningEffort: "medium" },
+    loadModels: async () => [
+      {
+        id: "duplicate",
+        name: "First duplicate",
+        model,
+        reasoningEfforts: ["medium"],
+        defaultReasoningEffort: "medium",
+      },
+      {
+        id: "duplicate",
+        name: "Second duplicate",
+        model,
+        reasoningEfforts: ["medium"],
+        defaultReasoningEffort: "medium",
+      },
+    ],
+  })
+  const previous = runtime.getSnapshot()
+  let notifications = 0
+  runtime.subscribe(() => {
+    notifications += 1
+  })
+
+  await expect(runtime.refreshModels()).rejects.toThrow(
+    "Duplicate model: duplicate",
+  )
+  expect(runtime.getSnapshot()).toBe(previous)
+  expect(notifications).toBe(0)
+
+  await runtime.dispose()
+})
+
+test("a joined refresh caller can cancel without aborting the shared load", async () => {
+  const started = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  let loadCalls = 0
+  const runtime = new BuliApplicationRuntime({
+    workspaceRoot: WORKSPACE_ROOT,
+    manager: new InMemorySessionManager(),
+    agents: TEST_AGENTS,
+    defaultAgentId: TEST_AGENT_ID,
+    models: [{
+      id: "initial",
+      name: "Initial",
+      model,
+      reasoningEfforts: ["medium"],
+      defaultReasoningEffort: "medium",
+    }],
+    selection: { modelId: "initial", reasoningEffort: "medium" },
+    loadModels: async () => {
+      loadCalls += 1
+      started.resolve()
+      await release.promise
+      return [{
+        id: "loaded",
+        name: "Loaded",
+        model,
+        reasoningEfforts: ["high"],
+        defaultReasoningEffort: "high",
+      }]
+    },
+  })
+  const first = runtime.refreshModels()
+  await started.promise
+  const controller = new AbortController()
+  const joined = runtime.refreshModels(controller.signal)
+
+  controller.abort(new Error("joined caller cancelled"))
+  await expect(joined).rejects.toThrow("joined caller cancelled")
+  expect(loadCalls).toBe(1)
+
+  release.resolve()
+  await first
+  expect(runtime.getSnapshot().selection.modelId).toBe("loaded")
+  await runtime.dispose()
+})
+
+test("model refresh keeps an active run on its captured adapter", async () => {
+  const firstStarted = Promise.withResolvers<void>()
+  const releaseFirst = Promise.withResolvers<void>()
+  const runs: string[] = []
+  const initialModel: IAgentModel = {
+    async *stream() {
+      runs.push("initial")
+      firstStarted.resolve()
+      await releaseFirst.promise
+      yield { type: "finish", reason: "stop" }
+    },
+  }
+  const loadedModel: IAgentModel = {
+    async *stream() {
+      runs.push("loaded")
+      yield { type: "finish", reason: "stop" }
+    },
+  }
+  const runtime = new BuliApplicationRuntime({
+    workspaceRoot: WORKSPACE_ROOT,
+    manager: new InMemorySessionManager(),
+    agents: TEST_AGENTS,
+    defaultAgentId: TEST_AGENT_ID,
+    models: [{
+      id: "initial",
+      name: "Initial",
+      model: initialModel,
+      reasoningEfforts: ["medium"],
+      defaultReasoningEffort: "medium",
+    }],
+    selection: { modelId: "initial", reasoningEffort: "medium" },
+    loadModels: async () => [{
+      id: "loaded",
+      name: "Loaded",
+      model: loadedModel,
+      reasoningEfforts: ["high"],
+      defaultReasoningEffort: "high",
+    }],
+    generateId: () => "session-1",
+  })
+  createSession(runtime)
+  const first = runtime.submitPrompt({
+    sessionId: "session-1",
+    text: "First",
+  })
+  await first.accepted
+  await firstStarted.promise
+
+  await runtime.refreshModels()
+  releaseFirst.resolve()
+  await first.settled
+  const second = runtime.submitPrompt({
+    sessionId: "session-1",
+    text: "Second",
+  })
+  await second.accepted
+  await second.settled
+
+  expect(runs).toEqual(["initial", "loaded"])
+  expect(runtime.getSnapshot().selection).toEqual({
+    modelId: "loaded",
+    reasoningEffort: "high",
+  })
+
+  await runtime.dispose()
+})
+
+test("runtime disposal aborts a model refresh before it can commit", async () => {
+  const started = Promise.withResolvers<void>()
+  const runtime = new BuliApplicationRuntime({
+    workspaceRoot: WORKSPACE_ROOT,
+    manager: new InMemorySessionManager(),
+    agents: TEST_AGENTS,
+    defaultAgentId: TEST_AGENT_ID,
+    models: [{
+      id: "initial",
+      name: "Initial",
+      model,
+      reasoningEfforts: ["medium"],
+      defaultReasoningEffort: "medium",
+    }],
+    selection: { modelId: "initial", reasoningEffort: "medium" },
+    loadModels: async (signal) => {
+      started.resolve()
+      const aborted = Promise.withResolvers<void>()
+      const rejectOnAbort = (): void => aborted.reject(signal.reason)
+      signal.addEventListener("abort", rejectOnAbort, { once: true })
+      if (signal.aborted) rejectOnAbort()
+      await aborted.promise
+      return []
+    },
+  })
+  const previous = runtime.getSnapshot()
+  const refresh = runtime.refreshModels()
+  await started.promise
+
+  const disposal = runtime.dispose()
+  await expect(refresh).rejects.toThrow(
+    "Buli runtime is shutting down",
+  )
+  await disposal
+
+  expect(runtime.getSnapshot()).toBe(previous)
 })
 
 test("application runtime rejects duplicate and unknown agent IDs", async () => {

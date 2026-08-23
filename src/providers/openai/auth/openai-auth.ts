@@ -10,7 +10,9 @@ import {
 } from "@/authentication"
 import {
     createOpenAiCodexFetch,
+    createOpenAiCodexModelsFetch,
     type IOpenAiCodexCredentialProvider,
+    type IOpenAiCodexModelsResponse,
 } from "@/providers/openai/transport/codex-fetch"
 import {
     OPENAI_OAUTH_BROWSER_METHOD_ID,
@@ -39,6 +41,12 @@ const OPENAI_AUTH_METHODS: readonly IAuthMethodInfo[] = [
 export interface IOpenAiAuth
     extends IAuthenticationProvider, IOpenAiCodexCredentialProvider {
     readonly authenticatedFetch: typeof fetch
+    readonly authenticatedFetchForAccount: (
+        accountId: string,
+    ) => typeof fetch
+    readonly fetchModels: (
+        signal?: AbortSignal,
+    ) => Promise<IOpenAiCodexModelsResponse>
     readonly getCredential: (
         signal?: AbortSignal,
     ) => Promise<IOAuthCredential | undefined>
@@ -59,6 +67,12 @@ export class OpenAiAuth implements IOpenAiAuth {
     readonly name = "OpenAI / ChatGPT"
     readonly methods = OPENAI_AUTH_METHODS
     readonly authenticatedFetch: typeof fetch
+    readonly authenticatedFetchForAccount: (
+        accountId: string,
+    ) => typeof fetch
+    readonly fetchModels: (
+        signal?: AbortSignal,
+    ) => Promise<IOpenAiCodexModelsResponse>
 
     private readonly store: IAuthStore
     private readonly oauth: OpenAiOAuth
@@ -90,20 +104,37 @@ export class OpenAiAuth implements IOpenAiAuth {
             fetch: rawFetch,
             signal: this.lifetime.signal,
         })
-        const authenticatedFetch = async (
-            ...args: Parameters<typeof globalThis.fetch>
-        ): Promise<Response> => {
-            const flight = codexFetch(...args)
-            this.requestFlights.add(flight)
-            try {
-                return await flight
-            } finally {
-                this.requestFlights.delete(flight)
+        const trackFetch = (transport: typeof fetch): typeof fetch => {
+            const tracked = async (
+                ...args: Parameters<typeof globalThis.fetch>
+            ): Promise<Response> => {
+                const flight = transport(...args)
+                this.requestFlights.add(flight)
+                try {
+                    return await flight
+                } finally {
+                    this.requestFlights.delete(flight)
+                }
             }
+            return Object.assign(tracked, { preconnect: transport.preconnect })
         }
-        this.authenticatedFetch = Object.assign(authenticatedFetch, {
-            preconnect: codexFetch.preconnect,
+        this.authenticatedFetch = trackFetch(codexFetch)
+        this.authenticatedFetchForAccount = (accountId) => trackFetch(
+            createOpenAiCodexFetch({
+                credentials: this,
+                fetch: rawFetch,
+                signal: this.lifetime.signal,
+                expectedAccountId: accountId,
+            }),
+        )
+        const codexModelsFetch = createOpenAiCodexModelsFetch({
+            credentials: this,
+            fetch: rawFetch,
+            signal: this.lifetime.signal,
         })
+        this.fetchModels = (signal) => this.trackOperation(() => (
+            codexModelsFetch(this.operationSignal(signal))
+        ))
 
         if (options.signal) {
             const rootSignal = options.signal

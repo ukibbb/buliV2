@@ -21,6 +21,8 @@ export class BuliCommandMenu {
     private readonly commands: readonly IBuliCommandInfo[]
     private readonly commandContext: () => IBuliCommandContext
     private activationPending = false
+    private loadGeneration = 0
+    private activeLoad: AbortController | undefined
 
     constructor(options: IBuliCommandMenuOptions) {
         this.store = options.store
@@ -30,6 +32,7 @@ export class BuliCommandMenu {
 
     readonly updateInput = (input: string): void => {
         if (this.store.isDisposed) return
+        this.cancelPendingLoad()
 
         const snapshot = this.store.getSnapshot()
         if (
@@ -84,6 +87,12 @@ export class BuliCommandMenu {
         this.store.setMenu({ ...menu, selectedIndex, errorMessage: null })
     }
 
+    readonly cancelPendingLoad = (): void => {
+        this.loadGeneration += 1
+        this.activeLoad?.abort(abortError("Command load was cancelled"))
+        this.activeLoad = undefined
+    }
+
     readonly activateSelectedItem = async (): Promise<void> => {
         if (this.store.isDisposed || this.activationPending) return
         this.activationPending = true
@@ -107,7 +116,40 @@ export class BuliCommandMenu {
             return true
         }
 
-        const content = await command.load(context)
+        this.cancelPendingLoad()
+        const loadGeneration = this.loadGeneration
+        const loadController = new AbortController()
+        this.activeLoad = loadController
+        if (command.loadingMessage) {
+            this.store.setMenu({
+                mode: "picker",
+                commandName: command.name,
+                items: [],
+                selectedIndex: 0,
+                emptyMessage: command.loadingMessage,
+                errorMessage: null,
+            })
+        }
+        let content
+        try {
+            content = await command.load(context, loadController.signal)
+        } catch (error) {
+            if (
+                loadController.signal.aborted
+                || loadGeneration !== this.loadGeneration
+            ) {
+                return true
+            }
+            throw error
+        } finally {
+            if (this.activeLoad === loadController) this.activeLoad = undefined
+        }
+        if (
+            this.store.isDisposed
+            || loadGeneration !== this.loadGeneration
+        ) {
+            return true
+        }
         const selectedIndex = content.selectedItemId === undefined
             ? 0
             : content.items.findIndex(
@@ -119,7 +161,7 @@ export class BuliCommandMenu {
             commandName: command.name,
             items: content.items,
             selectedIndex: selectedIndex >= 0 ? selectedIndex : 0,
-            errorMessage: null,
+            errorMessage: content.errorMessage ?? null,
             ...(content.emptyMessage === undefined
                 ? {}
                 : { emptyMessage: content.emptyMessage }),
@@ -182,4 +224,10 @@ export class BuliCommandMenu {
         if (this.store.getSnapshot().menu === menu) this.store.setMenu(null)
         this.store.consumeInput(activatedInput)
     }
+}
+
+function abortError(message: string): Error {
+    const error = new Error(message)
+    error.name = "AbortError"
+    return error
 }

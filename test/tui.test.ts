@@ -130,6 +130,7 @@ interface IFakeApplicationOptions {
   readonly followUp?: (sessionId: string, text: string) => void
   readonly clearQueuedMessages?: IBuliApplication["clearQueuedMessages"]
   readonly resolveToolApproval?: IBuliApplication["resolveToolApproval"]
+  readonly refreshModels?: IBuliApplication["refreshModels"]
 }
 
 function fakeApplication(options: IFakeApplicationOptions = {}) {
@@ -162,6 +163,7 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
     workspaceRoot: WORKSPACE_ROOT,
     subscribe: () => () => undefined,
     getSnapshot: () => APPLICATION_SNAPSHOT,
+    refreshModels: async (signal) => options.refreshModels?.(signal),
     selectModel: () => undefined,
     selectReasoningEffort: () => undefined,
     createSession: ({ agentId, title }) => ({
@@ -1488,6 +1490,7 @@ test("shows slash commands and executes the selected clear command", async () =>
         },
       },
       reasoningEfforts: ["medium"],
+      defaultReasoningEffort: "medium",
     }],
     selection: {
       modelId: "test",
@@ -1550,12 +1553,14 @@ test("selects a model from the picker and updates the status row", async () => {
         name: "Test",
         model,
         reasoningEfforts: ["medium"],
+        defaultReasoningEffort: "medium",
       },
       {
         id: "other",
         name: "Other",
         model,
         reasoningEfforts: ["medium"],
+        defaultReasoningEffort: "medium",
       },
     ],
     selection: {
@@ -1633,6 +1638,7 @@ test("renders a submitted prompt and streamed response", async () => {
       name: "Test",
       model,
       reasoningEfforts: ["medium"],
+      defaultReasoningEffort: "medium",
     }],
     selection: {
       modelId: "test",
@@ -1695,6 +1701,7 @@ test("renders the sessions picker and switches transcripts", async () => {
         },
       },
       reasoningEfforts: ["medium"],
+      defaultReasoningEffort: "medium",
     }],
     selection: {
       modelId: "test",

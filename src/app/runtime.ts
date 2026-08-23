@@ -35,7 +35,12 @@ export interface IBuliAgentRuntimeConfig extends IBuliAgentDisplayInfo {
 export interface IBuliModelRuntimeConfig extends IBuliModelDisplayInfo {
     readonly model: IAgentModel
     readonly modelProfile?: IModelProfile
+    readonly defaultReasoningEffort: TReasoningEffort
 }
+
+export type TBuliModelRegistrationLoader = (
+    signal: AbortSignal,
+) => Promise<readonly IBuliModelRuntimeConfig[]>
 
 export interface IBuliRuntimeOptions {
     readonly workspaceRoot: string
@@ -45,6 +50,7 @@ export interface IBuliRuntimeOptions {
     // readonly tuiControler: ITuiController
     readonly models: readonly IBuliModelRuntimeConfig[]
     readonly selection: IBuliModelSelection
+    readonly loadModels?: TBuliModelRegistrationLoader
     readonly now?: () => number
     readonly generateId?: () => string
 }
@@ -58,11 +64,14 @@ export class BuliApplicationRuntime implements IBuliApplication {
     private readonly manager: ISessionManager
     private readonly agents: readonly IBuliAgentRuntimeConfig[]
     private readonly defaultAgentId: string
-    private readonly models: readonly IBuliModelRuntimeConfig[]
+    private models: readonly IBuliModelRuntimeConfig[]
+    private readonly loadModels: TBuliModelRegistrationLoader | undefined
     private readonly now: () => number
     private readonly generateId: () => string
+    private readonly lifetime = new AbortController()
 
     private selection: IBuliModelSelection
+    private modelRefreshTask: Promise<void> | undefined
 
     // What are agent sesions what is thier responsibility
     private readonly sessions = new Map<string, AgentSession>()
@@ -89,13 +98,8 @@ export class BuliApplicationRuntime implements IBuliApplication {
             }
         })
         this.defaultAgentId = options.defaultAgentId
-        this.models = options.models.map((registration) => ({
-            ...registration,
-            reasoningEfforts: [...registration.reasoningEfforts],
-            ...(registration.modelProfile === undefined
-                ? {}
-                : { modelProfile: structuredClone(registration.modelProfile) }),
-        }))
+        this.models = copyModelRegistrations(options.models)
+        this.loadModels = options.loadModels
         this.selection = { ...options.selection }
         this.now = options.now ?? Date.now
         this.generateId = options.generateId ?? generateRandomId
@@ -247,17 +251,38 @@ export class BuliApplicationRuntime implements IBuliApplication {
         return () => this.listeners.delete(listener)
     }
 
+    readonly refreshModels = (signal?: AbortSignal): Promise<void> => {
+        if (this.disposed) {
+            return Promise.reject(new Error("Buli runtime is disposed"))
+        }
+        if (signal?.aborted) return Promise.reject(signal.reason)
+        if (!this.loadModels) return Promise.resolve()
+        if (this.modelRefreshTask) {
+            return waitWithSignal(this.modelRefreshTask, signal)
+        }
+
+        const task = this.refreshModelsInternal(signal).finally(() => {
+            if (this.modelRefreshTask === task) this.modelRefreshTask = undefined
+        })
+        this.modelRefreshTask = task
+        return waitWithSignal(task, signal)
+    }
+
     readonly selectModel = (modelId: string): void => {
         // Przyjmij ID modelu, który ma stać się globalnym modelem runtime.
         if (this.disposed) throw new Error("Buli runtime is disposed")
         // Zatrzymaj zmianę, jeśli runtime został już zamknięty.
 
+        const registration = this.resolveModel(modelId)
         this.setSelection({
             // Zbuduj pełną następną selekcję i przekaż ją do wspólnej walidacji.
             ...this.selection,
-            // Zachowaj aktualny reasoning effort.
             modelId,
-            // Nadpisz wyłącznie ID wybranego modelu.
+            reasoningEffort: registration.reasoningEfforts.includes(
+                this.selection.reasoningEffort,
+            )
+                ? this.selection.reasoningEffort
+                : registration.defaultReasoningEffort,
         })
         // Zastosuj zmianę atomowo albo rzuć błąd bez modyfikowania stanu.
     }
@@ -292,13 +317,18 @@ export class BuliApplicationRuntime implements IBuliApplication {
     private async disposeInternal(): Promise<void> {
         if (this.disposed) return
         this.disposed = true
+        if (!this.lifetime.signal.aborted) {
+            this.lifetime.abort(abortError("Buli runtime is shutting down"))
+        }
 
         const sessions = [...this.sessions.values()]
+        const modelRefreshTask = this.modelRefreshTask
         this.sessions.clear()
         this.listeners.clear()
         const results = await Promise.allSettled(
             sessions.map(async (session) => session.dispose()),
         )
+        await modelRefreshTask?.catch(() => {})
         const errors: unknown[] = results.flatMap((result) =>
             result.status === "rejected" ? [result.reason] : []
         )
@@ -337,12 +367,15 @@ export class BuliApplicationRuntime implements IBuliApplication {
         // Powiadom kopię listy subskrybentów o gotowym snapshotcie.
     }
 
-    private createSnapshot(): IBuliApplicationSnapshot {
+    private createSnapshot(
+        modelsSource: readonly IBuliModelRuntimeConfig[] = this.models,
+        selection: IBuliModelSelection = this.selection,
+    ): IBuliApplicationSnapshot {
         const agents = this.agents.map((registration) => Object.freeze({
             id: registration.id,
             name: registration.name,
         }))
-        const models = this.models.map(
+        const models = modelsSource.map(
             (registration: IBuliModelRuntimeConfig) => Object.freeze({
                 id: registration.id,
                 name: registration.name,
@@ -356,8 +389,30 @@ export class BuliApplicationRuntime implements IBuliApplication {
             agents: Object.freeze(agents),
             defaultAgentId: this.defaultAgentId,
             models: Object.freeze(models),
-            selection: Object.freeze({ ...this.selection }),
+            selection: Object.freeze({ ...selection }),
         })
+    }
+
+    private async refreshModelsInternal(signal?: AbortSignal): Promise<void> {
+        const loadModels = this.loadModels
+        if (!loadModels) return
+        const refreshSignal = signal
+            ? AbortSignal.any([signal, this.lifetime.signal])
+            : this.lifetime.signal
+
+        const registrations = copyModelRegistrations(
+            await loadModels(refreshSignal),
+        )
+        refreshSignal.throwIfAborted()
+        const selection = reconcileSelection(registrations, this.selection)
+        const snapshot = this.createSnapshot(registrations, selection)
+        refreshSignal.throwIfAborted()
+        if (this.disposed) throw new Error("Buli runtime is disposed")
+
+        this.models = registrations
+        this.selection = selection
+        this.snapshot = snapshot
+        for (const listener of [...this.listeners]) listener()
     }
 
     private getOrOpenAgentSession(sessionId: string): AgentSession {
@@ -459,16 +514,8 @@ export class BuliApplicationRuntime implements IBuliApplication {
         selection: IBuliModelSelection = this.selection,
     ): IBuliModelRuntimeConfig {
         // Użyj przekazanej selekcji albo aktualnej selekcji runtime.
-        const registration = this.models.find(
-            (model) => model.id === selection.modelId,
-        )
+        const registration = this.resolveModel(selection.modelId)
         // Znajdź wykonywalną rejestrację odpowiadającą wybranemu ID.
-
-        if (!registration) {
-            // Wykryj selekcję wskazującą model nieobecny w registry.
-            throw new Error(`Unknown model: ${selection.modelId}`)
-            // Przerwij operację przed zmianą stanu.
-        }
 
         if (!registration.reasoningEfforts.includes(selection.reasoningEffort)) {
             // Sprawdź, czy wybrany model obsługuje kandydacki effort.
@@ -480,6 +527,72 @@ export class BuliApplicationRuntime implements IBuliApplication {
         return registration
         // Zwróć adapter modelu dopiero po przejściu całej walidacji.
     }
+
+    private resolveModel(modelId: string): IBuliModelRuntimeConfig {
+        const registration = this.models.find((model) => model.id === modelId)
+        if (!registration) throw new Error(`Unknown model: ${modelId}`)
+        return registration
+    }
+}
+
+function copyModelRegistrations(
+    registrations: readonly IBuliModelRuntimeConfig[],
+): readonly IBuliModelRuntimeConfig[] {
+    if (registrations.length === 0) {
+        throw new Error("At least one model must be registered")
+    }
+
+    const ids = new Set<string>()
+    return registrations.map((registration) => {
+        if (!registration.id.trim()) throw new Error("Model ID cannot be empty")
+        if (!registration.name.trim()) {
+            throw new Error(`Model name cannot be empty: ${registration.id}`)
+        }
+        if (ids.has(registration.id)) {
+            throw new Error(`Duplicate model: ${registration.id}`)
+        }
+        ids.add(registration.id)
+
+        const reasoningEfforts = [...registration.reasoningEfforts]
+        if (reasoningEfforts.length === 0) {
+            throw new Error(`Model has no reasoning efforts: ${registration.id}`)
+        }
+        if (new Set(reasoningEfforts).size !== reasoningEfforts.length) {
+            throw new Error(`Model has duplicate reasoning efforts: ${registration.id}`)
+        }
+        if (!reasoningEfforts.includes(registration.defaultReasoningEffort)) {
+            throw new Error(
+                `Model default reasoning effort is unsupported: ${registration.id}`,
+            )
+        }
+
+        return {
+            ...registration,
+            reasoningEfforts,
+            ...(registration.modelProfile === undefined
+                ? {}
+                : { modelProfile: structuredClone(registration.modelProfile) }),
+        }
+    })
+}
+
+function reconcileSelection(
+    registrations: readonly IBuliModelRuntimeConfig[],
+    selection: IBuliModelSelection,
+): IBuliModelSelection {
+    const registration = registrations.find(
+        (model) => model.id === selection.modelId,
+    ) ?? registrations[0]
+    if (!registration) throw new Error("At least one model must be registered")
+
+    return {
+        modelId: registration.id,
+        reasoningEffort: registration.reasoningEfforts.includes(
+            selection.reasoningEffort,
+        )
+            ? selection.reasoningEffort
+            : registration.defaultReasoningEffort,
+    }
 }
 
 function normalizeSessionTitle(title: string): string {
@@ -487,4 +600,34 @@ function normalizeSessionTitle(title: string): string {
     if (!normalized) throw new Error("Session title cannot be empty")
 
     return [...normalized].slice(0, 60).join("")
+}
+
+function abortError(message: string): Error {
+    const error = new Error(message)
+    error.name = "AbortError"
+    return error
+}
+
+function waitWithSignal<T>(
+    promise: Promise<T>,
+    signal?: AbortSignal,
+): Promise<T> {
+    if (!signal) return promise
+    if (signal.aborted) return Promise.reject(signal.reason)
+
+    const completion = Promise.withResolvers<T>()
+    let settled = false
+    const finish = (run: () => void): void => {
+        if (settled) return
+        settled = true
+        signal.removeEventListener("abort", abort)
+        run()
+    }
+    const abort = (): void => finish(() => completion.reject(signal.reason))
+    signal.addEventListener("abort", abort, { once: true })
+    promise.then(
+        (value) => finish(() => completion.resolve(value)),
+        (error: unknown) => finish(() => completion.reject(error)),
+    )
+    return completion.promise
 }

@@ -1,4 +1,5 @@
 import { realpath } from "node:fs/promises"
+import { dirname, resolve } from "node:path"
 
 import { systemPrompt, type IAgentModel, type IAgentTool } from "@/agent"
 import type { IAuthenticationService } from "@/authentication"
@@ -24,6 +25,22 @@ import {
 import { createWorkspaceTools } from "@/tools"
 
 const BULI_AGENT_ID = "buli"
+
+function defaultWorkspaceTools(workspaceRoot: string): readonly IAgentTool[] {
+    if (process.env.BULI_DEVELOPMENT === "1") {
+        return createWorkspaceTools(workspaceRoot)
+    }
+    const executableName = process.platform === "win32" ? "rg.exe" : "rg"
+    return createWorkspaceTools(workspaceRoot, {
+        ripgrepExecutablePath: resolve(
+            dirname(process.execPath),
+            "..",
+            "lib",
+            "buli",
+            executableName,
+        ),
+    })
+}
 
 export interface IBuliApplicationStartup {
     readonly runtime: IBuliApplication
@@ -86,7 +103,7 @@ export async function createBuliApplication(
             reasoningEffort: "medium",
         }
         const tools: readonly IAgentTool[] = options.tools
-            ?? createWorkspaceTools(workspaceRoot)
+            ?? defaultWorkspaceTools(workspaceRoot)
 
         const agents: readonly IBuliAgentRuntimeConfig[] = [{
             id: BULI_AGENT_ID,

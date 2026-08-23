@@ -40,6 +40,7 @@ interface IRipgrepOptions {
 }
 
 export interface IRipgrepExecutableResolverOptions {
+    readonly executablePath?: string
     readonly searchPath?: string
     readonly pathExt?: string
 }
@@ -59,7 +60,9 @@ export function createRipgrepExecutableResolver(
 
     return async (signal) => {
         signal.throwIfAborted()
-        resolution ??= resolveRipgrepExecutable(workspaceRoot, searchPath, pathExt)
+        resolution ??= options.executablePath === undefined
+            ? resolveRipgrepExecutable(workspaceRoot, searchPath, pathExt)
+            : validateRipgrepExecutable(options.executablePath)
         try {
             const executable = await resolution
             signal.throwIfAborted()
@@ -68,6 +71,27 @@ export function createRipgrepExecutableResolver(
             signal.throwIfAborted()
             throw error
         }
+    }
+}
+
+async function validateRipgrepExecutable(executablePath: string): Promise<string> {
+    if (!isAbsolute(executablePath)) {
+        throw new TypeError("ripgrep executable path must be absolute")
+    }
+
+    try {
+        const executable = await realpath(executablePath)
+        const executableStat = await stat(executable)
+        if (!executableStat.isFile()) throw new Error("path is not a file")
+        if (process.platform !== "win32") {
+            await access(executable, FS_CONSTANTS.X_OK)
+        }
+        return executable
+    } catch (error) {
+        throw new Error(
+            `Cannot use bundled ripgrep executable ${JSON.stringify(executablePath)}: `
+            + errorMessage(error),
+        )
     }
 }
 

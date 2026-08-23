@@ -12,6 +12,7 @@ import { createRipgrepExecutableResolver } from "@/tools/search/ripgrep"
 export function createWorkspaceTools(
     workspaceRoot: string,
     options: {
+        readonly ripgrepExecutablePath?: string
         readonly ripgrepSearchPath?: string
         readonly ripgrepPathExt?: string
     } = {},
@@ -20,6 +21,9 @@ export function createWorkspaceTools(
     const resolveRipgrepExecutable = createRipgrepExecutableResolver(
         workspaceRoot,
         {
+            ...(options.ripgrepExecutablePath === undefined
+                ? {}
+                : { executablePath: options.ripgrepExecutablePath }),
             ...(options.ripgrepSearchPath === undefined
                 ? {}
                 : { searchPath: options.ripgrepSearchPath }),

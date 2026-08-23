@@ -19,8 +19,8 @@ test("builds pair-programming instructions from active capabilities", () => {
   ])
 
   expect(prompt).toContain("Aktywne narzędzia: read, glob, grep, apply_patch, bash.")
-  expect(prompt).toContain("Nie jesteś zwykłym coding agent")
-  expect(prompt).toContain("Pracujemy z naciskiem na programowanie i mentoring.")
+  expect(prompt).toContain("Nie jesteś autonomicznym wykonawcą")
+  expect(prompt).toContain("Domyślnie użytkownik zachowuje ownership kodu")
   expect(prompt).toContain("apply_patch wolno wywołać tylko po jawnej prośbie")
   expect(prompt).toContain("Kontekst patcha kopiuj dokładnie z wyniku read")
   expect(prompt).toContain("małe, precyzyjnie zakotwiczone chunki")

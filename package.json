@@ -11,10 +11,11 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "bun test ./test",
+    "test": "SHOW_CONSOLE=0 bun test ./test",
     "dev": "SHOW_CONSOLE=1 bun cli/main.ts",
     "dev:quiet": "bun --watch cli/main.ts",
-    "start": "bun cli/main.ts"
+    "start": "bun cli/main.ts",
+    "build:local": "mkdir -p dist && bun build --compile ./cli/main.ts --outfile ./dist/buli"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.16",

@@ -1,12 +1,9 @@
 import { expect, test } from "bun:test"
 import {
   appendFile,
-  chmod,
   mkdtemp,
   readFile,
-  readdir,
   rm,
-  stat,
   writeFile,
 } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
@@ -486,67 +483,6 @@ test("rejects a complete malformed final record", async () => {
   }
 })
 
-test("clear compacts persisted sessions, preserves metadata, and omits staged sessions", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-"))
-  const filePath = join(directory, "sessions.jsonl")
-
-  try {
-    const manager = jsonlManager(filePath)
-    const firstInfo = sessionInfo("session-1", { title: "First" })
-    const secondInfo = sessionInfo("session-2", { title: "Second" })
-    const stagedInfo = sessionInfo("session-3", { title: "Staged" })
-    const firstMessage = userMessage("First", {
-      sessionId: "session-1",
-      id: "user-1",
-      createdAt: 11,
-    })
-    const secondMessage = userMessage("Second", {
-      sessionId: "session-2",
-      id: "user-2",
-      createdAt: 22,
-    })
-
-    manager.createSession(firstInfo)
-    manager.createSession(secondInfo)
-    manager.createSession(stagedInfo)
-    manager.appendMessage(firstMessage)
-    manager.appendMessage(secondMessage)
-    await chmod(filePath, 0o640)
-
-    manager.clearSession("session-1")
-
-    const persistedFirstInfo = { ...firstInfo, updatedAt: 11 }
-    const persistedSecondInfo = { ...secondInfo, updatedAt: 22 }
-    expect(manager.getMessages("session-1")).toEqual([])
-    expect(manager.getMessages("session-2")).toEqual([secondMessage])
-    expect(manager.getSessionInfo("session-1")).toEqual(persistedFirstInfo)
-    expect(manager.getSessionInfo("session-3")).toEqual(stagedInfo)
-    expect(await jsonlRecords(filePath)).toEqual([
-      sessionRecord(persistedFirstInfo),
-      sessionRecord(persistedSecondInfo),
-      messageRecord(secondMessage),
-    ])
-    expect((await stat(filePath)).mode & 0o777).toBe(0o640)
-    expect(await readdir(directory)).toEqual(["sessions.jsonl"])
-
-    manager.clearSession("session-3")
-    expect(manager.getSessionInfo("session-3")).toEqual(stagedInfo)
-    expect(await jsonlRecords(filePath)).toEqual([
-      sessionRecord(persistedFirstInfo),
-      sessionRecord(persistedSecondInfo),
-      messageRecord(secondMessage),
-    ])
-
-    const restored = jsonlManager(filePath)
-    expect(restored.getSessionInfo("session-1")).toEqual(persistedFirstInfo)
-    expect(restored.getMessages("session-1")).toEqual([])
-    expect(restored.getMessages("session-2")).toEqual([secondMessage])
-    expect(restored.getSessionInfo("session-3")).toBeUndefined()
-  } finally {
-    await rm(directory, { recursive: true, force: true })
-  }
-})
-
 test("delete removes persisted metadata and messages without affecting other sessions", async () => {
   const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-"))
   const filePath = join(directory, "sessions.jsonl")
@@ -587,24 +523,6 @@ test("delete removes persisted metadata and messages without affecting other ses
     expect(restored.getMessages("session-1")).toEqual([])
     expect(restored.getSessionInfo("session-2")).toEqual(persistedSecondInfo)
     expect(restored.getMessages("session-2")).toEqual([secondMessage])
-  } finally {
-    await rm(directory, { recursive: true, force: true })
-  }
-})
-
-test("clearing a never-persisted session keeps its metadata in memory and no file", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-"))
-  const filePath = join(directory, "sessions.jsonl")
-
-  try {
-    const manager = jsonlManager(filePath)
-    const info = sessionInfo()
-    manager.createSession(info)
-
-    manager.clearSession(info.id)
-
-    expect(manager.getSessionInfo(info.id)).toEqual(info)
-    expect(await Bun.file(filePath).exists()).toBe(false)
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
@@ -732,11 +650,6 @@ test("persists only the latest compaction checkpoint without deleting history", 
     const restored = jsonlManager(filePath)
     expect(restored.getMessages("session-1")).toEqual([user, assistant])
     expect(restored.getCompactionCheckpoint("session-1")).toEqual(latest)
-
-    restored.clearSession("session-1")
-    const cleared = jsonlManager(filePath)
-    expect(cleared.getMessages("session-1")).toEqual([])
-    expect(cleared.getCompactionCheckpoint("session-1")).toBeUndefined()
   } finally {
     await rm(directory, { recursive: true, force: true })
   }

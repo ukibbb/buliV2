@@ -23,7 +23,6 @@ export interface ISessionManager {
     readonly saveCompactionCheckpoint: (
         checkpoint: ICompactionCheckpoint,
     ) => void
-    readonly clearSession: (sessionId: string) => void
     readonly deleteSession: (sessionId: string) => void
     readonly dispose?: () => void | Promise<void>
 }

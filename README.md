@@ -4,13 +4,39 @@ Small Bun project for the Buli terminal app.
 
 ## Installation
 
-The npm package will install the matching native release without requiring Bun:
+Buli supports macOS and Linux on ARM64 and x64. Choose one installation method;
+using both npm and the standalone installer can leave multiple `buli` commands
+in `PATH`.
+
+### npm
+
+Install the latest stable release globally. The package downloads the matching
+native executable, so Bun is not required:
+
+```bash
+npm install --global @ukibbb/buli
+```
+
+Verify the installation:
+
+```bash
+buli --version
+buli --help
+```
+
+Install the latest release candidate instead:
 
 ```bash
 npm install --global @ukibbb/buli@next
 ```
 
-Release candidates use the `next` dist-tag; stable releases will use `latest`.
+Update an npm-managed installation with npm:
+
+```bash
+npm install --global @ukibbb/buli@latest
+```
+
+### Standalone installer
 
 Install the latest stable release on macOS or Linux without Bun, npm, or a
 system-wide ripgrep installation:
@@ -23,12 +49,19 @@ The installer verifies the release checksum and installs Buli and its private
 ripgrep sidecar under `~/.local`. If necessary, it adds `~/.local/bin` to the
 configuration file for zsh, bash, sh, or fish. Open a new terminal afterward.
 
-Install a specific version, including a release candidate, by passing it as an
-argument to the downloaded script:
+Verify the installation after opening a new terminal:
+
+```bash
+buli --version
+buli --help
+```
+
+Install a specific version, including a release candidate, by passing its Git
+tag to the downloaded script:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ukibbb/buliV2/main/install.sh \
-  | sh -s -- v0.1.0-rc.2
+  | sh -s -- v0.1.0-rc.10
 ```
 
 Set `BULI_INSTALL_PREFIX` to use a different prefix or
@@ -87,6 +120,9 @@ Useful feedback commands:
 bun run typecheck
 bun test
 ```
+
+Maintainers should follow [`docs/releasing.md`](docs/releasing.md) when creating
+GitHub and npm releases.
 
 OpenTUI rendering conventions are documented in
 [`docs/opentui-rendering.md`](docs/opentui-rendering.md).
@@ -159,7 +195,7 @@ the current OpenAI/ChatGPT integration accepts OAuth only.
 
 Buli stores multiple conversations per workspace. The app starts on Home without creating a session; the first non-empty prompt creates one, using that prompt as its title. Completed messages and session metadata are appended to a JSONL file under `~/.buli/sessions/`; the filename is the SHA-256 hash of the canonical workspace path.
 
-On restart, saved sessions are available through `/sessions`. Opening one restores its completed turns for the next model request. `/clear` removes the conversation history but keeps the session entry. In-progress assistant snapshots are kept only in memory, so a process crash can lose the unfinished response without growing the JSONL file once per streamed token.
+On restart, saved sessions are available through `/sessions`. Opening one restores its completed turns for the next model request. `/new` returns Home without changing the saved conversation, and the next prompt starts a separate session. In-progress assistant snapshots are kept only in memory, so a process crash can lose the unfinished response without growing the JSONL file once per streamed token.
 
 Pending steering and follow-up messages are also kept only in memory. `Escape` restores them to the editor before aborting, but exiting or crashing the process can discard them.
 

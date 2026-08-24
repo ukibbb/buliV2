@@ -4,12 +4,10 @@ import type { TBuliCommand } from "@/app/ui/commands/types"
 export const BULI_COMMANDS: readonly TBuliCommand[] = [
     {
         kind: "action",
-        name: "clear",
-        description: "Clear the current session",
+        name: "new",
+        description: "Start a new session",
         handler: (_args, context) => {
-            if (context.sessionId) {
-                context.application.clearSession(context.sessionId)
-            }
+            context.goHome()
         },
     },
     {
@@ -80,14 +78,6 @@ export const BULI_COMMANDS: readonly TBuliCommand[] = [
             }
 
             application.selectReasoningEffort(effort)
-        },
-    },
-    {
-        kind: "action",
-        name: "new",
-        description: "Start a new session",
-        handler: (_args, context) => {
-            context.goHome()
         },
     },
     {

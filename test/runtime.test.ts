@@ -797,7 +797,6 @@ test("submitPrompt rolls back a new session when its first prompt is not accepte
     },
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
     saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
-    clearSession: memory.clearSession,
     deleteSession: (sessionId) => {
       deletedSessionIds.push(sessionId)
       memory.deleteSession(sessionId)
@@ -843,7 +842,6 @@ test("new-session settled waits for rollback before exposing failure", async () 
     },
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
     saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
-    clearSession: memory.clearSession,
     deleteSession: memory.deleteSession,
   }
   const runtime = runtimeWith(model, TEST_AGENTS, manager)
@@ -992,7 +990,7 @@ test("runtime resolves approval only in the addressed session and dispose releas
   expect(firstView.getSnapshot().pendingToolApproval).toBeUndefined()
 })
 
-test("clears sessions explicitly and treats slash input as prompts", async () => {
+test("treats slash input as prompts", async () => {
   let interactionCount = 0
   const runtime = runtimeWith({
       async *stream() {
@@ -1002,29 +1000,14 @@ test("clears sessions explicitly and treats slash input as prompts", async () =>
   })
   const view = createSession(runtime)
 
-  const oldSubmission = runtime.submitPrompt({
-    sessionId: "session-1",
-    text: "Old question",
-  })
-  await oldSubmission.accepted
-  await oldSubmission.settled
-
-  expect(interactionCount).toBe(1)
-  expect(view.getSnapshot().messages).toHaveLength(2)
-
-  runtime.clearSession("session-1")
-
-  expect(interactionCount).toBe(1)
-  expect(view.getSnapshot().messages).toEqual([])
-
   const slashSubmission = runtime.submitPrompt({
     sessionId: "session-1",
-    text: "/clear",
+    text: "/not-a-runtime-command",
   })
   await slashSubmission.accepted
   await slashSubmission.settled
 
-  expect(interactionCount).toBe(2)
+  expect(interactionCount).toBe(1)
   expect(view.getSnapshot().messages.map((message) => message.role)).toEqual([
     "user",
     "assistant",

@@ -202,7 +202,6 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
       options.resolveToolApproval?.(sessionId, approvalId, decision)
       resolvedApprovals.push({ sessionId, approvalId, decision })
     },
-    clearSession: () => undefined,
     compactSession: async () => undefined,
     abort: async (sessionId) => {
       aborted.push(sessionId)
@@ -1485,7 +1484,7 @@ test("keeps command approval pending when default Copy is unavailable", async ()
   }
 })
 
-test("shows slash commands and executes the selected clear command", async () => {
+test("shows slash commands and executes the selected new command", async () => {
   const runtime = new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,
     manager: new InMemorySessionManager(),
@@ -1532,7 +1531,7 @@ test("shows slash commands and executes the selected clear command", async () =>
     })
 
     const frame = setup.captureCharFrame()
-    expect(frame).toContain("→ clear")
+    expect(frame).toContain("→ new")
 
     await act(async () => {
       const enter = parseKeypress("\r")
@@ -1541,7 +1540,8 @@ test("shows slash commands and executes the selected clear command", async () =>
       await setup.renderOnce()
     })
 
-    expect(runtime.openSession(session.id).getSnapshot().messages).toEqual([])
+    expect(setup.captureCharFrame()).not.toContain("Old prompt")
+    expect(runtime.openSession(session.id).getSnapshot().messages).toHaveLength(2)
   } finally {
     await runtime.dispose()
     act(() => {

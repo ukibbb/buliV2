@@ -234,27 +234,6 @@ test("rejects duplicate toolCallId entries in one assistant message", () => {
   expect(manager.getMessages("session-1")).toEqual([])
 })
 
-test("clear removes only selected messages and preserves all metadata", () => {
-  const manager = new InMemorySessionManager()
-  manager.createSession(sessionInfo("session-1"))
-  manager.createSession(sessionInfo("session-2", { title: "Second" }))
-  manager.appendMessage(userMessage("First", "session-1", "user-1", 10))
-  manager.appendMessage(userMessage("Second", "session-2", "user-2", 20))
-
-  manager.clearSession("session-1")
-
-  expect(manager.getMessages("session-1")).toEqual([])
-  expect(manager.getMessages("session-2")).toHaveLength(1)
-  expect(manager.getSessionInfo("session-1")).toMatchObject({
-    id: "session-1",
-    updatedAt: 10,
-  })
-  expect(manager.listSessions().map((info) => info.id)).toEqual([
-    "session-1",
-    "session-2",
-  ])
-})
-
 test("delete removes selected metadata and messages without affecting other sessions", () => {
   const manager = new InMemorySessionManager()
   manager.createSession(sessionInfo("session-1"))

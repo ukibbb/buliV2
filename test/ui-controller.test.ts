@@ -55,7 +55,6 @@ interface IApplicationSpyOptions {
 
 function applicationSpy(options: IApplicationSpyOptions = {}) {
   const prompts: IBuliPromptInput[] = []
-  const cleared: string[] = []
   const aborted: string[] = []
   const opened: string[] = []
   const created: Array<{ agentId: string; title: string }> = []
@@ -155,9 +154,6 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
       options.resolveToolApproval?.(sessionId, approvalId, decision)
       resolvedApprovals.push({ sessionId, approvalId, decision })
     },
-    clearSession: (sessionId) => {
-      cleared.push(sessionId)
-    },
     compactSession: async (sessionId) => {
       compacted.push(sessionId)
       return options.compactSession?.(sessionId)
@@ -171,7 +167,6 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
   return {
     application,
     prompts,
-    cleared,
     aborted,
     opened,
     created,
@@ -199,10 +194,9 @@ test("publishes all command suggestions from slash input", () => {
 
   expect(controller.getSnapshot()).not.toBe(initial)
   expect(controller.getSnapshot().menu?.items.map((item) => item.id)).toEqual([
-    "clear",
+    "new",
     "model",
     "reasoning",
-    "new",
     "sessions",
     "login",
     "logout",
@@ -752,23 +746,6 @@ test("shows an error when direct new is blocked by an active run", async () => {
     mode: "commands",
     errorMessage: "Cannot switch sessions while the current session is running",
   })
-})
-
-test("handles clear and abort against only the active session", async () => {
-  const spy = applicationSpy()
-  const controller = new BuliUiController({ application: spy.application })
-
-  await controller.submitInput("/clear")
-  controller.escape()
-  expect(spy.cleared).toEqual([])
-  expect(spy.aborted).toEqual([])
-
-  controller.activateSession("session-2")
-  await controller.submitInput("/clear")
-  controller.escape()
-
-  expect(spy.cleared).toEqual(["session-2"])
-  expect(spy.aborted).toEqual(["session-2"])
 })
 
 test("compact command targets the active session", async () => {

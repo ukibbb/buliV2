@@ -99,11 +99,6 @@ export class InMemorySessionManager implements ISessionManager {
         )
     }
 
-    readonly clearSession = (sessionId: string): void => {
-        this.messagesBySession.delete(sessionId)
-        this.checkpointsBySession.delete(sessionId)
-    }
-
     readonly deleteSession = (sessionId: string): void => {
         this.sessionsById.delete(sessionId)
         this.messagesBySession.delete(sessionId)

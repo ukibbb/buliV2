@@ -201,11 +201,6 @@ export class BuliApplicationRuntime implements IBuliApplication {
         }
     }
 
-    readonly clearSession = (sessionId: string): void => {
-        if (this.disposed) throw new Error("Buli runtime is disposed")
-        this.getOrOpenAgentSession(sessionId).clear()
-    }
-
     readonly compactSession = (
         sessionId: string,
     ): ReturnType<AgentSession["compact"]> => {

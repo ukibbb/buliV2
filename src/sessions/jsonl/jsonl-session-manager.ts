@@ -125,32 +125,10 @@ export class JsonlSessionManager implements ISessionManager {
             this.memory.getMessages(checkpoint.sessionId),
         )
         // Checkpoint jest append-only jak wiadomości. Powtórne kompaktowanie dopisuje
-        // nowszy rekord, a load wybiera ostatni; rewrite przy clear usuwa stare wpisy.
+        // nowszy rekord, a load wybiera ostatni.
         this.appendRecords([compactionRecord(checkpoint)])
         this.memory.saveCompactionCheckpoint(checkpoint)
         this.persistedSessionIds.add(checkpoint.sessionId)
-    }
-
-    readonly clearSession = (sessionId: string): void => {
-        this.assertActive()
-        const records: unknown[] = []
-        for (const info of this.memory.listSessions()) {
-            if (!this.persistedSessionIds.has(info.id)) continue
-
-            records.push(sessionRecord(info))
-            if (info.id !== sessionId) {
-                records.push(
-                    ...this.memory.getMessages(info.id).map(messageRecord),
-                )
-                const checkpoint = this.memory.getCompactionCheckpoint(info.id)
-                if (checkpoint) records.push(compactionRecord(checkpoint))
-            }
-        }
-
-        if (existsSync(this.filePath) || records.length > 0) {
-            this.replaceFile(serializeRecords(records))
-        }
-        this.memory.clearSession(sessionId)
     }
 
     readonly deleteSession = (sessionId: string): void => {

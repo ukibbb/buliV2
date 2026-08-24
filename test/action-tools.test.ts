@@ -63,7 +63,7 @@ test("action tools publish bounded strict schemas", () => {
       expectedOutcome: { type: "string", minLength: 1 },
       sideEffects: { type: "string", minLength: 1 },
       cwd: { type: "string", minLength: 1, default: "." },
-      timeout: { type: "integer", minimum: 1, maximum: 600, default: 120 },
+      timeout: { type: "integer", minimum: 1, maximum: 3600, default: 600 },
     },
   })
 })
@@ -91,15 +91,25 @@ test("action tools validate direct input before requesting approval", async () =
 
     const bash = createBashTool(workspace)
     await expect(bash.execute(
-      bashInput("exit 0", { timeout: 601 }),
+      bashInput("exit 0", { timeout: 3601 }),
       executionContext,
-    )).rejects.toThrow("timeout must be at most 600")
+    )).rejects.toThrow("timeout must be at most 3600")
     await expect(bash.execute(
       { ...bashInput("exit 0"), extra: "not allowed" },
       executionContext,
     )).rejects.toThrow("unknown property")
 
     expect(approvals).toBe(0)
+    await expect(bash.execute(
+      bashInput("exit 0", { timeout: 3600 }),
+      context({
+        requestApproval: async (draft) => {
+          if (draft.kind !== "command") throw new Error("Expected command approval")
+          expect(draft.timeoutSeconds).toBe(3600)
+          return "reject"
+        },
+      }),
+    )).resolves.toMatchObject({ outcome: "rejected" })
     expect(await pathExists(join(workspace, "added.txt"))).toBe(false)
   } finally {
     await removeWorkspace(workspace)
@@ -270,7 +280,7 @@ test("bash shows exact command details and starts no process before reject", asy
       purpose: "Create a temporary marker",
       expectedOutcome: "A marker file appears",
       sideEffects: "Writes ran.txt in the temporary workspace",
-      timeoutSeconds: 120,
+      timeoutSeconds: 600,
     })
 
     approval.resolve("reject")
@@ -359,7 +369,7 @@ test.skipIf(process.platform === "win32")(
 
       expect(execution.outcome).toBe("effects-unknown")
       expect(execution.summary).toBe(
-        "Command timed out after 1 seconds; inspect side effects before retrying",
+        "Command timed out after 1 seconds; inspect side effects before retrying with a larger timeout of at most 3600 seconds",
       )
       expect(result).toContain("exit code: 124")
       expect(result).toContain("timed out: yes (limit: 1 seconds)")

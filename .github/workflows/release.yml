@@ -86,3 +86,50 @@ jobs:
             --verify-tag \
             --generate-notes \
             release-files/*
+
+  publish-npm:
+    name: Publish npm package
+    needs: publish
+    if: vars.NPM_TRUSTED_PUBLISHING == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Validate package version and select npm dist-tag
+        id: package
+        working-directory: npm
+        shell: bash
+        run: |
+          version="$(node --print "require('./package.json').version")"
+          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
+            printf 'Release tag %s does not match npm package version %s\n' \
+              "$GITHUB_REF_NAME" "$version" >&2
+            exit 1
+          fi
+          if [[ "$version" == *-* ]]; then
+            dist_tag="next"
+          else
+            dist_tag="latest"
+          fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'dist-tag=%s\n' "$dist_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Verify npm package contents
+        working-directory: npm
+        run: npm pack --dry-run
+
+      - name: Publish npm package
+        working-directory: npm
+        run: npm publish --access public --provenance --tag "${{ steps.package.outputs.dist-tag }}"

@@ -22,7 +22,10 @@ test.skipIf(process.platform === "win32")(
       const bundle = join(root, "bundle", "buli-linux-x64");
       await mkdir(join(bundle, "bin"), { recursive: true });
       await mkdir(join(bundle, "lib", "buli"), { recursive: true });
-      await executable(join(bundle, "bin", "buli"), "#!/bin/sh\nprintf '0.1.0-rc.6\\n'\n");
+      await executable(
+        join(bundle, "bin", "buli"),
+        `#!/bin/sh\nprintf '${packageMetadata.version}\\n'\n`,
+      );
       await executable(join(bundle, "lib", "buli", "rg"), "#!/bin/sh\nprintf 'fixture rg\\n'\n");
       await writeFile(join(bundle, "THIRD_PARTY_LICENSES"), "fixture licenses\n");
       const archivePath = join(root, "buli-linux-x64.tar.gz");
@@ -35,7 +38,7 @@ test.skipIf(process.platform === "win32")(
       const checksum = createHash("sha256").update(archive).digest("hex");
       const urls: string[] = [];
       await installBinary({
-        version: "0.1.0-rc.6",
+        version: packageMetadata.version,
         platform: "linux",
         architecture: "x64",
         destination: join(root, "vendor"),
@@ -47,10 +50,10 @@ test.skipIf(process.platform === "win32")(
         },
       });
       expect(urls).toContain(
-        "https://github.com/ukibbb/buliV2/releases/download/v0.1.0-rc.6/buli-linux-x64.tar.gz",
+        `https://github.com/ukibbb/buliV2/releases/download/v${packageMetadata.version}/buli-linux-x64.tar.gz`,
       );
       expect(await readFile(join(root, "vendor", "bin", "buli"), "utf8"))
-        .toContain("0.1.0-rc.6");
+        .toContain(packageMetadata.version);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

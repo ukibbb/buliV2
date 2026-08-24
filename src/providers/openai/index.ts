@@ -20,3 +20,5 @@ export type {
     IOpenAiModelCatalogAuth,
     IOpenAiModelCatalogOptions,
 } from "@/providers/openai/model/openai-model-catalog"
+export { createOpenAiWebSearchTool } from "@/providers/openai/search/openai-web-search-tool"
+export type { IOpenAiWebSearchToolOptions } from "@/providers/openai/search/openai-web-search-tool"

@@ -472,8 +472,10 @@ interface IContextOptions {
 
 function context(options: IContextOptions = {}): IAgentToolExecutionContext {
   return {
+    sessionId: "session-action-tool",
     toolCallId: "call-action-tool",
     runId: "run-action-tool",
+    messages: [],
     signal: options.signal ?? new AbortController().signal,
     ...(options.reportProgress === undefined
       ? {}

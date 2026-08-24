@@ -7,6 +7,7 @@ import type {
   IAgentModelEvent,
   IAgentModelRequest,
   IAgentTool,
+  IAgentToolExecutionContext,
   IUserMessage,
 } from "@/agent"
 import { runAgentLoop } from "@/agent/agent-loop"
@@ -121,6 +122,7 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
   let activeToolCalls = 0
   let maximumActiveToolCalls = 0
   const executionRunIds: string[] = []
+  const executionMessages: Array<readonly unknown[] | undefined> = []
   const readFileTool: IAgentTool = {
     name: "read_file",
     description: "Read a file",
@@ -130,6 +132,7 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
       maximumActiveToolCalls = Math.max(maximumActiveToolCalls, activeToolCalls)
       executionOrder.push(`start:${context.toolCallId}`)
       executionRunIds.push(context.runId)
+      executionMessages.push(context.messages)
       await Promise.resolve()
       executionOrder.push(`end:${context.toolCallId}`)
       activeToolCalls -= 1
@@ -188,6 +191,7 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
   ])
   expect(maximumActiveToolCalls).toBe(1)
   expect(executionRunIds).toEqual([RUN_ID, RUN_ID])
+  expect(executionMessages).toEqual([undefined, undefined])
   expect(model.requests).toHaveLength(2)
   expect(model.requests.every((request) => request.runId === RUN_ID)).toBe(true)
   expect(model.requests[1]?.messages).toEqual([
@@ -264,6 +268,90 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
     role: "assistant",
     content: [{ type: "text", text: "Finished" }],
     stopReason: "stop",
+  })
+})
+
+test("supplies session, model, and conversation context to host tools", async () => {
+  let iteration = 0
+  const model: IAgentModel = {
+    async *stream(request) {
+      request.reportProviderAccountId?.("account-context")
+      const events: readonly IAgentModelEvent[] = iteration++ === 0
+        ? [
+            {
+              type: "tool-call",
+              toolCallId: "call-context",
+              toolName: "inspect_context",
+              input: {},
+            },
+            { type: "finish", reason: "tool-calls" },
+          ]
+        : [{ type: "finish", reason: "stop" }]
+      for (const event of events) yield event
+    },
+  }
+  let observedContext: IAgentToolExecutionContext | undefined
+  const tool: IAgentTool = {
+    name: "inspect_context",
+    description: "Inspect host context",
+    inputSchema: { type: "object", additionalProperties: false },
+    requiresConversationContext: true,
+    execute: async (_input, context) => {
+      observedContext = context
+      return "inspected"
+    },
+  }
+
+  await runAgentLoop({
+    sessionId: "session-context",
+    runId: RUN_ID,
+    systemPrompt: "System",
+    messages: [userMessage("Previous question")],
+    prompt: {
+      ...userMessage("Current question"),
+      sessionId: "session-context",
+    },
+    model,
+    modelProfile: {
+      providerId: "openai",
+      modelId: "gpt-5.6-sol",
+      contextWindowTokens: 128_000,
+    },
+    reasoningEffort: "medium",
+    tools: [tool],
+    signal: new AbortController().signal,
+    emit: () => undefined,
+    now: timeGenerator(),
+    generateId: idGenerator(),
+  })
+
+  if (!observedContext) throw new Error("Expected tool execution context")
+  expect(observedContext.sessionId).toBe("session-context")
+  expect(observedContext.runId).toBe(RUN_ID)
+  expect(observedContext.toolCallId).toBe("call-context")
+  expect(observedContext.modelProfile).toEqual({
+    providerId: "openai",
+    modelId: "gpt-5.6-sol",
+    contextWindowTokens: 128_000,
+  })
+  expect(observedContext.providerAccountId).toBe("account-context")
+  if (!observedContext.messages) throw new Error("Expected conversation context")
+  expect(observedContext.messages.map((message) => message.role)).toEqual([
+    "user",
+    "user",
+    "assistant",
+  ])
+  expect(observedContext.messages[1]).toMatchObject({
+    role: "user",
+    content: "Current question",
+  })
+  expect(observedContext.messages[2]).toMatchObject({
+    role: "assistant",
+    content: [{
+      type: "toolCall",
+      toolCallId: "call-context",
+      toolName: "inspect_context",
+    }],
   })
 })
 

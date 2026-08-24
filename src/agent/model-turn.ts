@@ -19,6 +19,7 @@ interface IStreamModelTurnOptions {
     readonly messages: readonly TAgentMessage[]
     readonly model: IAgentModel
     readonly modelProfile?: IModelProfile
+    readonly reportProviderAccountId?: (accountId: string) => void
     readonly tools: readonly IAgentToolDescriptor[]
     readonly reasoningEffort: TReasoningEffort
     readonly signal: AbortSignal
@@ -63,6 +64,12 @@ export async function streamModelTurn(
             tools,
             reasoningEffort: options.reasoningEffort,
             signal: options.signal,
+            ...(options.reportProviderAccountId === undefined
+                ? {}
+                : {
+                    reportProviderAccountId:
+                        options.reportProviderAccountId,
+                }),
         })
 
         for await (const modelEvent of stream) {

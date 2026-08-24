@@ -300,6 +300,12 @@ export class Agent {
                 ...(runConfiguration.modelProfile === undefined
                     ? {}
                     : { modelProfile: runConfiguration.modelProfile }),
+                ...(runConfiguration.providerAccountId === undefined
+                    ? {}
+                    : {
+                        providerAccountId:
+                            runConfiguration.providerAccountId,
+                    }),
                 reasoningEffort: runConfiguration.reasoningEffort,
                 tools: this.stateValue.tools,
                 signal: activeRun.abortController.signal,

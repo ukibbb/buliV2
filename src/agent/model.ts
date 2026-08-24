@@ -17,6 +17,7 @@ export interface IAgentModelRequest {
     readonly signal: AbortSignal
     readonly reasoningEffort: TReasoningEffort
     readonly maxOutputTokens?: number
+    readonly reportProviderAccountId?: (accountId: string) => void
 }
 
 /** Normalized stream protocol emitted by every model adapter. */
@@ -55,6 +56,7 @@ export interface IAgentModel {
 export interface IAgentRunConfiguration {
     readonly model: IAgentModel
     readonly modelProfile?: IModelProfile
+    readonly providerAccountId?: string
     readonly reasoningEffort: TReasoningEffort
 }
 

@@ -2,7 +2,31 @@
 
 Small Bun project for the Buli terminal app.
 
-## Requirements
+## Installation
+
+Install the latest stable release on macOS or Linux without Bun, npm, or a
+system-wide ripgrep installation:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ukibbb/buliV2/main/install.sh | sh
+```
+
+The installer verifies the release checksum and installs Buli and its private
+ripgrep sidecar under `~/.local`. If necessary, it adds `~/.local/bin` to the
+configuration file for zsh, bash, sh, or fish. Open a new terminal afterward.
+
+Install a specific version, including a release candidate, by passing it as an
+argument to the downloaded script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ukibbb/buliV2/main/install.sh \
+  | sh -s -- v0.1.0-rc.2
+```
+
+Set `BULI_INSTALL_PREFIX` to use a different prefix or
+`BULI_NO_MODIFY_PATH=1` to prevent shell configuration changes.
+
+## Development requirements
 
 - Bun 1.3.12 or newer
 - [ripgrep](https://github.com/BurntSushi/ripgrep) available as `rg`

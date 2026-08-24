@@ -126,6 +126,11 @@ try {
     if (TARGET.platform === "darwin") {
         await run([
             "codesign",
+            "--remove-signature",
+            buliExecutable,
+        ])
+        await run([
+            "codesign",
             "--force",
             "--sign",
             "-",

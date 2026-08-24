@@ -12,13 +12,48 @@ import { tmpdir } from "node:os"
 import { basename, join, resolve } from "node:path"
 
 const RIPGREP_VERSION = "14.1.1"
-const TARGET = {
-    platform: "darwin",
-    arch: "arm64",
-    bundleName: "buli-darwin-arm64",
-    ripgrepAsset: `ripgrep-${RIPGREP_VERSION}-aarch64-apple-darwin`,
-    ripgrepSha256: "24ad76777745fbff131c8fbc466742b011f925bfa4fffa2ded6def23b5b937be",
+const TARGETS = {
+    "darwin-arm64": {
+        platform: "darwin",
+        arch: "arm64",
+        ripgrepAsset: `ripgrep-${RIPGREP_VERSION}-aarch64-apple-darwin`,
+        ripgrepSha256: "24ad76777745fbff131c8fbc466742b011f925bfa4fffa2ded6def23b5b937be",
+    },
+    "darwin-x64": {
+        platform: "darwin",
+        arch: "x64",
+        ripgrepAsset: `ripgrep-${RIPGREP_VERSION}-x86_64-apple-darwin`,
+        ripgrepSha256: "fc87e78f7cb3fea12d69072e7ef3b21509754717b746368fd40d88963630e2b3",
+    },
+    "linux-arm64": {
+        platform: "linux",
+        arch: "arm64",
+        ripgrepAsset: `ripgrep-${RIPGREP_VERSION}-aarch64-unknown-linux-gnu`,
+        ripgrepSha256: "c827481c4ff4ea10c9dc7a4022c8de5db34a5737cb74484d62eb94a95841ab2f",
+    },
+    "linux-x64": {
+        platform: "linux",
+        arch: "x64",
+        ripgrepAsset: `ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl`,
+        ripgrepSha256: "4cf9f2741e6c465ffdb7c26f38056a59e2a2544b51f7cc128ef28337eeae4d8e",
+    },
 } as const
+
+type TReleaseTarget = keyof typeof TARGETS
+
+const requestedTarget = process.env.BULI_RELEASE_TARGET
+    ?? `${process.platform}-${process.arch}`
+if (!(requestedTarget in TARGETS)) {
+    throw new Error(
+        `Unsupported release target ${JSON.stringify(requestedTarget)}; expected one of `
+        + Object.keys(TARGETS).join(", "),
+    )
+}
+const targetName = requestedTarget as TReleaseTarget
+const TARGET = {
+    ...TARGETS[targetName],
+    bundleName: `buli-${targetName}`,
+}
 
 const workspaceRoot = resolve(import.meta.dir, "..")
 const distDirectory = join(workspaceRoot, "dist")
@@ -28,7 +63,7 @@ const archiveChecksumPath = `${archivePath}.sha256`
 
 if (process.platform !== TARGET.platform || process.arch !== TARGET.arch) {
     throw new Error(
-        `Local release bundle supports ${TARGET.platform}-${TARGET.arch}, got `
+        `Release target ${targetName} requires ${TARGET.platform}-${TARGET.arch}, got `
         + `${process.platform}-${process.arch}`,
     )
 }

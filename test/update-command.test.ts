@@ -3,7 +3,11 @@ import { expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkForUpdate, updateStandalone } from "../cli/cmd/update";
+import {
+  checkForUpdate,
+  npmUpdateInstruction,
+  updateStandalone,
+} from "../cli/cmd/update";
 
 test("reports a newer stable release without modifying the installation", async () => {
   const requests: Array<{
@@ -62,6 +66,21 @@ test("rejects failed and malformed GitHub responses", async () => {
   await expect(checkForUpdate(
     async () => Response.json({ tag_name: "v0.2.0-rc.1", draft: false, prerelease: true }),
   )).rejects.toThrow("GitHub latest release is not stable");
+});
+
+test("directs npm release candidates to the next dist-tag", async () => {
+  expect(npmUpdateInstruction(
+    "/tmp/node_modules/@ukibbb/buli/vendor/bin/buli",
+  )).toBe("npm install --global @ukibbb/buli@next");
+  expect(npmUpdateInstruction("/tmp/bin/buli")).toBeUndefined();
+  await expect(updateStandalone({
+    currentVersion: "0.1.0-rc.6",
+    latestVersion: "0.1.0",
+    latestTag: "v0.1.0",
+    updateAvailable: true,
+  }, {
+    executablePath: "/tmp/node_modules/@ukibbb/buli/vendor/bin/buli",
+  })).rejects.toThrow("Run: npm install --global @ukibbb/buli@next");
 });
 
 test.skipIf(process.platform === "win32")(

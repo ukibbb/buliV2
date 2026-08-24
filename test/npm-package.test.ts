@@ -10,7 +10,7 @@ import { installBinary } from "../npm/install.mjs";
 test("npm package metadata matches the release and exposes the launcher", () => {
   expect(npmPackageMetadata.name).toBe("@ukibbb/buli");
   expect(npmPackageMetadata.version).toBe(packageMetadata.version);
-  expect(npmPackageMetadata.bin).toEqual({ buli: "./bin/buli.mjs" });
+  expect(npmPackageMetadata.bin).toEqual({ buli: "bin/buli.mjs" });
   expect(npmPackageMetadata.publishConfig).toEqual({ access: "public" });
 });
 

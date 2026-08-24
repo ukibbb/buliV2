@@ -10,8 +10,17 @@ import {
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { basename, join, resolve } from "node:path"
+import packageMetadata from "../package.json" with { type: "json" }
 
 const RIPGREP_VERSION = "14.1.1"
+const releaseTag = process.env.BULI_RELEASE_TAG
+const expectedReleaseTag = `v${packageMetadata.version}`
+if (releaseTag !== undefined && releaseTag !== expectedReleaseTag) {
+    throw new Error(
+        `Release tag ${JSON.stringify(releaseTag)} does not match package version `
+        + `${JSON.stringify(packageMetadata.version)}; expected ${expectedReleaseTag}`,
+    )
+}
 const TARGETS = {
     "darwin-arm64": {
         platform: "darwin",
@@ -159,6 +168,7 @@ try {
     )
 
     await run([buliExecutable, "--help"])
+    await run([buliExecutable, "--version"])
     await run([ripgrepExecutable, "--version"])
     await run([
         "tar",

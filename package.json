@@ -1,5 +1,6 @@
 {
-  "name": "buli",
+  "name": "@ukibbb/buli",
+  "version": "0.1.0-rc.5",
   "private": true,
   "license": "MIT",
   "type": "module",

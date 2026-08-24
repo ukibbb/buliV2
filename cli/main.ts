@@ -2,6 +2,7 @@
 
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
+import packageMetadata from "../package.json" with { type: "json" };
 
 import { LoginCommand, LogoutCommand } from "./cmd/authentication";
 import { RunBuliTuiCommand } from "./cmd/tui";
@@ -14,6 +15,8 @@ const args: string[] = hideBin(process.argv);
 const cli = yargs(args)
   // Set the command name
   .scriptName("buli")
+  // Report the package version embedded into both development and compiled builds.
+  .version(packageMetadata.version)
   // Keep help text readable by wrapping long lines at 100 characters.
   .wrap(100)
   // Register --help and describe what it does in the help output.

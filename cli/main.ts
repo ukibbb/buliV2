@@ -6,6 +6,7 @@ import packageMetadata from "../package.json" with { type: "json" };
 
 import { LoginCommand, LogoutCommand } from "./cmd/authentication";
 import { RunBuliTuiCommand } from "./cmd/tui";
+import { UpdateCommand } from "./cmd/update";
 
 // Node/Bun starts process.argv as [runtimePath, scriptPath, ...userArgs].
 // hideBin removes runtimePath and scriptPath so yargs only sees what the user typed.
@@ -30,6 +31,8 @@ const cli = yargs(args)
   // Authentication commands use the same interactive OpenTUI flow as the app.
   .command(LoginCommand)
   .command(LogoutCommand)
+  // Standalone installs can check for and apply verified stable updates.
+  .command(UpdateCommand)
   // Keep bare `buli` as the main TUI entry point without exposing `buli tui`.
   .command(RunBuliTuiCommand)
   .fail((message, error) => {

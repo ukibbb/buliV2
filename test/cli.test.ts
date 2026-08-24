@@ -1,4 +1,24 @@
 import { expect, test } from "bun:test";
+import packageMetadata from "../package.json" with { type: "json" };
+
+test("prints the package version", async () => {
+  const versionProcess = Bun.spawn({
+    cmd: ["bun", "cli/main.ts", "--version"],
+    cwd: import.meta.dir + "/..",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(versionProcess.stdout).text(),
+    new Response(versionProcess.stderr).text(),
+    versionProcess.exited,
+  ]);
+
+  expect(exitCode).toBe(0);
+  expect(stderr).toBe("");
+  expect(stdout.trim()).toBe(packageMetadata.version);
+});
 
 test("prints formatted help instead of the raw yargs instance", async () => {
   const helpProcess = Bun.spawn({

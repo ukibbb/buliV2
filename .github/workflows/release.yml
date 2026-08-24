@@ -48,6 +48,7 @@ jobs:
       - name: Build release bundle
         env:
           BULI_RELEASE_TARGET: ${{ matrix.target }}
+          BULI_RELEASE_TAG: ${{ github.ref_name }}
         run: bun run bundle:local
 
       - name: Upload release files

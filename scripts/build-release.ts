@@ -123,6 +123,24 @@ try {
         buliExecutable,
     ], workspaceRoot)
 
+    if (TARGET.platform === "darwin") {
+        await run([
+            "codesign",
+            "--force",
+            "--sign",
+            "-",
+            "--timestamp=none",
+            buliExecutable,
+        ])
+        await run([
+            "codesign",
+            "--verify",
+            "--deep",
+            "--strict",
+            buliExecutable,
+        ])
+    }
+
     const extractedRoot = join(ripgrepExtractionDirectory, TARGET.ripgrepAsset)
     const ripgrepExecutable = join(libraryDirectory, "rg")
     await copyFile(join(extractedRoot, "rg"), ripgrepExecutable)

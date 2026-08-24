@@ -14,7 +14,6 @@ import type {
     TToolExecutionOutcome,
 } from "@/agent/tool"
 import { truncateToolOutput } from "@/agent/tool-output"
-import type { IAgentTurnAuthorization } from "@/agent/turn-policy"
 
 const COMMITTED_AFTER_ABORT_SUMMARY =
     "WARNING: Workspace changes were committed despite cancellation."
@@ -26,7 +25,6 @@ interface IExecuteToolCallsOptions {
     readonly runId: string
     readonly signal: AbortSignal
     readonly emit: (event: IAgentEvent) => void | Promise<void>
-    readonly authorization: IAgentTurnAuthorization
     readonly requestApproval?: (
         draft: TToolApprovalDraft,
         context: {
@@ -103,12 +101,10 @@ async function executeToolCall(
     } else if (!tool) {
         content = `Unknown tool: ${toolCall.toolName}`
         isError = true
-    } else if (!options.authorization.consumeToolCall(tool)) {
-        content = `Tool "${tool.name}" is not authorized for the current user message; no approval was requested.`
-        isError = true
     } else {
         let acceptingProgress = true
         let acceptingApprovals = true
+        let approvalRequested = false
         let pendingApprovalTask: Promise<TToolApprovalDecision> | undefined
         let progressTask: Promise<void> = Promise.resolve()
         const reportProgress = (progress: string): void => {
@@ -131,9 +127,9 @@ async function executeToolCall(
                     `Tool "${tool.name}" is no longer accepting approval requests`,
                 ))
             }
-            if (pendingApprovalTask) {
+            if (approvalRequested) {
                 return Promise.reject(new Error(
-                    `Tool "${tool.name}" already has a pending approval request`,
+                    `Tool "${tool.name}" already requested approval for this call`,
                 ))
             }
             if (!options.requestApproval) {
@@ -155,11 +151,7 @@ async function executeToolCall(
             let task: Promise<TToolApprovalDecision>
             try {
                 options.signal.throwIfAborted()
-                if (!options.authorization.consumeApproval(tool, draft.kind)) {
-                    throw new Error(
-                        `Tool "${tool.name}" is not authorized to request ${draft.kind} approval for the current user message`,
-                    )
-                }
+                approvalRequested = true
                 task = Promise.resolve(options.requestApproval(
                     structuredClone(draft),
                     {

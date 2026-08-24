@@ -10,7 +10,6 @@ import type {
   IUserMessage,
 } from "@/agent"
 import { runAgentLoop } from "@/agent/agent-loop"
-import { confirmedPatchHandoffMessages } from "./support/patch-handoff"
 
 const RUN_ID = "run-1"
 
@@ -519,7 +518,67 @@ test("always gives tools an approval bridge with exact execution context", async
     .toMatchObject({ content: "complete", isError: false })
 })
 
-test("lets the model infer actions while the host keeps patch authorization", async () => {
+test("allows one approval request per tool call", async () => {
+  const model = new ScriptedModel((iteration) => iteration === 0
+    ? [
+        {
+          type: "tool-call",
+          toolCallId: "call-patch",
+          toolName: "apply_patch",
+          input: {},
+        },
+        { type: "finish", reason: "tool-calls" },
+      ]
+    : [{ type: "finish", reason: "stop" }])
+  let approvals = 0
+  const draft = {
+    kind: "patch" as const,
+    title: "Apply patch",
+    explanation: "Update a file",
+    diff: "--- a/file.ts\n+++ b/file.ts",
+    paths: ["file.ts"],
+  }
+  const tool: IAgentTool = {
+    name: "apply_patch",
+    approvalKind: "patch",
+    description: "Apply a patch",
+    inputSchema: { type: "object", additionalProperties: false },
+    async execute(_input, context) {
+      if (!context.requestApproval) throw new Error("Missing approval bridge")
+      await context.requestApproval(draft)
+      await context.requestApproval(draft)
+      return "unexpected"
+    },
+  }
+
+  const result = await runAgentLoop({
+    sessionId: "session-1",
+    runId: RUN_ID,
+    systemPrompt: "System",
+    messages: [],
+    prompt: userMessage("Apply the patch"),
+    model,
+    reasoningEffort: "medium",
+    tools: [tool],
+    signal: new AbortController().signal,
+    emit: () => undefined,
+    requestApproval: async () => {
+      approvals += 1
+      return "reject"
+    },
+    now: timeGenerator(),
+    generateId: idGenerator(),
+  })
+
+  expect(approvals).toBe(1)
+  expect(result.messages.find((message) => message.role === "toolResult"))
+    .toMatchObject({
+      isError: true,
+      content: expect.stringContaining("already requested approval for this call"),
+    })
+})
+
+test("exposes every registered tool for every prompt", async () => {
   const readTool: IAgentTool = {
     name: "read",
     description: "Read",
@@ -533,12 +592,6 @@ test("lets the model infer actions while the host keeps patch authorization", as
     inputSchema: { type: "object" },
     execute: async () => "patch",
   }
-  const handoffTool: IAgentTool = {
-    name: "request_patch_handoff",
-    description: "Record a patch handoff request",
-    inputSchema: { type: "object" },
-    execute: async () => "recorded",
-  }
   const commandTool: IAgentTool = {
     name: "bash",
     approvalKind: "command",
@@ -546,56 +599,37 @@ test("lets the model infer actions while the host keeps patch authorization", as
     inputSchema: { type: "object" },
     execute: async () => "command",
   }
-  const cases = [
-    {
-      prompt: "Explain this",
-      messages: [],
-      expectedTools: ["read", "request_patch_handoff", "bash"],
-    },
-    {
-      prompt: "Pokaż pełny kod parsera",
-      messages: [],
-      expectedTools: ["read", "request_patch_handoff", "bash"],
-    },
-    {
-      prompt: "Czy możesz zająć się implementacją parsera?",
-      messages: [],
-      expectedTools: ["read", "request_patch_handoff", "bash"],
-    },
-    {
-      prompt: "tak",
-      messages: confirmedPatchHandoffMessages(),
-      expectedTools: ["read", "apply_patch"],
-    },
-    {
-      prompt: "Sprawdź testy",
-      messages: [],
-      expectedTools: ["read", "request_patch_handoff", "bash"],
-    },
+  const prompts = [
+    "Explain this",
+    "Pokaż pełny kod parsera",
+    "Czy możesz zająć się implementacją parsera?",
+    "Sprawdź testy",
   ] as const
 
-  for (const { prompt, messages, expectedTools } of cases) {
+  for (const prompt of prompts) {
     const model = new ScriptedModel([{ type: "finish", reason: "stop" }])
     await runAgentLoop({
       sessionId: "session-1",
       runId: RUN_ID,
       systemPrompt: "System",
-      messages,
+      messages: [],
       prompt: userMessage(prompt),
       model,
       reasoningEffort: "medium",
-      tools: [readTool, handoffTool, patchTool, commandTool],
+      tools: [readTool, patchTool, commandTool],
       signal: new AbortController().signal,
       emit: () => undefined,
     })
 
     expect(model.requests[0]?.tools.map((tool) => tool.name)).toEqual([
-      ...expectedTools,
+      "read",
+      "apply_patch",
+      "bash",
     ])
   }
 })
 
-test("does not inherit action authorization from message history", async () => {
+test("exposes action tools independently of message history", async () => {
   const model = new ScriptedModel([{ type: "finish", reason: "stop" }])
   const patchTool: IAgentTool = {
     name: "apply_patch",
@@ -623,10 +657,12 @@ test("does not inherit action authorization from message history", async () => {
     emit: () => undefined,
   })
 
-  expect(model.requests[0]?.tools).toEqual([])
+  expect(model.requests[0]?.tools.map((tool) => tool.name)).toEqual([
+    "apply_patch",
+  ])
 })
 
-test("keeps explicit patch authorization across read continuations", async () => {
+test("keeps all tools available across read and approval continuations", async () => {
   const model = new ScriptedModel((iteration) => {
     if (iteration === 0) {
       return [
@@ -680,8 +716,8 @@ test("keeps explicit patch authorization across read continuations", async () =>
     sessionId: "session-1",
     runId: RUN_ID,
     systemPrompt: "System",
-    messages: confirmedPatchHandoffMessages(),
-    prompt: userMessage("tak"),
+    messages: [],
+    prompt: userMessage("Implement the parser change"),
     model,
     reasoningEffort: "medium",
     tools: [readTool, patchTool],
@@ -704,65 +740,13 @@ test("keeps explicit patch authorization across read continuations", async () =>
     "read",
     "apply_patch",
   ])
-  expect(model.requests[2]?.tools.map((tool) => tool.name)).toEqual(["read"])
+  expect(model.requests[2]?.tools.map((tool) => tool.name)).toEqual([
+    "read",
+    "apply_patch",
+  ])
 })
 
-test("rejects an unauthorized patch call before execution or approval", async () => {
-  const model = new ScriptedModel((iteration) => iteration === 0
-    ? [
-        {
-          type: "tool-call",
-          toolCallId: "unauthorized-patch",
-          toolName: "apply_patch",
-          input: {},
-        },
-        { type: "finish", reason: "tool-calls" },
-      ]
-    : [{ type: "finish", reason: "stop" }])
-  let executions = 0
-  let approvals = 0
-  const tool: IAgentTool = {
-    name: "apply_patch",
-    approvalKind: "patch",
-    description: "Patch",
-    inputSchema: { type: "object", additionalProperties: false },
-    execute: async () => {
-      executions += 1
-      return "unexpected"
-    },
-  }
-
-  const result = await runAgentLoop({
-    sessionId: "session-1",
-    runId: RUN_ID,
-    systemPrompt: "System",
-    messages: [],
-    prompt: userMessage("Explain this code"),
-    model,
-    reasoningEffort: "medium",
-    tools: [tool],
-    signal: new AbortController().signal,
-    emit: () => undefined,
-    requestApproval: async () => {
-      approvals += 1
-      return "approve"
-    },
-    now: timeGenerator(),
-    generateId: idGenerator(),
-  })
-
-  expect(model.requests[0]?.tools).toEqual([])
-  expect(executions).toBe(0)
-  expect(approvals).toBe(0)
-  expect(result.messages.find((message) => message.role === "toolResult"))
-    .toMatchObject({
-      toolCallId: "unauthorized-patch",
-      isError: true,
-      content: expect.stringContaining("not authorized"),
-    })
-})
-
-test("consumes patch authorization before a second proposal", async () => {
+test("lets each action call request its own approval", async () => {
   const model = new ScriptedModel((iteration) => iteration === 0
     ? [
         {
@@ -804,8 +788,8 @@ test("consumes patch authorization before a second proposal", async () => {
     sessionId: "session-1",
     runId: RUN_ID,
     systemPrompt: "System",
-    messages: confirmedPatchHandoffMessages(),
-    prompt: userMessage("tak"),
+    messages: [],
+    prompt: userMessage("Prepare both patches"),
     model,
     reasoningEffort: "medium",
     tools: [tool],
@@ -819,18 +803,18 @@ test("consumes patch authorization before a second proposal", async () => {
     generateId: idGenerator(),
   })
 
-  expect(executions).toBe(1)
-  expect(approvals).toBe(1)
+  expect(executions).toBe(2)
+  expect(approvals).toBe(2)
   expect(model.requests[0]?.tools.map((entry) => entry.name)).toEqual([
     "apply_patch",
   ])
-  expect(model.requests[1]?.tools).toEqual([])
-  expect(result.messages.find((message) =>
-    message.role === "toolResult" && message.toolCallId === "second-patch"
-  )).toMatchObject({
-    isError: true,
-    content: expect.stringContaining("not authorized"),
-  })
+  expect(model.requests[1]?.tools.map((entry) => entry.name)).toEqual([
+    "apply_patch",
+  ])
+  expect(result.messages.filter((message) => message.role === "toolResult"))
+    .toHaveLength(2)
+  expect(result.messages.filter((message) => message.role === "toolResult")
+    .every((message) => !message.isError)).toBe(true)
 })
 
 test("injects steering only after the complete tool batch", async () => {

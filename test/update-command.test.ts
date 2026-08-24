@@ -68,18 +68,20 @@ test("rejects failed and malformed GitHub responses", async () => {
   )).rejects.toThrow("GitHub latest release is not stable");
 });
 
-test("directs npm release candidates to the next dist-tag", async () => {
-  expect(npmUpdateInstruction(
-    "/tmp/node_modules/@ukibbb/buli/vendor/bin/buli",
-  )).toBe("npm install --global @ukibbb/buli@next");
-  expect(npmUpdateInstruction("/tmp/bin/buli")).toBeUndefined();
+test("directs npm installations to the matching dist-tag", async () => {
+  const executablePath = "/tmp/node_modules/@ukibbb/buli/vendor/bin/buli";
+  expect(npmUpdateInstruction(executablePath, "0.1.0-rc.6"))
+    .toBe("npm install --global @ukibbb/buli@next");
+  expect(npmUpdateInstruction(executablePath, "0.1.0"))
+    .toBe("npm install --global @ukibbb/buli@latest");
+  expect(npmUpdateInstruction("/tmp/bin/buli", "0.1.0-rc.6")).toBeUndefined();
   await expect(updateStandalone({
     currentVersion: "0.1.0-rc.6",
     latestVersion: "0.1.0",
     latestTag: "v0.1.0",
     updateAvailable: true,
   }, {
-    executablePath: "/tmp/node_modules/@ukibbb/buli/vendor/bin/buli",
+    executablePath,
   })).rejects.toThrow("Run: npm install --global @ukibbb/buli@next");
 });
 

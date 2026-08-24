@@ -57,6 +57,12 @@ export const UpdateCommand: CommandModule<{}, UpdateCommandArgs> = {
       describe: "check for an update without changing the installation",
     }),
   handler: async ({ check }) => {
+    const npmUpdateCommand = npmUpdateInstruction(process.execPath);
+    if (npmUpdateCommand) {
+      console.log("This Buli installation is managed by npm.");
+      console.log(`Run: ${npmUpdateCommand}`);
+      return;
+    }
     const result = await checkForUpdate();
     console.log(`Current version: ${result.currentVersion}`);
     console.log(`Latest stable version: ${result.latestVersion}`);
@@ -117,6 +123,13 @@ export async function updateStandalone(
 ): Promise<void> {
   const fetchRelease = options.fetchRelease ?? fetch;
   const executablePath = resolve(options.executablePath ?? process.execPath);
+  const npmUpdateCommand = npmUpdateInstruction(executablePath);
+  if (npmUpdateCommand) {
+    throw new Error(
+      "This Buli installation is managed by npm.\n"
+      + `Run: ${npmUpdateCommand}`,
+    );
+  }
   const prefix = dirname(dirname(executablePath));
   const expectedExecutable = join(prefix, "bin", "buli");
   if (executablePath !== expectedExecutable) {
@@ -199,6 +212,15 @@ export async function updateStandalone(
   } finally {
     await rm(updateDirectory, { recursive: true, force: true });
   }
+}
+
+export function npmUpdateInstruction(executablePath: string): string | undefined {
+  const normalized = resolve(executablePath).replaceAll("\\", "/");
+  if (!normalized.endsWith("/node_modules/@ukibbb/buli/vendor/bin/buli")) {
+    return undefined;
+  }
+  const distTag = packageMetadata.version.includes("-") ? "next" : "latest";
+  return `npm install --global @ukibbb/buli@${distTag}`;
 }
 
 async function replaceInstallation(

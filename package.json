@@ -18,7 +18,8 @@
     "dev:quiet": "BULI_DEVELOPMENT=1 bun --watch cli/main.ts",
     "start": "BULI_DEVELOPMENT=1 bun cli/main.ts",
     "build:local": "mkdir -p dist && bun build --compile ./cli/main.ts --outfile ./dist/buli",
-    "bundle:local": "bun scripts/build-release.ts"
+    "bundle:local": "bun scripts/build-release.ts",
+    "npm:pack": "npm pack ./npm"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.16",

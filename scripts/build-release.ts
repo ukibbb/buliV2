@@ -11,10 +11,17 @@ import {
 import { tmpdir } from "node:os"
 import { basename, join, resolve } from "node:path"
 import packageMetadata from "../package.json" with { type: "json" }
+import npmPackageMetadata from "../npm/package.json" with { type: "json" }
 
 const RIPGREP_VERSION = "14.1.1"
 const releaseTag = process.env.BULI_RELEASE_TAG
 const expectedReleaseTag = `v${packageMetadata.version}`
+if (npmPackageMetadata.version !== packageMetadata.version) {
+    throw new Error(
+        `npm package version ${JSON.stringify(npmPackageMetadata.version)} does not match `
+        + `release version ${JSON.stringify(packageMetadata.version)}`,
+    )
+}
 if (releaseTag !== undefined && releaseTag !== expectedReleaseTag) {
     throw new Error(
         `Release tag ${JSON.stringify(releaseTag)} does not match package version `

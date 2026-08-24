@@ -4,6 +4,14 @@ Small Bun project for the Buli terminal app.
 
 ## Installation
 
+The npm package will install the matching native release without requiring Bun:
+
+```bash
+npm install --global @ukibbb/buli@next
+```
+
+Release candidates use the `next` dist-tag; stable releases will use `latest`.
+
 Install the latest stable release on macOS or Linux without Bun, npm, or a
 system-wide ripgrep installation:
 

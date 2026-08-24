@@ -151,7 +151,7 @@ export class AgentSession {
         }
         if (this.persistenceError !== undefined) {
             throw new Error(
-                "Session persistence failed. Clear or reopen the session before submitting another prompt.",
+                "Session persistence failed. Reopen the session before submitting another prompt.",
                 { cause: this.persistenceError },
             )
         }
@@ -162,7 +162,7 @@ export class AgentSession {
         if (this.disposed) throw new Error("AgentSession is disposed")
         if (this.persistenceError !== undefined) {
             throw new Error(
-                "Session persistence failed. Clear or reopen the session before submitting another prompt.",
+                "Session persistence failed. Reopen the session before submitting another prompt.",
                 { cause: this.persistenceError },
             )
         }
@@ -174,7 +174,7 @@ export class AgentSession {
         if (this.disposed) throw new Error("AgentSession is disposed")
         if (this.persistenceError !== undefined) {
             throw new Error(
-                "Session persistence failed. Clear or reopen the session before submitting another prompt.",
+                "Session persistence failed. Reopen the session before submitting another prompt.",
                 { cause: this.persistenceError },
             )
         }
@@ -263,21 +263,6 @@ export class AgentSession {
         })
         this.compactionTask = task
         return task
-    }
-
-    clear(): void {
-        if (this.disposed) throw new Error("AgentSession is disposed")
-        if (this.agent.state.isRunning) {
-            throw new Error("Cannot clear while AgentSession is running")
-        }
-        if (this.compactionTask) {
-            throw new Error("Cannot clear while AgentSession is compacting")
-        }
-
-        this.manager.clearSession(this.id)
-        this.agent.clear()
-        this.persistenceError = undefined
-        this.publishSnapshot()
     }
 
     dispose(): Promise<void> {

@@ -275,7 +275,6 @@ test("AgentSession restores steering to the queue when persistence fails", async
     },
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
     saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
-    clearSession: memory.clearSession,
     deleteSession: memory.deleteSession,
   }
   const firstStarted = Promise.withResolvers<void>()
@@ -348,7 +347,6 @@ test("AgentSession restores follow-up to the queue when persistence fails", asyn
     },
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
     saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
-    clearSession: memory.clearSession,
     deleteSession: memory.deleteSession,
   }
   const firstStarted = Promise.withResolvers<void>()
@@ -404,38 +402,6 @@ test("AgentSession restores follow-up to the queue when persistence fails", asyn
   await session.dispose()
 })
 
-test("AgentSession clear removes one durable session without detaching subscribers", async () => {
-  const manager = new InMemorySessionManager()
-  manager.createSession(sessionInfo("session-1", "test-agent", "First"))
-  manager.createSession(sessionInfo("session-2", "test-agent", "Other"))
-  manager.appendMessage(userMessage("First", "session-1", "user-1"))
-  manager.appendMessage(userMessage("Other", "session-2", "user-2"))
-  const session = new AgentSession({
-    agentId: "test-agent",
-    sessionId: "session-1",
-    manager,
-    systemPrompt: "System",
-    resolveRunConfiguration: () => ({
-      model: { async *stream() {} },
-      reasoningEffort: "medium",
-    }),
-    tools: [],
-  })
-  let notifications = 0
-  session.subscribe(() => {
-    notifications += 1
-  })
-
-  session.clear()
-
-  expect(manager.getMessages("session-1")).toEqual([])
-  expect(manager.getMessages("session-2")).toHaveLength(1)
-  expect(session.getSnapshot().messages).toEqual([])
-  expect(notifications).toBe(1)
-
-  await session.dispose()
-})
-
 test("AgentSession rejects acceptance without invoking the provider or diverging from durable state", async () => {
   const memory = new InMemorySessionManager()
   memory.createSession(sessionInfo("session-1", "test-agent", "Failure"))
@@ -450,7 +416,6 @@ test("AgentSession rejects acceptance without invoking the provider or diverging
     },
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
     saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
-    clearSession: memory.clearSession,
     deleteSession: memory.deleteSession,
   }
   let providerInvocations = 0

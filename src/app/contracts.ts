@@ -80,7 +80,6 @@ export interface IBuliApplication
         approvalId: string,
         decision: TToolApprovalDecision,
     ) => void
-    readonly clearSession: (sessionId: string) => void
     readonly compactSession: (
         sessionId: string,
     ) => Promise<ICompactionCheckpoint | undefined>

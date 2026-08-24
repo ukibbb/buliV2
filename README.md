@@ -26,6 +26,17 @@ curl -fsSL https://raw.githubusercontent.com/ukibbb/buliV2/main/install.sh \
 Set `BULI_INSTALL_PREFIX` to use a different prefix or
 `BULI_NO_MODIFY_PATH=1` to prevent shell configuration changes.
 
+Check for a newer stable release or update a standalone installation:
+
+```bash
+buli update --check
+buli update
+```
+
+The updater downloads the release for the current platform, verifies its
+SHA-256 checksum, validates the new executables, and replaces the installation
+only after those checks pass. Package-manager installations are not modified.
+
 ## Development requirements
 
 - Bun 1.3.12 or newer

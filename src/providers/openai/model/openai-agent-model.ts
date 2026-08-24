@@ -91,6 +91,9 @@ export class OpenAiAgentModel implements IAgentModel {
         request.signal.throwIfAborted()
         const requestAccountId = this.expectedAccountId
             ?? credential.accountId?.trim()
+        if (requestAccountId) {
+            request.reportProviderAccountId?.(requestAccountId)
+        }
         const authenticatedFetch = requestAccountId
             && this.auth.authenticatedFetchForAccount
             ? this.auth.authenticatedFetchForAccount(requestAccountId)

@@ -35,6 +35,7 @@ export interface IBuliAgentRuntimeConfig extends IBuliAgentDisplayInfo {
 export interface IBuliModelRuntimeConfig extends IBuliModelDisplayInfo {
     readonly model: IAgentModel
     readonly modelProfile?: IModelProfile
+    readonly providerAccountId?: string
     readonly defaultReasoningEffort: TReasoningEffort
 }
 
@@ -495,6 +496,12 @@ export class BuliApplicationRuntime implements IBuliApplication {
                             modelProfile: structuredClone(
                                 registration.modelProfile,
                             ),
+                        }),
+                    ...(registration.providerAccountId === undefined
+                        ? {}
+                        : {
+                            providerAccountId:
+                                registration.providerAccountId,
                         }),
                     reasoningEffort: this.selection.reasoningEffort,
                 }

@@ -16,6 +16,7 @@ import {
     OPENAI_PROVIDER_ID,
     OpenAiAgentModel,
     createOpenAiModelCatalog,
+    createOpenAiWebSearchTool,
 } from "@/providers/openai"
 import {
     defaultSessionFilePath,
@@ -84,10 +85,14 @@ export async function createBuliApplication(
             id: DEFAULT_OPENAI_MODEL_ID,
             name: "GPT-5.6 Sol",
             model,
-            modelProfile: {
-                providerId: OPENAI_PROVIDER_ID,
-                modelId: DEFAULT_OPENAI_MODEL_ID,
-            },
+            ...(options.model === undefined
+                ? {
+                    modelProfile: {
+                        providerId: OPENAI_PROVIDER_ID,
+                        modelId: DEFAULT_OPENAI_MODEL_ID,
+                    },
+                }
+                : {}),
             reasoningEfforts: [
                 "none",
                 "low",
@@ -103,7 +108,12 @@ export async function createBuliApplication(
             reasoningEffort: "medium",
         }
         const tools: readonly IAgentTool[] = options.tools
-            ?? defaultWorkspaceTools(workspaceRoot)
+            ?? [
+                ...defaultWorkspaceTools(workspaceRoot),
+                ...(options.model === undefined
+                    ? [createOpenAiWebSearchTool({ search: auth.openAi.search })]
+                    : []),
+            ]
 
         const agents: readonly IBuliAgentRuntimeConfig[] = [{
             id: BULI_AGENT_ID,
@@ -142,6 +152,7 @@ export async function createBuliApplication(
                                         entry.contextWindowTokens,
                                 }),
                         },
+                        providerAccountId: entry.accountId,
                         reasoningEfforts: entry.reasoningEfforts,
                         defaultReasoningEffort:
                             entry.defaultReasoningEffort,

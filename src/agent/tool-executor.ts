@@ -4,7 +4,9 @@ import type { IAgentEvent } from "@/agent/events"
 import type {
     IToolCallContent,
     IToolResultMessage,
+    TAgentMessage,
 } from "@/agent/messages"
+import type { IModelProfile } from "@/agent/model-values"
 import type {
     TToolApprovalDecision,
     TToolApprovalDraft,
@@ -23,6 +25,9 @@ const SIDE_EFFECTS_UNKNOWN_SUMMARY =
 interface IExecuteToolCallsOptions {
     readonly sessionId: string
     readonly runId: string
+    readonly modelProfile?: IModelProfile
+    readonly providerAccountId?: string
+    readonly messages: readonly TAgentMessage[]
     readonly signal: AbortSignal
     readonly emit: (event: IAgentEvent) => void | Promise<void>
     readonly requestApproval?: (
@@ -187,8 +192,23 @@ async function executeToolCall(
             const executionResult = normalizeToolExecutionResult(
                 tool.name,
                 await tool.execute(input, {
+                    sessionId: options.sessionId,
                     toolCallId: toolCall.toolCallId,
                     runId: options.runId,
+                    ...(options.modelProfile === undefined
+                        ? {}
+                        : { modelProfile: structuredClone(options.modelProfile) }),
+                    ...(tool.requiresConversationContext
+                        ? {
+                            ...(options.providerAccountId === undefined
+                                ? {}
+                                : {
+                                    providerAccountId:
+                                        options.providerAccountId,
+                                }),
+                            messages: structuredClone(options.messages),
+                        }
+                        : {}),
                     signal: options.signal,
                     reportProgress,
                     requestApproval,

@@ -497,6 +497,7 @@ test("rejects a discovered model after the authenticated account changes", async
 
 test("binds a fallback model request to its preflight account", async () => {
   let boundAccountId: string | undefined
+  let reportedAccountId: string | undefined
   let genericNetworkCalls = 0
   const model = new OpenAiAgentModel({
     auth: {
@@ -516,9 +517,13 @@ test("binds a fallback model request to its preflight account", async () => {
     model,
     [userMessage("Hello")],
     [],
+    (accountId) => {
+      reportedAccountId = accountId
+    },
   )
 
   expect(boundAccountId).toBe("account-a")
+  expect(reportedAccountId).toBe("account-a")
   expect(genericNetworkCalls).toBe(0)
   expect(events.at(-1)?.type).toBe("finish")
 })
@@ -793,6 +798,7 @@ async function collectEvents(
   model: OpenAiAgentModel,
   messages: readonly TAgentMessage[],
   tools: readonly IAgentToolDescriptor[],
+  reportProviderAccountId?: (accountId: string) => void,
 ): Promise<IAgentModelEvent[]> {
   const events: IAgentModelEvent[] = []
   for await (const event of model.stream({
@@ -803,6 +809,9 @@ async function collectEvents(
     tools,
     reasoningEffort: "medium",
     signal: new AbortController().signal,
+    ...(reportProviderAccountId === undefined
+      ? {}
+      : { reportProviderAccountId }),
   })) {
     events.push(event)
   }

@@ -3,8 +3,12 @@ import {
     OPENAI_CODEX_CLIENT_VERSION,
     OPENAI_CODEX_MODELS_URL,
     OPENAI_CODEX_RESPONSES_URL,
+    OPENAI_CODEX_SEARCH_URL,
     OPENAI_OAUTH_ORIGINATOR,
 } from "@/providers/openai/constants"
+
+const SEARCH_MAX_REQUEST_BYTES = 128 * 1024
+const SEARCH_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
 const STRIPPED_HEADERS = [
     "authorization",
@@ -38,6 +42,21 @@ export interface IOpenAiCodexModelsResponse {
 export type TOpenAiCodexModelsFetch = (
     signal?: AbortSignal,
 ) => Promise<IOpenAiCodexModelsResponse>
+
+export interface IOpenAiCodexSearchResponse {
+    readonly output: string
+    readonly results?: readonly unknown[]
+}
+
+export interface IOpenAiCodexSearchRequestOptions {
+    readonly signal?: AbortSignal
+    readonly expectedAccountId?: string
+}
+
+export type TOpenAiCodexSearch = (
+    request: object,
+    options?: IOpenAiCodexSearchRequestOptions,
+) => Promise<IOpenAiCodexSearchResponse>
 
 /** Restricts OAuth-bearing requests to pinned ChatGPT Codex endpoints. */
 export function createOpenAiCodexFetch(options: {
@@ -134,6 +153,67 @@ export function createOpenAiCodexModelsFetch(options: {
             response: result.response,
             accountId: result.credential.accountId,
         }
+    }
+}
+
+/** Sends one bounded JSON request to the standalone Codex search endpoint. */
+export function createOpenAiCodexSearch(options: {
+    credentials: IOpenAiCodexCredentialProvider
+    fetch?: typeof fetch
+    signal?: AbortSignal
+}): TOpenAiCodexSearch {
+    const rawFetch = options.fetch ?? globalThis.fetch
+
+    return async (request, requestOptions) => {
+        const body = JSON.stringify(request)
+        if (new TextEncoder().encode(body).byteLength > SEARCH_MAX_REQUEST_BYTES) {
+            throw new RangeError("OpenAI web search request is too large")
+        }
+
+        const signal = combinedSignal(requestOptions?.signal, options.signal)
+        signal.throwIfAborted()
+        const result = await authenticatedRequest(
+            options.credentials,
+            signal,
+            (credential) => {
+                const headers = new Headers({
+                    Accept: "application/json",
+                    "Content-Type": "application/json",
+                })
+                headers.set("Authorization", `Bearer ${credential.access}`)
+                headers.set("ChatGPT-Account-Id", credential.accountId)
+                headers.set("originator", OPENAI_OAUTH_ORIGINATOR)
+                headers.set("OpenAI-Beta", "responses=experimental")
+                headers.set("version", OPENAI_CODEX_CLIENT_VERSION)
+                return rawFetch(OPENAI_CODEX_SEARCH_URL, {
+                    method: "POST",
+                    headers,
+                    body,
+                    redirect: "error",
+                    credentials: "omit",
+                    signal,
+                })
+            },
+            requestOptions?.expectedAccountId,
+        )
+
+        if (!result.response.ok) {
+            await result.response.body?.cancel().catch(() => {})
+            throw new Error(
+                `OpenAI web search failed with HTTP ${result.response.status}`,
+            )
+        }
+
+        const payload = parseSearchResponse(
+            await boundedResponseText(
+                result.response,
+                SEARCH_MAX_RESPONSE_BYTES,
+                signal,
+            ),
+        )
+        return payload.results === undefined
+            ? { output: payload.output }
+            : { output: payload.output, results: payload.results }
     }
 }
 
@@ -263,4 +343,74 @@ function requireCredentialFields(
     if (!accountId) throw new Error("OpenAI OAuth credential has no account ID")
 
     return { access, accountId }
+}
+
+function parseSearchResponse(value: string): IOpenAiCodexSearchResponse {
+    let payload: unknown
+    try {
+        payload = JSON.parse(value)
+    } catch {
+        throw new Error("OpenAI web search returned an invalid response")
+    }
+    if (
+        payload === null
+        || typeof payload !== "object"
+        || Array.isArray(payload)
+        || typeof (payload as Record<string, unknown>).output !== "string"
+    ) {
+        throw new Error("OpenAI web search returned an invalid response")
+    }
+
+    const record = payload as Record<string, unknown>
+    if (
+        record.results !== undefined
+        && record.results !== null
+        && !Array.isArray(record.results)
+    ) {
+        throw new Error("OpenAI web search returned an invalid response")
+    }
+    return {
+        output: record.output as string,
+        ...(Array.isArray(record.results) ? { results: record.results } : {}),
+    }
+}
+
+async function boundedResponseText(
+    response: Response,
+    maximumBytes: number,
+    signal: AbortSignal,
+): Promise<string> {
+    const declaredLength = Number(response.headers.get("content-length"))
+    if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) {
+        await response.body?.cancel().catch(() => {})
+        throw new RangeError("OpenAI web search response is too large")
+    }
+    if (!response.body) return ""
+
+    const reader = response.body.getReader()
+    const chunks: Uint8Array[] = []
+    let byteLength = 0
+    try {
+        while (true) {
+            signal.throwIfAborted()
+            const chunk = await reader.read()
+            if (chunk.done) break
+            byteLength += chunk.value.byteLength
+            if (byteLength > maximumBytes) {
+                await reader.cancel()
+                throw new RangeError("OpenAI web search response is too large")
+            }
+            chunks.push(chunk.value)
+        }
+    } finally {
+        reader.releaseLock()
+    }
+
+    const bytes = new Uint8Array(byteLength)
+    let offset = 0
+    for (const chunk of chunks) {
+        bytes.set(chunk, offset)
+        offset += chunk.byteLength
+    }
+    return new TextDecoder().decode(bytes)
 }

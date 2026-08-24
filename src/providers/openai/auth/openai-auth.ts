@@ -11,8 +11,10 @@ import {
 import {
     createOpenAiCodexFetch,
     createOpenAiCodexModelsFetch,
+    createOpenAiCodexSearch,
     type IOpenAiCodexCredentialProvider,
     type IOpenAiCodexModelsResponse,
+    type TOpenAiCodexSearch,
 } from "@/providers/openai/transport/codex-fetch"
 import {
     OPENAI_OAUTH_BROWSER_METHOD_ID,
@@ -47,6 +49,7 @@ export interface IOpenAiAuth
     readonly fetchModels: (
         signal?: AbortSignal,
     ) => Promise<IOpenAiCodexModelsResponse>
+    readonly search: TOpenAiCodexSearch
     readonly getCredential: (
         signal?: AbortSignal,
     ) => Promise<IOAuthCredential | undefined>
@@ -73,6 +76,7 @@ export class OpenAiAuth implements IOpenAiAuth {
     readonly fetchModels: (
         signal?: AbortSignal,
     ) => Promise<IOpenAiCodexModelsResponse>
+    readonly search: TOpenAiCodexSearch
 
     private readonly store: IAuthStore
     private readonly oauth: OpenAiOAuth
@@ -134,6 +138,19 @@ export class OpenAiAuth implements IOpenAiAuth {
         })
         this.fetchModels = (signal) => this.trackOperation(() => (
             codexModelsFetch(this.operationSignal(signal))
+        ))
+        const codexSearch = createOpenAiCodexSearch({
+            credentials: this,
+            fetch: rawFetch,
+            signal: this.lifetime.signal,
+        })
+        this.search = (request, searchOptions) => this.trackOperation(() => (
+            codexSearch(request, {
+                signal: this.operationSignal(searchOptions?.signal),
+                ...(searchOptions?.expectedAccountId === undefined
+                    ? {}
+                    : { expectedAccountId: searchOptions.expectedAccountId }),
+            })
         ))
 
         if (options.signal) {

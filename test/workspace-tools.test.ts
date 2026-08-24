@@ -554,8 +554,10 @@ function context(
   signal: AbortSignal = new AbortController().signal,
 ): IAgentToolExecutionContext {
   return {
+    sessionId: "session-workspace-tool",
     toolCallId: "call-workspace-tool",
     runId: "run-workspace-tool",
+    messages: [],
     signal,
   }
 }

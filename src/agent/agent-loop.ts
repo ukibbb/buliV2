@@ -34,6 +34,7 @@ interface IRunAgentLoopOptions {
     readonly prompt: IUserMessage
     readonly model: IAgentModel
     readonly modelProfile?: IModelProfile
+    readonly providerAccountId?: string
     readonly tools: readonly IAgentTool[]
     readonly reasoningEffort: TReasoningEffort
     readonly signal: AbortSignal
@@ -68,6 +69,7 @@ export async function runAgentLoop(
     const activeTools = [...toolsByName.values()]
     const messages = structuredClone([...options.messages, options.prompt])
     const newMessages: TAgentMessage[] = [structuredClone(options.prompt)]
+    let providerAccountId = options.providerAccountId
 
     await options.emit({ type: "agent_start", runId: options.runId })
     await options.emit({ type: "turn_start", runId: options.runId, index: 0 })
@@ -133,6 +135,9 @@ export async function runAgentLoop(
                 : { modelProfile: options.modelProfile }),
             tools: activeTools,
             reasoningEffort: options.reasoningEffort,
+            reportProviderAccountId: (accountId) => {
+                providerAccountId = accountId
+            },
             signal: options.signal,
             emit: options.emit,
             now,
@@ -170,6 +175,13 @@ export async function runAgentLoop(
             {
                 sessionId: options.sessionId,
                 runId: options.runId,
+                ...(options.modelProfile === undefined
+                    ? {}
+                    : { modelProfile: options.modelProfile }),
+                ...(providerAccountId === undefined
+                    ? {}
+                    : { providerAccountId }),
+                messages,
                 signal: options.signal,
                 emit: options.emit,
                 ...(options.requestApproval === undefined

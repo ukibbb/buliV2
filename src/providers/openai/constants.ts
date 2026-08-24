@@ -17,6 +17,8 @@ export const OPENAI_CODEX_MODELS_URL =
     `${OPENAI_CODEX_BASE_URL}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`
 export const OPENAI_CODEX_RESPONSES_URL =
     "https://chatgpt.com/backend-api/codex/responses"
+export const OPENAI_CODEX_SEARCH_URL =
+    "https://chatgpt.com/backend-api/codex/alpha/search"
 export const OPENAI_OAUTH_DUMMY_API_KEY = "buli-oauth-dummy-key"
 export const MODELS_DEV_API_URL = "https://models.dev/api.json"
 export const OPENAI_MODEL_CATALOG_TTL_MS = 5 * 60 * 1000

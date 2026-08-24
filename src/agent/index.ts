@@ -1,13 +1,6 @@
 /** Public agent feature API used by sessions, adapters and application composition. */
 export { Agent } from "@/agent/agent"
 export { systemPrompt } from "@/agent/system-prompt"
-export {
-    PATCH_HANDOFF_CONFIRMATION_QUESTION,
-    PATCH_HANDOFF_TOOL_NAME,
-    buildAgentTurnSystemPrompt,
-    createAgentTurnAuthorization,
-    resolveAgentTurnPolicy,
-} from "@/agent/turn-policy"
 export type {
     IAgentEvent,
     TAgentCriticalEventSink,
@@ -52,11 +45,6 @@ export type {
     TToolApprovalKind,
     TToolExecutionOutcome,
 } from "@/agent/tool"
-export type {
-    IAgentTurnAuthorization,
-    IAgentTurnPolicy,
-    TAgentTurnIntent,
-} from "@/agent/turn-policy"
 export type {
     ICommandToolApprovalDraft,
     ICommandToolApprovalRequest,

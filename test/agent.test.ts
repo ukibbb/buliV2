@@ -6,13 +6,10 @@ import {
   type IAgentModel,
   type IAgentModelRequest,
   type IAgentTool,
-  PATCH_HANDOFF_CONFIRMATION_QUESTION,
   type TToolApprovalDecision,
   type TToolApprovalDraft,
   type TToolApprovalRequest,
 } from "@/agent"
-import { createRequestPatchHandoffTool } from "@/tools"
-import { confirmedPatchHandoffMessages } from "./support/patch-handoff"
 
 test("Agent.prompt returns a synchronous handle and Agent owns live state", async () => {
   const agent = new Agent({
@@ -595,7 +592,7 @@ test("Agent keeps invalid patch decisions and mismatched IDs pending", async () 
   expect(agent.state.pendingToolApproval).toBeUndefined()
 })
 
-test("Agent turns a recorded text handoff into one patch authorization", async () => {
+test("Agent handles sequential patch approvals and keeps the tool available", async () => {
   const requests: IAgentModelRequest[] = []
   const decisions: TToolApprovalDecision[] = []
   const patchTool: IAgentTool = {
@@ -621,28 +618,13 @@ test("Agent turns a recorded text handoff into one patch authorization", async (
       if (index === 0) {
         yield {
           type: "tool-call",
-          toolCallId: "handoff-call",
-          toolName: "request_patch_handoff",
-          input: { scope: "Implement parser changes" },
+          toolCallId: "first-patch-call",
+          toolName: patchTool.name,
+          input: {},
         }
-        yield { type: "finish", reason: "tool-calls" }
-        return
-      }
-      if (index === 1) {
-        yield { type: "text-start", id: "handoff-question" }
-        yield {
-          type: "text-delta",
-          id: "handoff-question",
-          delta: PATCH_HANDOFF_CONFIRMATION_QUESTION,
-        }
-        yield { type: "text-end", id: "handoff-question" }
-        yield { type: "finish", reason: "stop" }
-        return
-      }
-      if (index === 2) {
         yield {
           type: "tool-call",
-          toolCallId: "confirmed-patch-call",
+          toolCallId: "second-patch-call",
           toolName: patchTool.name,
           input: {},
         }
@@ -659,40 +641,44 @@ test("Agent turns a recorded text handoff into one patch authorization", async (
       model,
       reasoningEffort: "medium",
     }),
-    tools: [createRequestPatchHandoffTool(), patchTool],
+    tools: [patchTool],
   })
-  const requested = Promise.withResolvers<TToolApprovalRequest>()
+  const firstRequested = Promise.withResolvers<TToolApprovalRequest>()
+  const secondRequested = Promise.withResolvers<TToolApprovalRequest>()
+  const requested = [firstRequested, secondRequested] as const
+  let requestIndex = 0
   agent.subscribe((event) => {
     if (event.type === "tool_approval_requested") {
-      requested.resolve(event.request)
+      requested[requestIndex]?.resolve(event.request)
+      requestIndex += 1
     }
   })
 
-  const handoffRun = agent.prompt("Przejmij proszę implementację parsera")
-  await handoffRun.settled
+  const patchRun = agent.prompt("Przejmij proszę implementację parsera")
+  const firstApproval = await firstRequested.promise
 
   expect(requests[0]?.tools.map((tool) => tool.name)).toEqual([
-    "request_patch_handoff",
+    "apply_patch",
   ])
-  expect(requests[1]?.tools).toEqual([])
+  expect(firstApproval.toolCallId).toBe("first-patch-call")
+  agent.resolveToolApproval(firstApproval.id, "reject")
+
+  const secondApproval = await secondRequested.promise
+  expect(secondApproval.toolCallId).toBe("second-patch-call")
+  agent.resolveToolApproval(secondApproval.id, "reject")
+  await patchRun.settled
+
+  expect(decisions).toEqual(["reject", "reject"])
+  expect(requests[1]?.tools.map((tool) => tool.name)).toEqual([
+    "apply_patch",
+  ])
   expect(agent.state.messages.map((message) => message.role)).toEqual([
     "user",
     "assistant",
     "toolResult",
+    "toolResult",
     "assistant",
   ])
-
-  const patchRun = agent.prompt("tak")
-  const approval = await requested.promise
-
-  expect(requests[2]?.tools.map((tool) => tool.name)).toEqual([
-    "apply_patch",
-  ])
-  agent.resolveToolApproval(approval.id, "reject")
-  await patchRun.settled
-
-  expect(decisions).toEqual(["reject"])
-  expect(requests[3]?.tools).toEqual([])
 })
 
 test("Agent rejects unknown command decisions and delivers copy", async () => {
@@ -847,9 +833,6 @@ function approvalAgent(
       reasoningEffort: "medium",
     }),
     tools: [tool],
-    initialMessages: draft.kind === "patch"
-      ? confirmedPatchHandoffMessages()
-      : [],
   })
 }
 

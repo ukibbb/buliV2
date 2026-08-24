@@ -24,11 +24,6 @@ import {
     executeToolCallsSequentially,
     indexAgentTools,
 } from "@/agent/tool-executor"
-import {
-    buildAgentTurnSystemPrompt,
-    createAgentTurnAuthorization,
-    type IAgentTurnAuthorization,
-} from "@/agent/turn-policy"
 
 interface IRunAgentLoopOptions {
     readonly sessionId: string
@@ -37,7 +32,6 @@ interface IRunAgentLoopOptions {
     readonly messages: readonly TAgentMessage[]
     readonly contextSummary?: string
     readonly prompt: IUserMessage
-    readonly initialTurnAuthorization?: IAgentTurnAuthorization
     readonly model: IAgentModel
     readonly modelProfile?: IModelProfile
     readonly tools: readonly IAgentTool[]
@@ -71,10 +65,9 @@ export async function runAgentLoop(
     const generateId = options.generateId ?? (() => crypto.randomUUID())
     // One registry keeps model descriptors and local executors in sync.
     const toolsByName = indexAgentTools(options.tools)
+    const activeTools = [...toolsByName.values()]
     const messages = structuredClone([...options.messages, options.prompt])
     const newMessages: TAgentMessage[] = [structuredClone(options.prompt)]
-    let turnAuthorization = options.initialTurnAuthorization
-        ?? createAgentTurnAuthorization(options.prompt, options.messages)
 
     await options.emit({ type: "agent_start", runId: options.runId })
     await options.emit({ type: "turn_start", runId: options.runId, index: 0 })
@@ -91,9 +84,6 @@ export async function runAgentLoop(
             ? options.takeFollowUpMessage?.()
             : undefined
         const queuedMessage = steeringMessage ?? followUpMessage
-        const queuedAuthorization = queuedMessage
-            ? createAgentTurnAuthorization(queuedMessage, messages)
-            : undefined
         if (iteration > 0 && !continueForTools && !queuedMessage) {
             options.closeQueuedInput?.()
             return finishRun(
@@ -121,7 +111,6 @@ export async function runAgentLoop(
                 )
                 messages.push(queuedMessage)
                 newMessages.push(queuedMessage)
-                if (queuedAuthorization) turnAuthorization = queuedAuthorization
             }
         } catch (error) {
             if (queuedMessage) {
@@ -130,17 +119,10 @@ export async function runAgentLoop(
             throw error
         }
 
-        const activeTools = [...toolsByName.values()].filter(
-            (tool) => turnAuthorization.allowsTool(tool),
-        )
         const assistant = await streamModelTurn({
             sessionId: options.sessionId,
             runId: options.runId,
-            systemPrompt: buildAgentTurnSystemPrompt(
-                options.systemPrompt,
-                turnAuthorization,
-                activeTools,
-            ),
+            systemPrompt: options.systemPrompt,
             ...(options.contextSummary === undefined
                 ? {}
                 : { contextSummary: options.contextSummary }),
@@ -193,7 +175,6 @@ export async function runAgentLoop(
                 ...(options.requestApproval === undefined
                     ? {}
                     : { requestApproval: options.requestApproval }),
-                authorization: turnAuthorization,
                 now,
                 generateId,
             },

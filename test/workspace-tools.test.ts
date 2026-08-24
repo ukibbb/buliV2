@@ -25,7 +25,6 @@ test("registers workspace tools in model-facing order", () => {
     "read",
     "glob",
     "grep",
-    "request_patch_handoff",
     "apply_patch",
     "bash",
   ])

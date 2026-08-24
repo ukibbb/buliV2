@@ -1,6 +1,5 @@
 import type { IAgentTool } from "@/agent"
 import { createBashTool } from "@/tools/command/bash-tool"
-import { createRequestPatchHandoffTool } from "@/tools/handoff/request-patch-handoff-tool"
 import { createWorkspacePathResolver } from "@/tools/paths"
 import { createApplyPatchTool } from "@/tools/patch/apply-patch-tool"
 import { createReadTool } from "@/tools/read/read-tool"
@@ -37,7 +36,6 @@ export function createWorkspaceTools(
         createReadTool(resolveWorkspacePath),
         createGlobTool(resolveWorkspacePath, resolveRipgrepExecutable),
         createGrepTool(resolveWorkspacePath, resolveRipgrepExecutable),
-        createRequestPatchHandoffTool(),
         createApplyPatchTool(workspaceRoot),
         createBashTool(workspaceRoot),
     ]

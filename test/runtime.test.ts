@@ -289,10 +289,7 @@ test("application runtime resolves fixed prompt and tools from an agent", async 
   await submission.accepted
   await submission.settled
 
-  expect(requests[0]?.systemPrompt).toStartWith("Review system\n\n")
-  expect(requests[0]?.systemPrompt).toContain(
-    "Faktycznie aktywne narzędzia w tym turnie: review.",
-  )
+  expect(requests[0]?.systemPrompt).toBe("Review system")
   expect(requests[0]?.tools).toEqual([{
     name: "review",
     description: "Review code",

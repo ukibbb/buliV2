@@ -5,17 +5,18 @@ import type {
     IToolResultMessage,
     TToolExecutionOutcome,
 } from "@/agent"
-import { PATCH_HANDOFF_TOOL_NAME } from "@/agent"
 import { theme } from "@/terminal/theme"
 
 const TOOL_LINE_MAX_CHARACTERS = 160
+// Persisted sessions can still contain calls to the removed handoff tool.
+const LEGACY_PATCH_HANDOFF_TOOL_NAME = "request_patch_handoff"
 
 /** Presents a compact status line for an assistant tool call. */
 export function ToolCallLine(props: {
     readonly call: IToolCallContent
     readonly running: boolean
 }): ReactNode {
-    if (props.call.toolName === PATCH_HANDOFF_TOOL_NAME) return null
+    if (props.call.toolName === LEGACY_PATCH_HANDOFF_TOOL_NAME) return null
     const status = props.running ? "running" : "call"
     const line = compactText(
         `[${status}] ${props.call.toolName} ${JSON.stringify(props.call.input)}`,
@@ -26,7 +27,7 @@ export function ToolCallLine(props: {
 
 /** Presents a compact status line for a tool execution result. */
 export function ToolResultLine(props: { readonly message: IToolResultMessage }): ReactNode {
-    if (props.message.toolName === PATCH_HANDOFF_TOOL_NAME) return null
+    if (props.message.toolName === LEGACY_PATCH_HANDOFF_TOOL_NAME) return null
     const statuses: Record<TToolExecutionOutcome, string> = {
         completed: "done",
         rejected: "rejected",

@@ -39,13 +39,14 @@ test("prints formatted help instead of the raw yargs instance", async () => {
   expect(output).toContain("buli");
   expect(output).toContain("buli login");
   expect(output).toContain("buli logout");
+  expect(output).toContain("buli update");
   expect(output).toContain("--help");
   expect(output).not.toContain("buli tui");
   expect(output).not.toContain("tui [project]");
   expect(output).not.toContain("YargsInstance");
 });
 
-test.each(["login", "logout"])(
+test.each(["login", "logout", "update"])(
   "%s help exits without starting OpenTUI",
   async (command) => {
     const helpProcess = Bun.spawn({

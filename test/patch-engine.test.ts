@@ -157,7 +157,7 @@ test("enforces patch, operation, aggregate-content, and rendered-diff limits", a
   }
 })
 
-test("rejects malformed envelopes, hunks, numeric anchors, and no-op chunks", async () => {
+test("rejects malformed envelopes, empty hunks, and numeric anchors", async () => {
   const workspace = await temporaryWorkspace()
   try {
     await writeFile(join(workspace, "file.txt"), "old\n")
@@ -166,9 +166,9 @@ test("rejects malformed envelopes, hunks, numeric anchors, and no-op chunks", as
       "*** Begin Patch\n*** Add File: added.txt\n+x",
       patchText("*** Add File: added.txt"),
       patchText("*** Update File: file.txt"),
+      patchText("*** Update File: file.txt\n@@"),
+      patchText("*** Update File: file.txt\n@@\n@@\n-old\n+new"),
       patchText("*** Update File: file.txt\n@@ -1,1 +1,1 @@\n-old\n+new"),
-      patchText("*** Update File: file.txt\n@@\n old"),
-      patchText("*** Update File: file.txt\n@@\n-old\n+old"),
       patchText(""),
     ]
 
@@ -180,6 +180,82 @@ test("rejects malformed envelopes, hunks, numeric anchors, and no-op chunks", as
       })).rejects.toThrow()
     }
     expect(await readdir(workspace)).toEqual(["file.txt"])
+  } finally {
+    await removeWorkspace(workspace)
+  }
+})
+
+test("allows no-op chunks when the complete update changes the file", async () => {
+  const workspace = await temporaryWorkspace()
+  try {
+    const file = join(workspace, "file.txt")
+    await writeFile(file, "alpha\nbeta\ngamma\n")
+
+    const proposal = await plan(workspace, `*** Update File: file.txt
+@@
+ alpha
+@@
+-beta
++beta
+@@
+-gamma
++GAMMA`)
+
+    expect(proposal.preview.summary).toMatchObject({
+      filesChanged: 1,
+      additions: 1,
+      deletions: 1,
+    })
+    await proposal.applyOnce(signal())
+    expect(await readFile(file, "utf8")).toBe("alpha\nbeta\nGAMMA\n")
+  } finally {
+    await removeWorkspace(workspace)
+  }
+})
+
+test("rejects an update whose complete result is unchanged", async () => {
+  const workspace = await temporaryWorkspace()
+  try {
+    const file = join(workspace, "file.txt")
+    await writeFile(file, "alpha\n")
+
+    await expect(plan(workspace, `*** Update File: file.txt
+@@
+ alpha`)).rejects.toThrow(/produces no changes/i)
+    await expect(plan(workspace, `*** Update File: file.txt
+@@
+-alpha
++alpha`)).rejects.toThrow(/produces no changes/i)
+    expect(await readFile(file, "utf8")).toBe("alpha\n")
+  } finally {
+    await removeWorkspace(workspace)
+  }
+})
+
+test("allows moving a file without changing its content", async () => {
+  const workspace = await temporaryWorkspace()
+  try {
+    const source = join(workspace, "source.txt")
+    const destination = join(workspace, "nested", "destination.txt")
+    await writeFile(source, "unchanged\n")
+
+    const proposal = await plan(workspace, `*** Update File: source.txt
+*** Move to: nested/destination.txt
+@@
+ unchanged`)
+
+    expect(proposal.preview.affectedPaths).toEqual([
+      "source.txt",
+      "nested/destination.txt",
+    ])
+    expect(proposal.preview.summary).toMatchObject({
+      filesChanged: 1,
+      additions: 0,
+      deletions: 0,
+    })
+    await proposal.applyOnce(signal())
+    expect(await pathExists(source)).toBe(false)
+    expect(await readFile(destination, "utf8")).toBe("unchanged\n")
   } finally {
     await removeWorkspace(workspace)
   }

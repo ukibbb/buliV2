@@ -8,8 +8,8 @@ import {
 } from "@/tools/command/process-runner"
 import { createWorkspacePathResolver } from "@/tools/paths"
 
-const DEFAULT_TIMEOUT_SECONDS = 120
-const MAX_TIMEOUT_SECONDS = 600
+const DEFAULT_TIMEOUT_SECONDS = 600
+const MAX_TIMEOUT_SECONDS = 3_600
 const OUTPUT_BYTES = 50 * 1024
 const INPUT_KEYS = new Set([
     "command",
@@ -68,7 +68,7 @@ export function createBashTool(workspaceRoot: string): IAgentTool {
                     minimum: 1,
                     maximum: MAX_TIMEOUT_SECONDS,
                     default: DEFAULT_TIMEOUT_SECONDS,
-                    description: "Maximum execution time in seconds",
+                    description: `Maximum execution time in seconds; defaults to ${DEFAULT_TIMEOUT_SECONDS} and cannot exceed ${MAX_TIMEOUT_SECONDS}`,
                 },
             },
             required: [
@@ -214,7 +214,8 @@ function commandSummary(
     timeoutSeconds: number,
 ): string {
     if (result.timedOut) {
-        return `Command timed out after ${timeoutSeconds} seconds; inspect side effects before retrying`
+        return `Command timed out after ${timeoutSeconds} seconds; inspect side effects before `
+            + `retrying with a larger timeout of at most ${MAX_TIMEOUT_SECONDS} seconds`
     }
     if (result.cleanupWarning) {
         return `Command exited with code ${result.exitCode}; process cleanup was not confirmed`

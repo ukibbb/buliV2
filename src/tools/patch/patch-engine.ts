@@ -249,7 +249,7 @@ export async function prepareWorkspacePatch(
         }
 
         const content = applyUpdateChunks(source, hunk.chunks, hunk.path)
-        if (content.equals(source.bytes)) {
+        if (hunk.movePath === null && content.equals(source.bytes)) {
             throw new Error(`Update produces no changes: ${quote(hunk.path)}`)
         }
         assertTextFileBytes(content, hunk.movePath ?? hunk.path)
@@ -496,16 +496,6 @@ function isHunkHeader(line: string): boolean {
 function finishChunk(chunk: IMutableChunk): IParsedUpdateChunk {
     if (chunk.lines.length === 0) {
         throw patchLineError(chunk.lineNumber - 1, "Update chunk cannot be empty")
-    }
-    const oldLines = chunk.lines
-        .filter(({ kind }) => kind !== "add")
-        .map(({ text }) => text)
-    const newLines = chunk.lines
-        .filter(({ kind }) => kind !== "remove")
-        .map(({ text }) => text)
-    const hasEditMarkers = chunk.lines.some(({ kind }) => kind !== "context")
-    if (!hasEditMarkers || arraysEqual(oldLines, newLines)) {
-        throw patchLineError(chunk.lineNumber - 1, "Update chunk is a no-op")
     }
     return {
         anchor: chunk.anchor,
@@ -1630,11 +1620,6 @@ function isWellFormed(value: string): boolean {
         } else if (code >= 0xdc00 && code <= 0xdfff) return false
     }
     return true
-}
-
-function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
-    return left.length === right.length
-        && left.every((value, index) => value === right[index])
 }
 
 function deepFreeze(value: unknown): void {

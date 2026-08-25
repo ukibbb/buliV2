@@ -49,6 +49,20 @@ function AssistantCard(props: {
                     />
                 }
 
+                if (content.type === "reasoning") {
+                    const hasSummary = content.text.trim().length > 0
+                    if (!hasSummary && !props.streaming) return null
+
+                    return <text
+                        key={`${props.message.id}-reasoning-${index}`}
+                        fg={props.streaming ? theme.amber : theme.textMuted}
+                        wrapMode="word"
+                        truncate={false}
+                    >
+                        {hasSummary ? `Reasoning: ${content.text}` : "Reasoning..."}
+                    </text>
+                }
+
                 if (content.type === "toolCall") {
                     return <ToolCallLine
                         key={content.toolCallId}

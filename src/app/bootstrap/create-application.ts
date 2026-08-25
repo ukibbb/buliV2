@@ -196,6 +196,12 @@ export async function createBuliApplication(
         }
         if (options.signal.aborted) disposeOnAbort()
 
+        if (options.model === undefined && !options.signal.aborted) {
+            // Context-window metadata is an enhancement; auth/catalog failures must
+            // not prevent the application from starting with its fallback model.
+            void applicationRuntime.refreshModels(options.signal).catch(() => { })
+        }
+
         return { runtime: applicationRuntime, authentication, dispose }
     } catch (startupError) {
         const rollbackResults = await Promise.allSettled([

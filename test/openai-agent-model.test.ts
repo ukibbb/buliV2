@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test"
 import { realpathSync } from "node:fs"
 
-import type {
-  IAgentModelEvent,
-  IAgentToolDescriptor,
-  TAgentMessage,
+import {
+    isModelContextOverflowError,
+    type IAgentModelEvent,
+    type IAgentToolDescriptor,
+    type TAgentMessage,
 } from "@/agent"
 import { systemPrompt } from "@/agent/system-prompt"
 import type {
@@ -107,7 +108,7 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
   expect(body.model).toBe("gpt-5.6-sol")
   expect(body.store).toBe(false)
   expect(body.stream).toBe(true)
-  expect(body.reasoning).toMatchObject({ effort: "medium" })
+  expect(body.reasoning).toMatchObject({ effort: "medium", summary: "detailed" })
   expect(body.instructions).toContain("pair programming")
   expect(body.instructions).toContain(
     `Aktualny katalog roboczy i root workspace: ${WORKSPACE_ROOT}.`,
@@ -462,6 +463,76 @@ test("sends projected context summaries and compaction output limits", async () 
   })
 })
 
+test("normalizes cache and reasoning usage without double-counting totals", async () => {
+  const model = createModel(async () => streamResponse({
+    input_tokens: 100,
+    input_tokens_details: {
+      cached_tokens: 40,
+      cache_write_tokens: 10,
+    },
+    output_tokens: 25,
+    output_tokens_details: { reasoning_tokens: 15 },
+  }))
+
+  const events = await collectEvents(model, [userMessage("Usage")], [])
+
+  expect(events.at(-1)).toEqual({
+    type: "finish",
+    reason: "stop",
+    usage: {
+      inputTokens: 100,
+      outputTokens: 25,
+      totalTokens: 125,
+      cacheReadTokens: 40,
+      cacheWriteTokens: 10,
+      reasoningTokens: 15,
+    },
+  })
+})
+
+test("classifies only explicit OpenAI context-limit failures", async () => {
+  const contextModel = createModel(async () => new Response(JSON.stringify({
+    error: {
+      message: "This model's maximum context length is 200000 tokens",
+      type: "invalid_request_error",
+      code: "context_length_exceeded",
+    },
+  }), {
+    status: 400,
+    headers: { "content-type": "application/json" },
+  }))
+  const genericModel = createModel(async () => new Response(JSON.stringify({
+    error: {
+      message: "Invalid tool schema",
+      type: "invalid_request_error",
+      code: "invalid_tool_schema",
+    },
+  }), {
+    status: 400,
+    headers: { "content-type": "application/json" },
+  }))
+
+  const contextEvents = await collectEvents(
+    contextModel,
+    [userMessage("Too large")],
+    [],
+  )
+  const genericEvents = await collectEvents(
+    genericModel,
+    [userMessage("Invalid")],
+    [],
+  )
+
+  const contextError = contextEvents.find((event) => event.type === "error")
+  const genericError = genericEvents.find((event) => event.type === "error")
+  expect(contextError?.type).toBe("error")
+  expect(contextError?.type === "error"
+    && isModelContextOverflowError(contextError.error)).toBe(true)
+  expect(genericError?.type).toBe("error")
+  expect(genericError?.type === "error"
+    && isModelContextOverflowError(genericError.error)).toBe(false)
+})
+
 test("rejects a discovered model after the authenticated account changes", async () => {
   let networkCalls = 0
   const model = new OpenAiAgentModel({
@@ -657,7 +728,12 @@ function fetchImplementation(
   return Object.assign(run, { preconnect: globalThis.fetch.preconnect })
 }
 
-function streamResponse(): Response {
+function streamResponse(usage: Record<string, unknown> = {
+  input_tokens: 1,
+  input_tokens_details: null,
+  output_tokens: 1,
+  output_tokens_details: null,
+}): Response {
   return eventStream([
     {
       type: "response.created",
@@ -688,12 +764,7 @@ function streamResponse(): Response {
       type: "response.completed",
       response: {
         incomplete_details: null,
-        usage: {
-          input_tokens: 1,
-          input_tokens_details: null,
-          output_tokens: 1,
-          output_tokens_details: null,
-        },
+        usage,
         service_tier: null,
       },
     },

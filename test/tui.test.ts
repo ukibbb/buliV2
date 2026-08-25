@@ -149,6 +149,7 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
     pendingSteeringMessages: [],
     pendingFollowUpMessages: [],
     isRunning: false,
+    isCompacting: false,
     pendingToolCallIds: [],
   }
   let runCount = 0
@@ -276,6 +277,7 @@ function approvalSessionSnapshot(
     pendingFollowUpMessages: [],
     pendingToolApproval,
     isRunning: true,
+    isCompacting: false,
     activeRunId: "run-1",
     pendingToolCallIds: [pendingToolApproval.toolCallId],
   }
@@ -625,6 +627,7 @@ test("submits textarea input as steering while the session is running", async ()
       pendingSteeringMessages: [],
       pendingFollowUpMessages: [],
       isRunning: true,
+      isCompacting: false,
       activeRunId: "run-1",
       pendingToolCallIds: [],
     },
@@ -656,6 +659,53 @@ test("submits textarea input as steering while the session is running", async ()
   }
 })
 
+test("retains textarea input and allows Escape while compacting", async () => {
+  const fake = fakeApplication({
+    sessionSnapshot: {
+      messages: [],
+      pendingSteeringMessages: [],
+      pendingFollowUpMessages: [],
+      isRunning: false,
+      isCompacting: true,
+      pendingToolCallIds: [],
+    },
+  })
+  const setup = await testRender(
+    buliElement(fake.application, "default"),
+    { width: 80, height: 24 },
+  )
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+      await setup.mockInput.typeText("Wait for compaction")
+      setup.mockInput.pressEnter()
+      await Promise.resolve()
+      await setup.renderOnce()
+    })
+
+    expect(fake.prompts).toEqual([])
+    expect(fake.steering).toEqual([])
+    expect(textareaRenderable(setup.renderer.root).plainText).toBe(
+      "Wait for compaction",
+    )
+    expect(setup.captureCharFrame()).toContain("Cannot submit input while")
+    expect(setup.captureCharFrame()).toContain("Compacting context")
+
+    const escape = parseKeypress("\u001b")
+    if (!escape) throw new Error("Expected Escape to parse as a keypress")
+    await act(async () => {
+      setup.renderer.keyInput.processParsedKey(escape)
+      await setup.renderOnce()
+    })
+    expect(fake.aborted).toEqual(["default"])
+  } finally {
+    act(() => {
+      setup.renderer.destroy()
+    })
+  }
+})
+
 test("submits Alt+Enter input as follow-up while the session is running", async () => {
   const fake = fakeApplication({
     sessionSnapshot: {
@@ -663,6 +713,7 @@ test("submits Alt+Enter input as follow-up while the session is running", async 
       pendingSteeringMessages: [],
       pendingFollowUpMessages: [],
       isRunning: true,
+      isCompacting: false,
       activeRunId: "run-1",
       pendingToolCallIds: [],
     },
@@ -702,6 +753,7 @@ test("retains textarea input when a finishing run rejects steering", async () =>
       pendingSteeringMessages: [],
       pendingFollowUpMessages: [],
       isRunning: true,
+      isCompacting: false,
       activeRunId: "run-1",
       pendingToolCallIds: [],
     },
@@ -759,6 +811,7 @@ test("renders running and failed session status", async () => {
         createdAt: 2,
       }],
       isRunning: true,
+      isCompacting: false,
       activeRunId: "run-1",
       pendingToolCallIds: [],
     },
@@ -794,6 +847,7 @@ test("renders running and failed session status", async () => {
         pendingSteeringMessages: [],
         pendingFollowUpMessages: [],
         isRunning: false,
+        isCompacting: false,
         pendingToolCallIds: [],
         lastRunReason: "error",
         errorMessage: "Provider request failed",
@@ -1216,6 +1270,7 @@ test("focuses approval and ignores printable keys and chat submission", async ()
         pendingSteeringMessages: [],
         pendingFollowUpMessages: [],
         isRunning: true,
+        isCompacting: false,
         activeRunId: "run-1",
         pendingToolCallIds: [],
       })

@@ -9,6 +9,8 @@ test("keeps errors readable beside a long model name", async () => {
   const setup = await testRender(
     <ChatStatus
       isRunning={false}
+      isCompacting={false}
+      contextUsage={undefined}
       pendingSteeringMessages={[]}
       pendingFollowUpMessages={[]}
       pendingToolApproval={undefined}
@@ -30,6 +32,46 @@ test("keeps errors readable beside a long model name", async () => {
     expect(frame).toContain("Critical")
     expect(frame).toContain("provider")
     expect(frame).toContain("failure")
+  } finally {
+    act(() => {
+      setup.renderer.destroy()
+    })
+  }
+})
+
+test("renders compaction lifecycle and estimated context usage", async () => {
+  const setup = await testRender(
+    <ChatStatus
+      isRunning
+      isCompacting
+      contextUsage={{
+        estimatedInputTokens: 142_000,
+        contextWindowTokens: 200_000,
+        compactionThresholdTokens: 160_000,
+        remainingTokens: 58_000,
+        usageRatio: 0.71,
+        shouldCompact: false,
+      }}
+      pendingSteeringMessages={[]}
+      pendingFollowUpMessages={[]}
+      pendingToolApproval={undefined}
+      lastRunReason={undefined}
+      errorMessage={undefined}
+      inputError={null}
+      selectedModelName="GPT-5.6 Sol"
+      reasoningEffort="medium"
+    />,
+    { width: 100, height: 10 },
+  )
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+    })
+
+    const frame = setup.captureCharFrame()
+    expect(frame).toContain("Compacting context | Esc stop")
+    expect(frame).toContain("ctx ~142k/200k (71%)")
   } finally {
     act(() => {
       setup.renderer.destroy()

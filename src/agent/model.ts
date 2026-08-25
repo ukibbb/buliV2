@@ -6,6 +6,20 @@ import type {
 } from "@/agent/model-values"
 import type { IAgentToolDescriptor } from "@/agent/tool"
 
+/** Provider-neutral signal that a model request exceeded its context window. */
+export class ModelContextOverflowError extends Error {
+    constructor(message: string, options?: ErrorOptions) {
+        super(message, options)
+        this.name = "ModelContextOverflowError"
+    }
+}
+
+export function isModelContextOverflowError(
+    value: unknown,
+): value is ModelContextOverflowError {
+    return value instanceof ModelContextOverflowError
+}
+
 /** Complete provider-neutral input for one model stream request. */
 export interface IAgentModelRequest {
     readonly sessionId: string

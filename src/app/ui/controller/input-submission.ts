@@ -66,6 +66,16 @@ export class BuliInputSubmission {
             menu: null,
             inputError: null,
         })
+        const activeSessionId = this.activeSessionId()
+        const activeSession = activeSessionId
+            ? this.application.openSession(activeSessionId).getSnapshot()
+            : undefined
+        if (activeSession?.isCompacting) {
+            this.store.setInputError(
+                new Error("Cannot submit input while compacting the session"),
+            )
+            return "retained"
+        }
 
         const invocation = text.match(/^\/([^\s/]+)(?:\s+([\s\S]*))?$/)
         const name = invocation?.[1]
@@ -111,11 +121,6 @@ export class BuliInputSubmission {
         }
 
         try {
-            const activeSessionId = this.activeSessionId()
-            const activeSession = activeSessionId
-                ? this.application.openSession(activeSessionId).getSnapshot()
-                : undefined
-
             if (delivery === "followUp") {
                 if (!activeSessionId || !activeSession?.isRunning) {
                     throw new Error("Follow-up requires an active run")

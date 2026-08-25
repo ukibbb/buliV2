@@ -1,11 +1,13 @@
 import { createOpenAI } from "@ai-sdk/openai"
 import {
+    APICallError,
     isStepCount,
     jsonSchema,
     streamText,
     tool,
     type AssistantContent,
     type JSONSchema7,
+    type LanguageModelUsage,
     type ModelMessage,
     type ToolContent,
     type ToolSet,
@@ -18,6 +20,10 @@ import type {
     IAgentToolDescriptor,
     IModelUsage,
     TAgentMessage,
+} from "@/agent"
+import {
+    isModelContextOverflowError,
+    ModelContextOverflowError,
 } from "@/agent"
 import {
     OPENAI_CODEX_BASE_URL,
@@ -121,18 +127,27 @@ export class OpenAiAgentModel implements IAgentModel {
                     // returned batch sequentially; benchmark before adding concurrency.
                     parallelToolCalls: true,
                     reasoningEffort: request.reasoningEffort,
+                    ...(request.reasoningEffort === "none"
+                        ? {}
+                        : { reasoningSummary: "detailed" as const }),
                 },
             },
             stopWhen: isStepCount(1),
             maxRetries: 0,
+            // Errors are normalized below and surfaced through Buli's stream.
+            onError: () => { },
             ...(request.maxOutputTokens === undefined
                 ? {}
                 : { maxOutputTokens: request.maxOutputTokens }),
         })
 
-        for await (const event of result.stream) {
-            const modelEvent = toAgentModelEvent(event)
-            if (modelEvent) yield modelEvent
+        try {
+            for await (const event of result.stream) {
+                const modelEvent = toAgentModelEvent(event)
+                if (modelEvent) yield modelEvent
+            }
+        } catch (error) {
+            throw normalizeOpenAiModelError(error)
         }
     }
 }
@@ -244,19 +259,13 @@ function toAgentModelEvent(
                 ...(event.reason ? { reason: event.reason } : {}),
             }
         case "error":
-            return { type: "error", error: event.error }
+            return { type: "error", error: normalizeOpenAiModelError(event.error) }
         default:
             return undefined
     }
 }
 
-function toModelUsage(usage: {
-    readonly inputTokens?: number | undefined
-    readonly outputTokens?: number | undefined
-    readonly totalTokens?: number | undefined
-    readonly cachedInputTokens?: number | undefined
-    readonly reasoningTokens?: number | undefined
-}): IModelUsage | undefined {
+function toModelUsage(usage: LanguageModelUsage): IModelUsage | undefined {
     const result: IModelUsage = {
         ...(usage.inputTokens === undefined
             ? {}
@@ -267,14 +276,67 @@ function toModelUsage(usage: {
         ...(usage.totalTokens === undefined
             ? {}
             : { totalTokens: usage.totalTokens }),
-        ...(usage.cachedInputTokens === undefined
+        ...(!usage.inputTokenDetails.cacheReadTokens
             ? {}
-            : { cacheReadTokens: usage.cachedInputTokens }),
-        ...(usage.reasoningTokens === undefined
+            : { cacheReadTokens: usage.inputTokenDetails.cacheReadTokens }),
+        ...(!usage.inputTokenDetails.cacheWriteTokens
             ? {}
-            : { reasoningTokens: usage.reasoningTokens }),
+            : { cacheWriteTokens: usage.inputTokenDetails.cacheWriteTokens }),
+        ...(!usage.outputTokenDetails.reasoningTokens
+            ? {}
+            : { reasoningTokens: usage.outputTokenDetails.reasoningTokens }),
     }
     return Object.keys(result).length === 0 ? undefined : result
+}
+
+function normalizeOpenAiModelError(error: unknown): unknown {
+    if (isModelContextOverflowError(error) || !isOpenAiContextOverflow(error)) {
+        return error
+    }
+    const message = error instanceof Error
+        ? error.message
+        : "OpenAI model context window exceeded"
+    return new ModelContextOverflowError(message, { cause: error })
+}
+
+function isOpenAiContextOverflow(error: unknown): boolean {
+    const statusCode = APICallError.isInstance(error)
+        ? error.statusCode
+        : isRecord(error) && typeof error.statusCode === "number"
+            ? error.statusCode
+            : undefined
+    if (statusCode === 413) return true
+    if (statusCode !== 400) return false
+
+    const searchable = [
+        error instanceof Error ? error.message : undefined,
+        APICallError.isInstance(error) ? error.responseBody : undefined,
+        APICallError.isInstance(error) ? safeJson(error.data) : undefined,
+    ].filter((value): value is string => Boolean(value)).join(" ").toLowerCase()
+    return CONTEXT_OVERFLOW_PATTERNS.some((pattern) => pattern.test(searchable))
+}
+
+const CONTEXT_OVERFLOW_PATTERNS = [
+    /context[_ ]length[_ ]exceeded/,
+    /model_context_window_exceeded/,
+    /maximum context length/,
+    /exceeds the context window/,
+    /input is too long for requested model/,
+    /prompt is too long/,
+    /too many tokens/,
+]
+
+function safeJson(value: unknown): string | undefined {
+    if (value === undefined) return undefined
+    try {
+        return JSON.stringify(value)
+    } catch {
+        return undefined
+    }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
 function toRecord(value: unknown): Record<string, unknown> {

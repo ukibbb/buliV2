@@ -359,6 +359,10 @@ export class BuliApplicationRuntime implements IBuliApplication {
         this.snapshot = this.createSnapshot()
         // Utwórz nowy immutable snapshot widoczny dla UI.
 
+        for (const session of this.sessions.values()) {
+            session.refreshContextUsage()
+        }
+
         for (const listener of [...this.listeners]) listener()
         // Powiadom kopię listy subskrybentów o gotowym snapshotcie.
     }
@@ -408,6 +412,9 @@ export class BuliApplicationRuntime implements IBuliApplication {
         this.models = registrations
         this.selection = selection
         this.snapshot = snapshot
+        for (const session of this.sessions.values()) {
+            session.refreshContextUsage()
+        }
         for (const listener of [...this.listeners]) listener()
     }
 

@@ -111,6 +111,7 @@ export class BuliCommandMenu {
         if (!command) return false
 
         const context = this.commandContext()
+        assertCommandsAllowed(context)
         if (command.kind === "action") {
             await command.handler(args, context)
             return true
@@ -210,7 +211,9 @@ export class BuliCommandMenu {
         }
 
         try {
-            await command.select(selected.id, this.commandContext())
+            const context = this.commandContext()
+            assertCommandsAllowed(context)
+            await command.select(selected.id, context)
         } catch (error) {
             if (this.store.getSnapshot().menu === menu) {
                 this.store.setMenu({
@@ -223,6 +226,16 @@ export class BuliCommandMenu {
 
         if (this.store.getSnapshot().menu === menu) this.store.setMenu(null)
         this.store.consumeInput(activatedInput)
+    }
+}
+
+function assertCommandsAllowed(context: IBuliCommandContext): void {
+    if (
+        context.sessionId
+        && context.application.openSession(context.sessionId)
+            .getSnapshot().isCompacting
+    ) {
+        throw new Error("Cannot submit input while compacting the session")
     }
 }
 

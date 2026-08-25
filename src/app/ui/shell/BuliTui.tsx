@@ -1,6 +1,9 @@
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 
 import {
+    useBuliRuntime,
+} from "@/app/ui/context/application-context"
+import {
     useBuliUiController,
     useBuliUiSnapshot,
 } from "@/app/ui/context/ui-controller-context"
@@ -19,6 +22,7 @@ interface IBuliTuiProps {
 /** Renders and routes the connected application terminal interface. */
 export function BuliTui(props: IBuliTuiProps) {
     const controller = useBuliUiController()
+    const runtime = useBuliRuntime()
     const ui = useBuliUiSnapshot()
     const renderer = useRenderer()
     const { width, height } = useTerminalDimensions()
@@ -44,7 +48,13 @@ export function BuliTui(props: IBuliTuiProps) {
                     key={ui.authenticationMode}
                     mode={ui.authenticationMode}
                     authentication={props.authentication}
-                    onClose={() => controller.closeAuthentication()}
+                    onClose={(outcome) => {
+                        const mode = ui.authenticationMode
+                        controller.closeAuthentication()
+                        if (mode === "login" && outcome === "success") {
+                            void runtime.refreshModels().catch(() => { })
+                        }
+                    }}
                     openUrl={props.openUrl}
                 />
             ) : ui.route.type === "home" ? (

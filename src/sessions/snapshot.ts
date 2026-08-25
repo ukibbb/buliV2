@@ -5,6 +5,7 @@ import type {
     TAgentRunEndReason,
     TToolApprovalRequest,
 } from "@/agent"
+import type { IContextUsage } from "@/sessions/compaction/context-budget"
 
 /** Immutable read model published by one live agent session. */
 export interface ISessionSnapshot {
@@ -14,6 +15,8 @@ export interface ISessionSnapshot {
     readonly streamingMessage?: IAssistantMessage
     readonly pendingToolApproval?: TToolApprovalRequest
     readonly isRunning: boolean
+    readonly isCompacting: boolean
+    readonly contextUsage?: IContextUsage
     readonly activeRunId?: string
     readonly pendingToolCallIds: readonly string[]
     readonly lastRunReason?: TAgentRunEndReason

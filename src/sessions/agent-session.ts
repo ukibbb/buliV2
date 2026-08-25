@@ -1,6 +1,8 @@
 import {
     Agent,
     type IAgentEvent,
+    type IAgentModelRequest,
+    type IAgentRunConfiguration,
     type IAgentRunHandle,
     type IAgentState,
     type IAgentTool,
@@ -10,6 +12,13 @@ import {
 } from "@/agent"
 import { generateRandomId } from "@/common/ids"
 import type { ICompactionCheckpoint } from "@/sessions/compaction/checkpoint"
+import {
+    estimateContextUsage,
+    type IContextUsage,
+} from "@/sessions/compaction/context-budget"
+import {
+    createContextAwareModel,
+} from "@/sessions/compaction/context-aware-model"
 import { projectAgentContext } from "@/sessions/compaction/context-projector"
 import { compactSessionMessages } from "@/sessions/compaction/session-compactor"
 import { createInterruptedToolResults } from "@/sessions/recovery"
@@ -21,7 +30,6 @@ import {
 
 
 const DEFAULT_DISPOSE_TIMEOUT_MS = 5_000
-const DEFAULT_AUTO_COMPACTION_THRESHOLD = 0.8
 
 interface IAgentSessionOptions {
     readonly agentId: string
@@ -33,7 +41,6 @@ interface IAgentSessionOptions {
     readonly now?: () => number
     readonly generateId?: () => string
     readonly disposeTimeoutMs?: number
-    readonly autoCompactionThreshold?: number
 }
 
 interface IQueuedSessionMessages {
@@ -53,10 +60,14 @@ export class AgentSession {
     private readonly unsubscribeAgent: () => void
     private readonly disposeTimeoutMs: number
     private readonly resolveRunConfiguration: TAgentRunConfigurationResolver
+    private readonly systemPrompt: string
+    private readonly tools: readonly IAgentTool[]
     private readonly now: () => number
     private readonly generateId: () => string
-    private readonly autoCompactionThreshold: number
     private snapshot: ISessionSnapshot
+    private contextUsage: IContextUsage | undefined
+    private currentContextWindowTokens: number | undefined
+    private contextUsageRefreshPending = false
     private disposed = false
     private disposeTask: Promise<void> | undefined
     private persistenceError: unknown
@@ -69,29 +80,24 @@ export class AgentSession {
         this.id = options.sessionId
         this.manager = options.manager
         this.resolveRunConfiguration = options.resolveRunConfiguration
+        this.systemPrompt = options.systemPrompt
+        this.tools = options.tools
         this.now = options.now ?? Date.now
         this.generateId = options.generateId ?? generateRandomId
-        this.autoCompactionThreshold = options.autoCompactionThreshold
-            ?? DEFAULT_AUTO_COMPACTION_THRESHOLD
-        if (
-            !Number.isFinite(this.autoCompactionThreshold)
-            || this.autoCompactionThreshold <= 0
-            || this.autoCompactionThreshold >= 1
-        ) {
-            throw new Error("autoCompactionThreshold must be between 0 and 1")
-        }
         this.disposeTimeoutMs = options.disposeTimeoutMs ?? DEFAULT_DISPOSE_TIMEOUT_MS
         if (!Number.isFinite(this.disposeTimeoutMs) || this.disposeTimeoutMs <= 0) {
             throw new Error("disposeTimeoutMs must be a positive finite number")
         }
         const initialMessages = this.loadDurableHistory()
+        this.initializeContextUsage(initialMessages)
         this.agent = new Agent({
             // agent for sessionId
             sessionId: options.sessionId,
             // it's system prompt
-            systemPrompt: options.systemPrompt,
-            resolveRunConfiguration: options.resolveRunConfiguration,
-            tools: options.tools,
+            systemPrompt: this.systemPrompt,
+            resolveRunConfiguration: () =>
+                this.resolveConversationRunConfiguration(),
+            tools: this.tools,
             criticalEventSink: (event) => {
                 if (!this.acceptCriticalEvents) {
                     throw new Error("AgentSession stopped accepting events during shutdown")
@@ -144,6 +150,28 @@ export class AgentSession {
         return () => this.listeners.delete(listener)
     }
 
+    /** Recomputes derived context telemetry after an idle model/catalog change. */
+    refreshContextUsage(): void {
+        if (this.disposed) return
+        if (this.agent.state.isRunning) {
+            this.contextUsageRefreshPending = true
+            return
+        }
+        this.refreshContextUsageFromRunConfiguration()
+        this.publishSnapshot()
+    }
+
+    private refreshContextUsageFromRunConfiguration(): void {
+        try {
+            const runConfiguration = this.resolveRunConfiguration()
+            this.currentContextWindowTokens =
+                runConfiguration.modelProfile?.contextWindowTokens
+        } catch {
+            this.currentContextWindowTokens = undefined
+        }
+        this.updateContextUsageFromDurableHistory()
+    }
+
     prompt(text: string): IAgentRunHandle {
         if (this.disposed) throw new Error("AgentSession is disposed")
         if (this.compactionTask) {
@@ -160,6 +188,9 @@ export class AgentSession {
 
     steer(text: string): void {
         if (this.disposed) throw new Error("AgentSession is disposed")
+        if (this.compactionTask) {
+            throw new Error("Cannot steer while compacting the session")
+        }
         if (this.persistenceError !== undefined) {
             throw new Error(
                 "Session persistence failed. Reopen the session before submitting another prompt.",
@@ -172,6 +203,9 @@ export class AgentSession {
 
     followUp(text: string): void {
         if (this.disposed) throw new Error("AgentSession is disposed")
+        if (this.compactionTask) {
+            throw new Error("Cannot queue a follow-up while compacting the session")
+        }
         if (this.persistenceError !== undefined) {
             throw new Error(
                 "Session persistence failed. Reopen the session before submitting another prompt.",
@@ -215,8 +249,6 @@ export class AgentSession {
     }
 
     async waitForIdle(): Promise<void> {
-        // Auto-compaction może rozpocząć się w listenerze settlementu, dlatego
-        // odczytujemy task dopiero po zakończeniu runu, a nie równolegle przed nim.
         await this.agent.waitForIdle()
         await this.compactionTask
     }
@@ -237,32 +269,7 @@ export class AgentSession {
         if (this.compactionTask) {
             throw new Error("AgentSession is already compacting")
         }
-
-        const controller = new AbortController()
-        this.compactionController = controller
-        const previousCheckpoint = this.manager.getCompactionCheckpoint(this.id)
-        const task = compactSessionMessages({
-            sessionId: this.id,
-            messages: this.manager.getMessages(this.id),
-            ...(previousCheckpoint === undefined
-                ? {}
-                : { previousCheckpoint }),
-            runConfiguration: this.resolveRunConfiguration(),
-            reason,
-            signal: controller.signal,
-            now: this.now,
-            generateId: this.generateId,
-        }).then((checkpoint) => {
-            if (checkpoint) this.manager.saveCompactionCheckpoint(checkpoint)
-            return checkpoint
-        }).finally(() => {
-            if (this.compactionTask === task) {
-                this.compactionTask = undefined
-                this.compactionController = undefined
-            }
-        })
-        this.compactionTask = task
-        return task
+        return this.startCompaction(reason)
     }
 
     dispose(): Promise<void> {
@@ -293,6 +300,196 @@ export class AgentSession {
         }
     }
 
+    private resolveConversationRunConfiguration(): IAgentRunConfiguration {
+        const runConfiguration = this.resolveRunConfiguration()
+        const contextWindowTokens =
+            runConfiguration.modelProfile?.contextWindowTokens
+        this.currentContextWindowTokens = contextWindowTokens
+
+        return {
+            ...runConfiguration,
+            model: createContextAwareModel({
+                model: runConfiguration.model,
+                contextWindowTokens,
+                projectRequest: (request) => this.reprojectRequest(request),
+                compactAndReproject: (request, requestBudgetTokens) =>
+                    this.compactAndReproject(request, requestBudgetTokens),
+                publishContextUsage: (usage) => {
+                    if (this.disposed) return
+                    this.contextUsage = structuredClone(usage)
+                    this.publishSnapshot()
+                },
+            }),
+        }
+    }
+
+    private async compactAndReproject(
+        originalRequest: IAgentModelRequest,
+        requestBudgetTokens: number,
+    ): Promise<IAgentModelRequest | undefined> {
+        const previousCount = this.manager.getCompactionCheckpoint(this.id)
+            ?.compactedMessageCount ?? 0
+        const checkpoint = await (this.compactionTask ?? this.startCompaction(
+            "automatic",
+            requestBudgetTokens,
+            originalRequest.signal,
+        ))
+        if (
+            !checkpoint
+            || checkpoint.compactedMessageCount <= previousCount
+        ) {
+            return undefined
+        }
+
+        return this.reprojectRequest(originalRequest, checkpoint)
+    }
+
+    private reprojectRequest(
+        originalRequest: IAgentModelRequest,
+        checkpoint = this.manager.getCompactionCheckpoint(this.id),
+    ): IAgentModelRequest {
+        const projection = projectAgentContext(
+            this.manager.getMessages(this.id),
+            checkpoint,
+        )
+        const request = {
+            ...originalRequest,
+            messages: projection.messages,
+        }
+        if (projection.contextSummary === undefined) {
+            delete request.contextSummary
+            return request
+        }
+        return {
+            ...request,
+            contextSummary: projection.contextSummary,
+        }
+    }
+
+    private startCompaction(
+        reason: ICompactionCheckpoint["reason"],
+        requestBudgetTokens?: number,
+        sourceSignal?: AbortSignal,
+    ): Promise<ICompactionCheckpoint | undefined> {
+        if (this.disposed) throw new Error("AgentSession is disposed")
+        if (this.persistenceError !== undefined) {
+            throw new Error(
+                "Session persistence failed. Reopen the session before compacting it.",
+                { cause: this.persistenceError },
+            )
+        }
+        if (this.compactionTask) return this.compactionTask
+
+        const controller = new AbortController()
+        const abortFromSource = () => controller.abort(sourceSignal?.reason)
+        if (sourceSignal?.aborted) abortFromSource()
+        else sourceSignal?.addEventListener("abort", abortFromSource, { once: true })
+
+        this.compactionController = controller
+        const operation = this.performCompaction(
+            reason,
+            requestBudgetTokens,
+            controller,
+        )
+        const completed = operation.then(
+            (checkpoint) => {
+                this.publishSnapshot()
+                return checkpoint
+            },
+            (error: unknown) => {
+                this.publishSnapshot()
+                throw error
+            },
+        )
+        let task: Promise<ICompactionCheckpoint | undefined>
+        task = completed.finally(() => {
+            sourceSignal?.removeEventListener("abort", abortFromSource)
+            if (this.compactionTask === task) {
+                this.compactionTask = undefined
+                this.compactionController = undefined
+            }
+            this.publishSnapshot()
+        })
+        this.compactionTask = task
+        this.publishSnapshot()
+        return task
+    }
+
+    private async performCompaction(
+        reason: ICompactionCheckpoint["reason"],
+        requestBudgetTokens: number | undefined,
+        controller: AbortController,
+    ): Promise<ICompactionCheckpoint | undefined> {
+        const previousCheckpoint = this.manager.getCompactionCheckpoint(this.id)
+        const runConfiguration = this.resolveRunConfiguration()
+        if (!this.agent.state.isRunning) {
+            this.currentContextWindowTokens =
+                runConfiguration.modelProfile?.contextWindowTokens
+        }
+        const checkpoint = await compactSessionMessages({
+            sessionId: this.id,
+            messages: this.manager.getMessages(this.id),
+            ...(previousCheckpoint === undefined
+                ? {}
+                : { previousCheckpoint }),
+            runConfiguration,
+            ...(requestBudgetTokens === undefined
+                ? {}
+                : { requestBudgetTokens }),
+            reason,
+            signal: controller.signal,
+            now: this.now,
+            generateId: this.generateId,
+        })
+        if (!checkpoint) return undefined
+
+        controller.signal.throwIfAborted()
+        try {
+            this.manager.saveCompactionCheckpoint(checkpoint)
+        } catch (error) {
+            this.persistenceError = error
+            throw error
+        }
+        this.updateContextUsageFromDurableHistory()
+        return checkpoint
+    }
+
+    private initializeContextUsage(
+        messages: readonly TAgentMessage[],
+    ): void {
+        try {
+            const runConfiguration = this.resolveRunConfiguration()
+            this.currentContextWindowTokens =
+                runConfiguration.modelProfile?.contextWindowTokens
+        } catch {
+            this.currentContextWindowTokens = undefined
+        }
+        this.contextUsage = this.estimateProjectedContext(messages)
+    }
+
+    private updateContextUsageFromDurableHistory(): void {
+        this.contextUsage = this.estimateProjectedContext(
+            this.manager.getMessages(this.id),
+        )
+    }
+
+    private estimateProjectedContext(
+        messages: readonly TAgentMessage[],
+    ): IContextUsage {
+        const projection = projectAgentContext(
+            messages,
+            this.manager.getCompactionCheckpoint(this.id),
+        )
+        return estimateContextUsage({
+            systemPrompt: this.systemPrompt,
+            ...(projection.contextSummary === undefined
+                ? {}
+                : { contextSummary: projection.contextSummary }),
+            messages: projection.messages,
+            tools: this.tools,
+        }, this.currentContextWindowTokens)
+    }
+
     private handleAgentEvent(event: IAgentEvent): void {
         if (event.type === "agent_settled" && event.reason === "internal-error") {
             try {
@@ -302,31 +499,14 @@ export class AgentSession {
                 this.persistenceError = error
             }
         }
-        if (
-            event.type === "agent_settled"
-            && event.reason === "completed"
-            && this.shouldCompactAutomatically()
-        ) {
-            // Auto-compaction nie opóźnia settlementu ukończonego runu. Nowy prompt
-            // zostanie jednak odrzucony przez guard, dopóki checkpoint nie będzie trwały.
-            void this.compact("automatic").catch((error: unknown) => {
-                console.error("Automatic session compaction failed", error)
-            })
+        if (event.type === "message_end") {
+            this.updateContextUsageFromDurableHistory()
+        }
+        if (event.type === "agent_settled" && this.contextUsageRefreshPending) {
+            this.contextUsageRefreshPending = false
+            this.refreshContextUsageFromRunConfiguration()
         }
         this.publishSnapshot()
-    }
-
-    private shouldCompactAutomatically(): boolean {
-        const latestAssistant = this.agent.state.messages.findLast(
-            (message) => message.role === "assistant",
-        )
-        const contextWindow = latestAssistant?.model?.contextWindowTokens
-        if (!contextWindow) return false
-
-        const usage = latestAssistant.usage
-        const usedTokens = usage?.totalTokens
-            ?? ((usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0))
-        return usedTokens >= contextWindow * this.autoCompactionThreshold
     }
 
     private loadDurableHistory(): readonly TAgentMessage[] {
@@ -340,6 +520,7 @@ export class AgentSession {
 
     private publishSnapshot(): void {
         this.snapshot = this.createSnapshot()
+        if (this.disposed) return
         for (const listener of [...this.listeners]) {
             try {
                 listener()
@@ -363,6 +544,10 @@ export class AgentSession {
                 ? { pendingToolApproval: state.pendingToolApproval }
                 : {}),
             isRunning: state.isRunning,
+            isCompacting: this.compactionTask !== undefined,
+            ...(this.contextUsage === undefined
+                ? {}
+                : { contextUsage: this.contextUsage }),
             ...(state.activeRunId ? { activeRunId: state.activeRunId } : {}),
             pendingToolCallIds: [...state.pendingToolCallIds],
             ...(state.lastRunReason ? { lastRunReason: state.lastRunReason } : {}),

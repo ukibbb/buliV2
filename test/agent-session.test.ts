@@ -702,7 +702,7 @@ test("AgentSession dispose times out and unsubscribes from a non-cooperative mod
 test("AgentSession compacts durable history and projects only summary plus tail", async () => {
   const manager = new InMemorySessionManager()
   manager.createSession(sessionInfo("session-1", "test-agent", "Compaction"))
-  seedConversation(manager, 3)
+  seedConversation(manager, 3, "x".repeat(50_000))
   const original = manager.getMessages("session-1")
   const requests: IAgentModelRequest[] = []
   const model: IAgentModel = {
@@ -740,7 +740,7 @@ test("AgentSession compacts durable history and projects only summary plus tail"
       modelProfile: {
         providerId: "test",
         modelId: "model-1",
-        contextWindowTokens: 1_000,
+        contextWindowTokens: 100_000,
       },
       reasoningEffort: "medium",
     }),
@@ -752,8 +752,8 @@ test("AgentSession compacts durable history and projects only summary plus tail"
   const checkpoint = await session.compact()
   expect(checkpoint).toMatchObject({
     reason: "manual",
-    compactedMessageCount: 2,
-    throughMessageId: original[1]!.id,
+    compactedMessageCount: 4,
+    throughMessageId: original[3]!.id,
     summary: "Earlier context",
   })
   expect(manager.getMessages("session-1")).toEqual(original)
@@ -764,14 +764,14 @@ test("AgentSession compacts durable history and projects only summary plus tail"
     (request) => !request.runId.startsWith("compaction-"),
   )
   expect(promptRequest?.contextSummary).toBe("Earlier context")
-  expect(promptRequest?.messages.slice(0, -1)).toEqual(original.slice(2))
+  expect(promptRequest?.messages.slice(0, -1)).toEqual(original.slice(4))
   expect(manager.getMessages("session-1").slice(0, 6)).toEqual([...original])
   expect(manager.getMessages("session-1").at(-1)).toMatchObject({
     role: "assistant",
     model: {
       providerId: "test",
       modelId: "model-1",
-      contextWindowTokens: 1_000,
+      contextWindowTokens: 100_000,
     },
     usage: { inputTokens: 12, outputTokens: 3, totalTokens: 15 },
   })
@@ -779,7 +779,7 @@ test("AgentSession compacts durable history and projects only summary plus tail"
   await session.dispose()
 })
 
-test("AgentSession automatically compacts only with explicit context metadata", async () => {
+test("AgentSession does not compact after settlement from reported usage", async () => {
   const manager = new InMemorySessionManager()
   manager.createSession(sessionInfo("session-1", "test-agent", "Automatic"))
   seedConversation(manager, 3)
@@ -794,7 +794,7 @@ test("AgentSession automatically compacts only with explicit context metadata", 
         yield { type: "finish", reason: "stop" }
         return
       }
-      yield { type: "finish", reason: "stop", usage: { totalTokens: 9 } }
+      yield { type: "finish", reason: "stop", usage: { totalTokens: 3_500 } }
     },
   }
   const session = new AgentSession({
@@ -807,7 +807,7 @@ test("AgentSession automatically compacts only with explicit context metadata", 
       modelProfile: {
         providerId: "test",
         modelId: "tiny",
-        contextWindowTokens: 10,
+        contextWindowTokens: 4_096,
       },
       reasoningEffort: "none",
     }),
@@ -818,10 +818,11 @@ test("AgentSession automatically compacts only with explicit context metadata", 
   await run.settled
   await session.waitForIdle()
 
-  expect(compactionRequests).toBe(1)
-  expect(manager.getCompactionCheckpoint("session-1")).toMatchObject({
-    reason: "automatic",
-    summary: "Auto summary",
+  expect(compactionRequests).toBe(0)
+  expect(manager.getCompactionCheckpoint("session-1")).toBeUndefined()
+  expect(session.getSnapshot().contextUsage).toMatchObject({
+    contextWindowTokens: 4_096,
+    shouldCompact: false,
   })
   expect(manager.getMessages("session-1")).toHaveLength(8)
 
@@ -841,11 +842,12 @@ function sessionInfo(id: string, agentId: string, title: string) {
 function seedConversation(
   manager: InMemorySessionManager,
   turns: number,
+  padding = "",
 ): void {
   for (let index = 0; index < turns; index += 1) {
     const runId = `seed-run-${index}`
     manager.appendMessage(userMessage(
-      `Question ${index}`,
+      `${padding}Question ${index}`,
       "session-1",
       `seed-user-${index}`,
       runId,
@@ -854,7 +856,7 @@ function seedConversation(
     manager.appendMessage(textAssistantMessage(
       `seed-assistant-${index}`,
       runId,
-      `Answer ${index}`,
+      `${padding}Answer ${index}`,
       index * 2 + 2,
     ))
   }

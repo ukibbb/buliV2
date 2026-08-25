@@ -4,10 +4,13 @@ import type {
     TToolApprovalRequest,
 } from "@/agent"
 import { SnakeAnimation } from "@/app/ui/chat/Snake"
+import type { IContextUsage } from "@/sessions"
 import { theme } from "@/terminal/theme"
 
 interface IChatStatusProps {
     readonly isRunning: boolean | undefined
+    readonly isCompacting: boolean | undefined
+    readonly contextUsage: IContextUsage | undefined
     readonly pendingSteeringMessages: readonly IUserMessage[] | undefined
     readonly pendingFollowUpMessages: readonly IUserMessage[] | undefined
     readonly pendingToolApproval: TToolApprovalRequest | undefined
@@ -31,9 +34,12 @@ export function ChatStatus(props: IChatStatusProps) {
             flexDirection="row"
             paddingLeft={1}
             paddingBottom={1}
+            gap={1}
         >
             {props.pendingToolApproval ? (
                 <text fg={theme.amber}>Waiting for your decision</text>
+            ) : props.isCompacting ? (
+                <text fg={theme.amber}>Compacting context | Esc stop</text>
             ) : props.isRunning ? (
                 <box flexDirection="row">
                     <SnakeAnimation />
@@ -60,7 +66,7 @@ export function ChatStatus(props: IChatStatusProps) {
             {!props.pendingToolApproval && pendingMessageCount > 0 ? (
                 <text fg={theme.textMuted}>Esc restores queued input</text>
             ) : null}
-            {!props.isRunning && props.lastRunReason === "aborted" ? (
+            {!props.isRunning && !props.isCompacting && props.lastRunReason === "aborted" ? (
                 <text fg={theme.textMuted}>Operation aborted</text>
             ) : null}
             {props.errorMessage ? (
@@ -83,7 +89,31 @@ export function ChatStatus(props: IChatStatusProps) {
                 <span fg={theme.green}>{props.selectedModelName}</span>
                 <span> / </span>
                 <span fg={theme.amber}>{props.reasoningEffort}</span>
+                {props.contextUsage ? <span fg={contextUsageColor(props.contextUsage)}>
+                    {` · ${formatContextUsage(props.contextUsage)}`}
+                </span> : null}
             </text>
         </box>
     )
+}
+
+function formatContextUsage(usage: IContextUsage): string {
+    const used = formatTokens(usage.estimatedInputTokens)
+    if (usage.contextWindowTokens === undefined) return `ctx ~${used}`
+    const percent = Math.round((usage.usageRatio ?? 0) * 100)
+    return `ctx ~${used}/${formatTokens(usage.contextWindowTokens)} (${percent}%)`
+}
+
+function contextUsageColor(usage: IContextUsage): string {
+    if (usage.shouldCompact) return theme.red
+    if ((usage.usageRatio ?? 0) >= 0.7) return theme.amber
+    return theme.textMuted
+}
+
+function formatTokens(value: number): string {
+    if (value < 1_000) return Math.max(0, value).toLocaleString()
+    if (value < 10_000) return `${(value / 1_000).toFixed(1)}k`
+    if (value < 1_000_000) return `${Math.round(value / 1_000)}k`
+    if (value < 10_000_000) return `${(value / 1_000_000).toFixed(1)}m`
+    return `${Math.round(value / 1_000_000)}m`
 }

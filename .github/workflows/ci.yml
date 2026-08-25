@@ -55,15 +55,33 @@ jobs:
       - name: Download ripgrep sidecar
         env:
           RIPGREP_VERSION: 14.1.1
+          RIPGREP_SHA256: 4cf9f2741e6c465ffdb7c26f38056a59e2a2544b51f7cc128ef28337eeae4d8e
         run: |
           archive="$RUNNER_TEMP/ripgrep.tar.gz"
           directory="$RUNNER_TEMP/buli-ripgrep"
           curl --fail --location --silent --show-error \
             "https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
             --output "$archive"
+          printf '%s  %s\n' "$RIPGREP_SHA256" "$archive" | sha256sum --check
           mkdir -p "$directory"
           tar --extract --gzip --file "$archive" --directory "$directory" --strip-components=1
           "$directory/rg" --version
+          echo "$directory" >> "$GITHUB_PATH"
+
+      - name: Download fd sidecar
+        env:
+          FD_VERSION: 10.3.0
+          FD_SHA256: 2b6bfaae8c48f12050813c2ffe1884c61ea26e750d803df9c9114550a314cd14
+        run: |
+          archive="$RUNNER_TEMP/fd.tar.gz"
+          directory="$RUNNER_TEMP/buli-fd"
+          curl --fail --location --silent --show-error \
+            "https://github.com/sharkdp/fd/releases/download/v${FD_VERSION}/fd-v${FD_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+            --output "$archive"
+          printf '%s  %s\n' "$FD_SHA256" "$archive" | sha256sum --check
+          mkdir -p "$directory"
+          tar --extract --gzip --file "$archive" --directory "$directory" --strip-components=1
+          "$directory/fd" --version
           echo "$directory" >> "$GITHUB_PATH"
 
       - name: Install dependencies

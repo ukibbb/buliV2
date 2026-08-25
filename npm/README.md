@@ -2,7 +2,7 @@
 
 Installs the native Buli CLI for macOS or Linux from the matching GitHub
 Release. The installer verifies the published SHA-256 checksum before placing
-the executable and its private ripgrep sidecar inside this npm package.
+the executable and its private ripgrep and fd sidecars inside this npm package.
 
 ```bash
 npm install --global @ukibbb/buli

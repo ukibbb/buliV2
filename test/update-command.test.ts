@@ -99,6 +99,8 @@ test.skipIf(process.platform === "win32")(
       expect(await readFile(fixture.executable, "utf8")).toContain("0.2.0");
       expect(await readFile(join(fixture.prefix, "lib", "buli", "rg"), "utf8"))
         .toContain("new rg");
+      expect(await readFile(join(fixture.prefix, "lib", "buli", "fd"), "utf8"))
+        .toContain("new fd");
       expect(await readFile(
         join(fixture.prefix, "share", "buli", "THIRD_PARTY_LICENSES"),
         "utf8",
@@ -152,6 +154,10 @@ async function createUpdateFixture(checksumOverride?: string) {
     writeExecutable(
       join(bundle, "lib", "buli", "rg"),
       "#!/bin/sh\nprintf 'new rg\\n'\n",
+    ),
+    writeExecutable(
+      join(bundle, "lib", "buli", "fd"),
+      "#!/bin/sh\nprintf 'new fd\\n'\n",
     ),
     writeFile(join(bundle, "THIRD_PARTY_LICENSES"), "new licenses\n"),
   ]);

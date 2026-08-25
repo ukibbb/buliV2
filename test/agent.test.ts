@@ -782,6 +782,136 @@ test("Agent rejects overlap, abort settles the active run, and can clear when id
   await expect(agent.abort()).resolves.toBeUndefined()
 })
 
+test("selected path capabilities survive projection and reach only opted-in tools", async () => {
+  const received: unknown[] = []
+  const ordinary: unknown[] = []
+  const selectedTool: IAgentTool = {
+    name: "selected_read",
+    description: "Read selected paths",
+    inputSchema: { type: "object", additionalProperties: false },
+    acceptsSelectedPathReferences: true,
+    async execute(_input, context) {
+      received.push(context.selectedPathReferences)
+      return "selected"
+    },
+  }
+  const ordinaryTool: IAgentTool = {
+    name: "ordinary",
+    description: "Ordinary tool",
+    inputSchema: { type: "object", additionalProperties: false },
+    async execute(_input, context) {
+      ordinary.push(context.selectedPathReferences)
+      return "ordinary"
+    },
+  }
+  let turn = 0
+  const model: IAgentModel = {
+    async *stream() {
+      if (turn++ === 0) {
+        yield {
+          type: "tool-call",
+          toolCallId: "selected-call",
+          toolName: selectedTool.name,
+          input: {},
+        }
+        yield {
+          type: "tool-call",
+          toolCallId: "ordinary-call",
+          toolName: ordinaryTool.name,
+          input: {},
+        }
+        yield { type: "finish", reason: "tool-calls" }
+        return
+      }
+      yield { type: "finish", reason: "stop" }
+    },
+  }
+  const previousReference = pathReference("/outside/previous.ts")
+  const currentReference = pathReference("/outside/current.ts")
+  const agent = new Agent({
+    sessionId: "session-1",
+    systemPrompt: "System",
+    resolveRunConfiguration: () => ({ model, reasoningEffort: "medium" }),
+    tools: [selectedTool, ordinaryTool],
+    initialMessages: [{
+      id: "previous",
+      sessionId: "session-1",
+      runId: "previous-run",
+      role: "user",
+      source: "prompt",
+      content: "@path previous",
+      references: [previousReference],
+      createdAt: 1,
+    }],
+    projectContext: () => ({ messages: [] }),
+  })
+
+  await agent.prompt({
+    text: "@path current",
+    references: [currentReference],
+  }).settled
+
+  expect(received).toEqual([[previousReference, currentReference]])
+  expect(ordinary).toEqual([undefined])
+})
+
+test("selected path capability limit retains the newest prompt", async () => {
+  const received: unknown[] = []
+  const selectedTool: IAgentTool = {
+    name: "selected_read",
+    description: "Read selected paths",
+    inputSchema: { type: "object", additionalProperties: false },
+    acceptsSelectedPathReferences: true,
+    async execute(_input, context) {
+      received.push(context.selectedPathReferences)
+      return "selected"
+    },
+  }
+  let turn = 0
+  const model: IAgentModel = {
+    async *stream() {
+      if (turn++ === 0) {
+        yield {
+          type: "tool-call",
+          toolCallId: "selected-call",
+          toolName: selectedTool.name,
+          input: {},
+        }
+        yield { type: "finish", reason: "tool-calls" }
+        return
+      }
+      yield { type: "finish", reason: "stop" }
+    },
+  }
+  const initialMessages = Array.from({ length: 500 }, (_, index) => ({
+    id: `previous-${index}`,
+    sessionId: "session-1",
+    runId: `previous-run-${index}`,
+    role: "user" as const,
+    source: "prompt" as const,
+    content: "@path",
+    references: [pathReference(`/outside/previous-${index}.ts`)],
+    createdAt: index,
+  }))
+  const agent = new Agent({
+    sessionId: "session-1",
+    systemPrompt: "System",
+    resolveRunConfiguration: () => ({ model, reasoningEffort: "medium" }),
+    tools: [selectedTool],
+    initialMessages,
+  })
+
+  await agent.prompt({
+    text: "@path",
+    references: [pathReference("/outside/current.ts")],
+  }).settled
+
+  const references = received[0] as Array<{ readonly path: string }>
+  expect(references).toHaveLength(500)
+  expect(references.some(({ path }) => path === "/outside/previous-0.ts")).toBe(false)
+  expect(references.at(-1)?.path).toBe("/outside/current.ts")
+})
+
 function completedModel(): IAgentModel {
   return {
     async *stream() {
@@ -790,6 +920,15 @@ function completedModel(): IAgentModel {
       yield { type: "text-end", id: "answer" }
       yield { type: "finish", reason: "stop" }
     },
+  }
+}
+
+function pathReference(path: string) {
+  return {
+    type: "path" as const,
+    kind: "file" as const,
+    path,
+    source: { value: "@path", start: 0, end: 5 },
   }
 }
 

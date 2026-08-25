@@ -85,6 +85,46 @@ test("stages cloned metadata and writes exact version 2 envelopes on first appen
   }
 })
 
+test("round-trips selected paths and direct image attachments", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-resources-"))
+  const filePath = join(directory, "sessions.jsonl")
+  try {
+    const manager = jsonlManager(filePath)
+    manager.createSession(sessionInfo())
+    const message: IUserMessage = {
+      ...userMessage("Review @/tmp/file [Image 1]"),
+      references: [{
+        type: "path",
+        kind: "file",
+        path: "/tmp/file",
+        source: { value: "@/tmp/file", start: 7, end: 17 },
+      }],
+      attachments: [{
+        type: "image",
+        mimeType: "image/png",
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlL8AAAAASUVORK5CYII=",
+        filename: "clipboard-1.png",
+        source: { value: "[Image 1]", start: 18, end: 27 },
+      }],
+    }
+
+    manager.appendMessage(message)
+    expect(jsonlManager(filePath).getMessages("session-1")).toEqual([message])
+    expect(() => manager.appendMessage({
+      ...userMessage("Review @visible", { createdAt: 3 }),
+      id: "detached-reference",
+      references: [{
+        type: "path",
+        kind: "file",
+        path: "/tmp/hidden",
+        source: { value: "@visible", start: 99, end: 107 },
+      }],
+    })).toThrow("does not match message content")
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test("round-trips old and new tool result records without a version migration", async () => {
   const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-outcomes-"))
   const filePath = join(directory, "sessions.jsonl")

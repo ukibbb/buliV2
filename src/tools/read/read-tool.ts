@@ -2,7 +2,10 @@ import { Buffer } from "node:buffer"
 import { open, opendir, stat } from "node:fs/promises"
 
 import type { IAgentTool } from "@/agent"
-import type { TWorkspacePathResolver } from "@/tools/paths"
+import type {
+    TSelectedPathResolver,
+    TWorkspacePathResolver,
+} from "@/tools/paths"
 
 const READ_DEFAULT_LIMIT = 2_000
 const READ_MAX_LINES = 2_000
@@ -16,10 +19,12 @@ const READ_MAX_DIRECTORY_ENTRIES = 100_000
 /** Creates the tool that reads text files and lists workspace directories. */
 export function createReadTool(
     resolveWorkspacePath: TWorkspacePathResolver,
+    resolveSelectedPath?: TSelectedPathResolver,
 ): IAgentTool {
     return {
         name: "read",
-        description: "Read a text file or list a directory in the workspace.",
+        description: "Read a text file or list a workspace directory or a path explicitly selected with @.",
+        acceptsSelectedPathReferences: resolveSelectedPath !== undefined,
         inputSchema: {
             type: "object",
             properties: {
@@ -55,7 +60,13 @@ export function createReadTool(
                 1,
                 READ_DEFAULT_LIMIT,
             )
-            const resolved = await resolveWorkspacePath(path, context.signal)
+            const resolved = resolveSelectedPath
+                ? await resolveSelectedPath(
+                    path,
+                    context.selectedPathReferences ?? [],
+                    context.signal,
+                )
+                : await resolveWorkspacePath(path, context.signal)
             const pathStat = await safeStat(resolved.target, path)
             context.signal.throwIfAborted()
 

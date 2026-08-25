@@ -14,6 +14,7 @@ import type {
     TToolApprovalRequest,
 } from "@/agent"
 import type { IContextUsage } from "@/sessions"
+import { useTerminalClipboard } from "@/terminal/clipboard/ClipboardOverlay"
 
 interface IChatProps {
     readonly isRunning?: boolean
@@ -31,6 +32,7 @@ export function Chat(props: IChatProps) {
     const controller = useBuliUiController()
     const ui = useBuliUiSnapshot()
     const application = useBuliApplicationSnapshot()
+    const clipboard = useTerminalClipboard()
     const selectedModel = application.models.find(
         (model) => model.id === application.selection.modelId,
     )
@@ -47,14 +49,18 @@ export function Chat(props: IChatProps) {
         <box width="100%" flexShrink={0} flexDirection="column">
             <text>{controller.workspaceRoot}</text>
             <PromptEditor
-                value={ui.input}
+                value={controller.getInputDraft()}
                 blocked={props.pendingToolApproval !== undefined}
                 menuOpen={menu !== null}
-                getCurrentValue={() => controller.getSnapshot().input}
-                onValueChange={controller.updateInput}
+                {...(clipboard?.read
+                    ? { clipboard: { read: clipboard.read } }
+                    : {})}
+                getCurrentValue={controller.getInputDraft}
+                onValueChange={controller.updateDraft}
                 onSubmit={controller.submitInput}
                 onMoveMenuSelection={controller.moveMenuSelection}
                 onActivateMenuItem={controller.activateSelectedMenuItem}
+                onError={controller.setExternalUiError}
             />
             <ChatStatus
                 isRunning={props.isRunning}

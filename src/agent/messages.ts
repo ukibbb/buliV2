@@ -1,6 +1,12 @@
 import type { IModelProfile, IModelUsage } from "@/agent/model-values"
 import type { TToolExecutionOutcome } from "@/agent/tool"
 
+export const USER_PATH_REFERENCES_PER_MESSAGE_MAX = 50
+export const USER_PATH_REFERENCES_PER_SESSION_MAX = 500
+export const USER_IMAGE_ATTACHMENTS_MAX = 4
+export const USER_IMAGE_MAX_BYTES = 5 * 1024 * 1024
+export const USER_IMAGE_TOTAL_MAX_BYTES = 10 * 1024 * 1024
+
 interface IMessageBase {
     readonly id: string
     readonly sessionId: string
@@ -11,10 +17,43 @@ interface IMessageBase {
 /** Identifies how user input entered an agent run. */
 export type TUserMessageSource = "prompt" | "steer" | "followUp"
 
+export interface IUserSourceText {
+    readonly value: string
+    readonly start: number
+    readonly end: number
+}
+
+/** Grants read/glob access to one explicitly selected path capability. */
+export interface IUserPathReference {
+    readonly type: "path"
+    readonly kind: "file" | "directory"
+    readonly path: string
+    readonly source: IUserSourceText
+}
+
+/** Provider-neutral image bytes attached directly to one user turn. */
+export interface IUserImageAttachment {
+    readonly type: "image"
+    readonly mimeType: string
+    readonly data: string
+    readonly filename: string
+    readonly source: IUserSourceText
+}
+
+export interface IUserInput {
+    readonly text: string
+    readonly references?: readonly IUserPathReference[]
+    readonly attachments?: readonly IUserImageAttachment[]
+}
+
+export type TUserInput = string | IUserInput
+
 export interface IUserMessage extends IMessageBase {
     readonly role: "user"
     readonly content: string
     readonly source: TUserMessageSource
+    readonly references?: readonly IUserPathReference[]
+    readonly attachments?: readonly IUserImageAttachment[]
 }
 
 export interface ITextContent {

@@ -1,11 +1,14 @@
 import { useTerminalDimensions } from "@opentui/react"
 import {
+    createContext,
+    useContext,
     useEffect,
     useEffectEvent,
     useRef,
     useState,
     type ReactNode,
 } from "react"
+import type { ClipboardService } from "@opentui/core"
 
 import { SelectionClipboardBridge } from "@/terminal/clipboard/SelectionClipboardBridge"
 import type { TClipboardWriter } from "@/terminal/clipboard/copy-selection"
@@ -16,9 +19,19 @@ const COPY_CONFIRMATION_TOAST_MAX_WIDTH = 32
 
 interface ITerminalSelectionClipboardRootProps {
     readonly children: ReactNode
-    readonly clipboard: TClipboardWriter
+    readonly clipboard: TClipboardWriter & Partial<Pick<ClipboardService, "read">>
     readonly copyConfirmationToastDurationMs?: number
     readonly onClipboardWriteError?: (error: unknown) => void
+}
+
+const TerminalClipboardContext = createContext<
+    (TClipboardWriter & Partial<Pick<ClipboardService, "read">>) | undefined
+>(undefined)
+
+export function useTerminalClipboard(): (
+    TClipboardWriter & Partial<Pick<ClipboardService, "read">>
+) | undefined {
+    return useContext(TerminalClipboardContext)
 }
 
 /** Adds selection-copy handling and its transient overlay above one terminal UI root. */
@@ -56,17 +69,19 @@ export function TerminalSelectionClipboardRoot(
     }, [])
 
     return (
-        <box width="100%" height="100%" position="relative">
-            {props.children}
-            <SelectionClipboardBridge
-                clipboard={props.clipboard}
-                onCopyComplete={showConfirmation}
-                {...(props.onClipboardWriteError
-                    ? { onClipboardWriteError: props.onClipboardWriteError }
-                    : {})}
-            />
-            <ClipboardCopyToast isVisible={isConfirmationVisible} />
-        </box>
+        <TerminalClipboardContext.Provider value={props.clipboard}>
+            <box width="100%" height="100%" position="relative">
+                {props.children}
+                <SelectionClipboardBridge
+                    clipboard={props.clipboard}
+                    onCopyComplete={showConfirmation}
+                    {...(props.onClipboardWriteError
+                        ? { onClipboardWriteError: props.onClipboardWriteError }
+                        : {})}
+                />
+                <ClipboardCopyToast isVisible={isConfirmationVisible} />
+            </box>
+        </TerminalClipboardContext.Provider>
     )
 }
 

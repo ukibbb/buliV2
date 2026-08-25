@@ -9,21 +9,36 @@ import type {
 } from "@/app/ui/commands/types"
 import { BuliCommandMenu } from "@/app/ui/controller/command-menu"
 import {
+    cloneUserInput,
+    mergeUserInputs,
+    sameUserInput,
+    type IPathMention,
+} from "@/app/ui/chat/prompt-draft"
+import {
     BuliInputSubmission,
     type TBuliInputDelivery,
     type TBuliInputSubmitResult,
 } from "@/app/ui/controller/input-submission"
+import {
+    BuliPathMenu,
+    type IPathCompletion,
+} from "@/app/ui/controller/path-menu"
 import {
     BuliUiStateStore,
     type IBuliUiSnapshot,
 } from "@/app/ui/controller/state"
 import { BuliToolApproval } from "@/app/ui/controller/tool-approval"
 import type { TAuthenticationMode } from "@/authentication/ui"
-import type { TToolApprovalDecision } from "@/agent"
+import type {
+    IUserInput,
+    TToolApprovalDecision,
+    TUserInput,
+} from "@/agent"
 
 export type {
     IBuliCommandMenuSnapshot,
     IBuliPickerMenuSnapshot,
+    IBuliPathMenuSnapshot,
     IBuliUiSnapshot,
     TBuliMenuSnapshot,
     TBuliRoute,
@@ -45,8 +60,10 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     private readonly application: IBuliApplication
     private readonly store = new BuliUiStateStore()
     private readonly commandMenu: BuliCommandMenu
+    private readonly pathMenu: BuliPathMenu
     private readonly inputSubmission: BuliInputSubmission
     private readonly toolApproval: BuliToolApproval
+    private inputDraft: IUserInput = { text: "" }
 
     constructor(options: IBuliUiControllerOptions) {
         this.application = options.application
@@ -59,12 +76,17 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
             commands: this.commands,
             commandContext: this.commandContext,
         })
+        this.pathMenu = new BuliPathMenu({
+            application: this.application,
+            store: this.store,
+        })
         this.inputSubmission = new BuliInputSubmission({
             application: this.application,
             store: this.store,
             commands: this.commands,
             activeSessionId: this.activeSessionId,
             executeCommand: this.commandMenu.executeCommand,
+            consumeInput: this.consumeInputDraft,
         })
         this.toolApproval = new BuliToolApproval({
             application: this.application,
@@ -81,26 +103,60 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
 
     readonly dispose = (): void => {
         this.commandMenu.cancelPendingLoad()
+        this.pathMenu.cancel()
         this.store.dispose()
     }
 
     readonly updateInput = (input: string): void => {
-        this.commandMenu.updateInput(input)
+        this.updateDraft(
+            { text: input },
+            undefined,
+        )
+    }
+
+    readonly getInputDraft = (): IUserInput => {
+        const input = this.store.getSnapshot().input
+        if (this.inputDraft.text !== input) this.inputDraft = { text: input }
+        return this.inputDraft
+    }
+
+    readonly updateDraft = (
+        input: IUserInput,
+        mention?: IPathMention,
+    ): void => {
+        const snapshot = this.store.getSnapshot()
+        if (
+            sameUserInput(this.inputDraft, input)
+            && !mention
+            && snapshot.menu?.mode !== "paths"
+        ) return
+        this.inputDraft = cloneUserInput(input)
+        this.commandMenu.cancelPendingLoad()
+        if (this.pathMenu.updateInput(input.text, mention)) return
+        this.commandMenu.updateInput(input.text)
     }
 
     readonly moveMenuSelection = (direction: -1 | 1): void => {
         this.commandMenu.moveSelection(direction)
     }
 
-    readonly activateSelectedMenuItem = (): Promise<void> => {
+    readonly activateSelectedMenuItem = (): Promise<IPathCompletion | void> => {
+        if (this.store.getSnapshot().menu?.mode === "paths") {
+            return Promise.resolve(this.pathMenu.activateSelectedItem())
+        }
         return this.commandMenu.activateSelectedItem()
     }
 
     readonly submitInput = (
-        input: string,
+        input: TUserInput,
         delivery: TBuliInputDelivery = "auto",
     ): Promise<TBuliInputSubmitResult> => {
-        return this.inputSubmission.submit(input, delivery)
+        this.pathMenu.cancel()
+        this.commandMenu.cancelPendingLoad()
+        return this.inputSubmission.submit(
+            typeof input === "string" ? { text: input } : input,
+            delivery,
+        )
     }
 
     readonly resolveToolApproval = (
@@ -119,6 +175,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     readonly dismissMenu = (): void => {
         if (this.store.isDisposed || this.store.getSnapshot().menu === null) return
         this.commandMenu.cancelPendingLoad()
+        this.pathMenu.cancel()
         this.store.setMenu(null)
     }
 
@@ -133,6 +190,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
 
         if (snapshot.menu) {
             this.commandMenu.cancelPendingLoad()
+            this.pathMenu.cancel()
             this.store.setMenu(null)
             const sessionId = this.activeSessionId()
             if (!sessionId) return
@@ -153,16 +211,15 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
         try {
             const queued = this.application.clearQueuedMessages(sessionId)
             if (queued.steering.length > 0 || queued.followUp.length > 0) {
-                const input = [
+                const input = mergeUserInputs([
                     ...queued.steering,
                     ...queued.followUp,
-                    this.store.getSnapshot().input,
-                ]
-                    .filter((text) => text.trim())
-                    .join("\n\n")
+                    this.getInputDraft(),
+                ])
+                this.inputDraft = input
                 this.store.setSnapshot({
                     ...this.store.getSnapshot(),
-                    input,
+                    input: input.text,
                     inputError: null,
                 })
             }
@@ -178,6 +235,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     readonly goHome = (): void => {
         if (this.store.isDisposed) return
         this.commandMenu.cancelPendingLoad()
+        this.pathMenu.cancel()
         const snapshot = this.store.getSnapshot()
         if (snapshot.route.type === "home") {
             this.store.setMenu(null)
@@ -196,6 +254,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     readonly openAuthentication = (mode: TAuthenticationMode): void => {
         if (this.store.isDisposed) return
         this.commandMenu.cancelPendingLoad()
+        this.pathMenu.cancel()
         this.store.setSnapshot({
             ...this.store.getSnapshot(),
             authenticationMode: mode,
@@ -217,6 +276,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     readonly activateSession = (sessionId: string): void => {
         if (this.store.isDisposed) return
         this.commandMenu.cancelPendingLoad()
+        this.pathMenu.cancel()
         const snapshot = this.store.getSnapshot()
         if (
             snapshot.route.type === "session"
@@ -239,6 +299,12 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     private readonly activeSessionId = (): string | null => {
         const route = this.store.getSnapshot().route
         return route.type === "session" ? route.sessionId : null
+    }
+
+    private readonly consumeInputDraft = (input: IUserInput): void => {
+        if (!sameUserInput(this.inputDraft, input)) return
+        this.inputDraft = { text: "" }
+        this.store.consumeInput(input.text)
     }
 
     private readonly commandContext = (): IBuliCommandContext => ({

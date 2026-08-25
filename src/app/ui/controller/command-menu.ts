@@ -172,7 +172,7 @@ export class BuliCommandMenu {
 
     private async activateSelectedItemOnce(): Promise<void> {
         const menu = this.store.getSnapshot().menu
-        if (!menu) return
+        if (!menu || menu.mode === "paths") return
 
         const selected = menu.items[menu.selectedIndex]
         if (!selected) return

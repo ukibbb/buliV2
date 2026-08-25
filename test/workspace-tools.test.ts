@@ -463,6 +463,47 @@ test("all tools reject canonical path escapes while accepting workspace paths", 
   }
 })
 
+test("read and glob honor selected external paths without widening grep", async () => {
+  const workspace = await temporaryWorkspace()
+  const outside = await temporaryWorkspace("buli-selected-outside-")
+  try {
+    const selectedFile = join(outside, "selected.txt")
+    await Promise.all([
+      writeFile(selectedFile, "selected"),
+      writeFile(join(outside, "sibling.txt"), "sibling"),
+      mkdir(join(outside, "directory")),
+    ])
+    await writeFile(join(outside, "directory", "child.ts"), "needle")
+
+    const tools = createWorkspaceTools(workspace)
+    const read = getTool(tools, "read")
+    const glob = getTool(tools, "glob")
+    const grep = getTool(tools, "grep")
+    const fileReference = pathReference(await realpath(selectedFile), "file")
+    const directoryPath = await realpath(join(outside, "directory"))
+    const directoryReference = pathReference(directoryPath, "directory")
+
+    await expect(read.execute(
+      { path: selectedFile },
+      context(undefined, [fileReference]),
+    )).resolves.toBe("1: selected")
+    await expect(read.execute(
+      { path: join(outside, "sibling.txt") },
+      context(undefined, [fileReference]),
+    )).rejects.toThrow("was not selected with @")
+    await expect(glob.execute(
+      { pattern: "**/*.ts", path: directoryPath },
+      context(undefined, [directoryReference]),
+    )).resolves.toBe(join(directoryPath, "child.ts"))
+    await expect(grep.execute(
+      { pattern: "needle", path: directoryPath },
+      context(undefined, [directoryReference]),
+    )).rejects.toThrow("Path is outside the workspace")
+  } finally {
+    await Promise.all([removeWorkspace(workspace), removeWorkspace(outside)])
+  }
+})
+
 test("tools reject invalid direct inputs cleanly", async () => {
   const workspace = await temporaryWorkspace()
   try {
@@ -552,13 +593,24 @@ function textResult(
 
 function context(
   signal: AbortSignal = new AbortController().signal,
+  selectedPathReferences?: IAgentToolExecutionContext["selectedPathReferences"],
 ): IAgentToolExecutionContext {
   return {
     sessionId: "session-workspace-tool",
     toolCallId: "call-workspace-tool",
     runId: "run-workspace-tool",
     messages: [],
+    ...(selectedPathReferences?.length ? { selectedPathReferences } : {}),
     signal,
+  }
+}
+
+function pathReference(path: string, kind: "file" | "directory") {
+  return {
+    type: "path" as const,
+    kind,
+    path,
+    source: { value: `@${path}`, start: 0, end: path.length + 1 },
   }
 }
 

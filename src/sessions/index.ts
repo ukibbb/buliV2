@@ -17,6 +17,7 @@ export {
     CONTEXT_COMPACTION_THRESHOLD,
     contextCompactionThresholdTokens,
     ESTIMATED_CHARS_PER_TOKEN,
+    ESTIMATED_IMAGE_TOKENS,
     estimateContextInputTokens,
     estimateContextUsage,
     estimateMessagesInputTokens,

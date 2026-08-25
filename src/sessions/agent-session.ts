@@ -6,9 +6,11 @@ import {
     type IAgentRunHandle,
     type IAgentState,
     type IAgentTool,
+    type IUserInput,
     type TAgentMessage,
     type TAgentRunConfigurationResolver,
     type TToolApprovalDecision,
+    type TUserInput,
 } from "@/agent"
 import { generateRandomId } from "@/common/ids"
 import type { ICompactionCheckpoint } from "@/sessions/compaction/checkpoint"
@@ -44,8 +46,8 @@ interface IAgentSessionOptions {
 }
 
 interface IQueuedSessionMessages {
-    readonly steering: readonly string[]
-    readonly followUp: readonly string[]
+    readonly steering: readonly TUserInput[]
+    readonly followUp: readonly TUserInput[]
 }
 
 type TSessionListener = () => void
@@ -172,7 +174,7 @@ export class AgentSession {
         this.updateContextUsageFromDurableHistory()
     }
 
-    prompt(text: string): IAgentRunHandle {
+    prompt(input: TUserInput): IAgentRunHandle {
         if (this.disposed) throw new Error("AgentSession is disposed")
         if (this.compactionTask) {
             throw new Error("Cannot submit a prompt while compacting the session")
@@ -183,10 +185,10 @@ export class AgentSession {
                 { cause: this.persistenceError },
             )
         }
-        return this.agent.prompt(text)
+        return this.agent.prompt(input)
     }
 
-    steer(text: string): void {
+    steer(input: TUserInput): void {
         if (this.disposed) throw new Error("AgentSession is disposed")
         if (this.compactionTask) {
             throw new Error("Cannot steer while compacting the session")
@@ -197,11 +199,11 @@ export class AgentSession {
                 { cause: this.persistenceError },
             )
         }
-        this.agent.steer(text)
+        this.agent.steer(input)
         this.publishSnapshot()
     }
 
-    followUp(text: string): void {
+    followUp(input: TUserInput): void {
         if (this.disposed) throw new Error("AgentSession is disposed")
         if (this.compactionTask) {
             throw new Error("Cannot queue a follow-up while compacting the session")
@@ -212,7 +214,7 @@ export class AgentSession {
                 { cause: this.persistenceError },
             )
         }
-        this.agent.followUp(text)
+        this.agent.followUp(input)
         this.publishSnapshot()
     }
 
@@ -223,8 +225,8 @@ export class AgentSession {
             this.publishSnapshot()
         }
         return {
-            steering: messages.steering.map((message) => message.content),
-            followUp: messages.followUp.map((message) => message.content),
+            steering: messages.steering.map(userMessageInput),
+            followUp: messages.followUp.map(userMessageInput),
         }
     }
 
@@ -553,6 +555,25 @@ export class AgentSession {
             ...(state.lastRunReason ? { lastRunReason: state.lastRunReason } : {}),
             ...(state.errorMessage ? { errorMessage: state.errorMessage } : {}),
         })
+    }
+}
+
+function userMessageInput(message: {
+    readonly content: string
+    readonly references?: IUserInput["references"]
+    readonly attachments?: IUserInput["attachments"]
+}): TUserInput {
+    if (!message.references?.length && !message.attachments?.length) {
+        return message.content
+    }
+    return {
+        text: message.content,
+        ...(message.references?.length
+            ? { references: structuredClone(message.references) }
+            : {}),
+        ...(message.attachments?.length
+            ? { attachments: structuredClone(message.attachments) }
+            : {}),
     }
 }
 

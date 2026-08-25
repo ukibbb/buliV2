@@ -1,11 +1,12 @@
 import type { ISnapshotSource } from "@/app/contracts"
 import type { IBuliMenuItem } from "@/app/ui/commands/types"
+import type { IBuliPathSuggestion } from "@/app/contracts"
 import type { TAuthenticationMode } from "@/authentication/ui"
 
-interface IBuliMenuBase {
+interface IBuliMenuBase<Item extends IBuliMenuItem = IBuliMenuItem> {
     readonly selectedIndex: number
     readonly errorMessage: string | null
-    readonly items: readonly IBuliMenuItem[]
+    readonly items: readonly Item[]
     readonly emptyMessage?: string
 }
 
@@ -18,7 +19,21 @@ export interface IBuliPickerMenuSnapshot extends IBuliMenuBase {
     readonly commandName: string
 }
 
-export type TBuliMenuSnapshot = IBuliCommandMenuSnapshot | IBuliPickerMenuSnapshot
+export interface IBuliPathMenuItem extends IBuliMenuItem, IBuliPathSuggestion {
+    readonly value: string
+}
+
+export interface IBuliPathMenuSnapshot
+    extends IBuliMenuBase<IBuliPathMenuItem> {
+    readonly mode: "paths"
+    readonly triggerStart: number
+    readonly triggerEnd: number
+}
+
+export type TBuliMenuSnapshot =
+    | IBuliCommandMenuSnapshot
+    | IBuliPickerMenuSnapshot
+    | IBuliPathMenuSnapshot
 
 export type TBuliRoute =
     | { readonly type: "home" }

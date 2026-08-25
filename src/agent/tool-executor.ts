@@ -4,6 +4,7 @@ import type { IAgentEvent } from "@/agent/events"
 import type {
     IToolCallContent,
     IToolResultMessage,
+    IUserPathReference,
     TAgentMessage,
 } from "@/agent/messages"
 import type { IModelProfile } from "@/agent/model-values"
@@ -28,6 +29,7 @@ interface IExecuteToolCallsOptions {
     readonly modelProfile?: IModelProfile
     readonly providerAccountId?: string
     readonly messages: readonly TAgentMessage[]
+    readonly selectedPathReferences?: readonly IUserPathReference[]
     readonly signal: AbortSignal
     readonly emit: (event: IAgentEvent) => void | Promise<void>
     readonly requestApproval?: (
@@ -207,6 +209,14 @@ async function executeToolCall(
                                         options.providerAccountId,
                                 }),
                             messages: structuredClone(options.messages),
+                        }
+                        : {}),
+                    ...(tool.acceptsSelectedPathReferences
+                        && options.selectedPathReferences?.length
+                        ? {
+                            selectedPathReferences: structuredClone(
+                                options.selectedPathReferences,
+                            ),
                         }
                         : {}),
                     signal: options.signal,

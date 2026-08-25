@@ -267,6 +267,9 @@ export const systemPrompt = (
     if (names.has("read") && names.has("glob") && names.has("grep")) {
         instructions.push("Gdy analizujesz zainstalowaną bibliotekę, odczytaj jej package.json, a następnie ustaw path w glob lub grep bezpośrednio na node_modules/<nazwa-pakietu>; ogólne wyszukiwanie respektuje .gitignore.")
     }
+    if (names.has("read") && names.has("glob")) {
+        instructions.push("Ścieżka pokazana w wiadomości jako @plik lub @katalog została jawnie wybrana przez użytkownika. Odczytaj ją leniwie przez read albo glob, przekazując path bez prefiksu @ i bez otaczających cudzysłowów; wybrane referencje mogą wskazywać poza workspace.")
+    }
     if (names.has("apply_patch")) {
         instructions.push(
             "apply_patch wolno wywołać tylko po jawnej prośbie użytkownika o implementację lub zmianę plików. Pytanie, analiza, plan ani zgoda na plan nie są taką prośbą.",

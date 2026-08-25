@@ -1,9 +1,11 @@
 import type { IBuliApplication } from "@/app/contracts"
+import { trimUserInput } from "@/app/ui/chat/prompt-draft"
 import type { IBuliCommandInfo } from "@/app/ui/commands/types"
 import {
     BuliUiStateStore,
     errorMessage,
 } from "@/app/ui/controller/state"
+import type { IUserInput } from "@/agent"
 
 export type TBuliInputSubmitResult = "consumed" | "retained"
 export type TBuliInputDelivery = "auto" | "followUp"
@@ -14,6 +16,7 @@ interface IBuliInputSubmissionOptions {
     readonly commands: readonly IBuliCommandInfo[]
     readonly activeSessionId: () => string | null
     readonly executeCommand: (name: string, args: string) => Promise<boolean>
+    readonly consumeInput: (input: IUserInput) => void
 }
 
 /** Parses and delivers commands, prompts, steering, and follow-up input. */
@@ -26,6 +29,7 @@ export class BuliInputSubmission {
         name: string,
         args: string,
     ) => Promise<boolean>
+    private readonly consumeInput: (input: IUserInput) => void
     private submissionPending = false
 
     constructor(options: IBuliInputSubmissionOptions) {
@@ -34,15 +38,16 @@ export class BuliInputSubmission {
         this.commands = options.commands
         this.activeSessionId = options.activeSessionId
         this.executeCommand = options.executeCommand
+        this.consumeInput = options.consumeInput
     }
 
     readonly submit = async (
-        input: string,
+        input: IUserInput,
         delivery: TBuliInputDelivery = "auto",
     ): Promise<TBuliInputSubmitResult> => {
         if (this.store.isDisposed) return "retained"
-        const text = input.trim()
-        if (!text) return "retained"
+        const normalized = trimUserInput(input)
+        if (!normalized.text && !normalized.attachments?.length) return "retained"
         if (this.submissionPending) {
             this.store.setInputError(new Error("Prompt submission is still pending"))
             return "retained"
@@ -50,15 +55,15 @@ export class BuliInputSubmission {
 
         this.submissionPending = true
         try {
-            return await this.submitOnce(input, text, delivery)
+            return await this.submitOnce(input, normalized, delivery)
         } finally {
             this.submissionPending = false
         }
     }
 
     private async submitOnce(
-        input: string,
-        text: string,
+        input: IUserInput,
+        normalized: IUserInput,
         delivery: TBuliInputDelivery,
     ): Promise<TBuliInputSubmitResult> {
         this.store.setSnapshot({
@@ -77,7 +82,10 @@ export class BuliInputSubmission {
             return "retained"
         }
 
-        const invocation = text.match(/^\/([^\s/]+)(?:\s+([\s\S]*))?$/)
+        const invocation = !normalized.references?.length
+            && !normalized.attachments?.length
+            ? normalized.text.match(/^\/([^\s/]+)(?:\s+([\s\S]*))?$/)
+            : null
         const name = invocation?.[1]
         const args = invocation?.[2] ?? ""
         const knownCommand = name
@@ -94,7 +102,7 @@ export class BuliInputSubmission {
         if (name && !args) {
             try {
                 if (await this.executeCommand(name, args)) {
-                    this.store.consumeInput(input)
+                    this.consumeInput(input)
                     return "consumed"
                 }
             } catch (error) {
@@ -112,7 +120,7 @@ export class BuliInputSubmission {
                         selectedIndex: 0,
                         errorMessage: errorMessage(error),
                     })
-                    this.store.consumeInput(input)
+                    this.consumeInput(input)
                     return "consumed"
                 }
                 this.store.setInputError(error)
@@ -125,24 +133,32 @@ export class BuliInputSubmission {
                 if (!activeSessionId || !activeSession?.isRunning) {
                     throw new Error("Follow-up requires an active run")
                 }
-                this.application.followUp(activeSessionId, text)
-                this.store.consumeInput(input)
+                this.application.followUp(
+                    activeSessionId,
+                    normalized.text,
+                    normalized,
+                )
+                this.consumeInput(input)
                 return "consumed"
             }
 
             if (activeSessionId && activeSession?.isRunning) {
-                this.application.steer(activeSessionId, text)
-                this.store.consumeInput(input)
+                this.application.steer(
+                    activeSessionId,
+                    normalized.text,
+                    normalized,
+                )
+                this.consumeInput(input)
                 return "consumed"
             }
 
             const submission = this.application.submitPrompt({
                 ...(activeSessionId ? { sessionId: activeSessionId } : {}),
-                text,
+                ...normalized,
             })
             void submission.settled.catch(() => {})
             await submission.accepted
-            this.store.consumeInput(input)
+            this.consumeInput(input)
 
             if (
                 !activeSessionId

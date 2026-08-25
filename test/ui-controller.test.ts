@@ -9,6 +9,7 @@ import type {
 } from "@/app/contracts"
 import type {
   TReasoningEffort,
+  IUserInput,
   TToolApprovalDecision,
   TToolApprovalRequest,
 } from "@/agent"
@@ -49,6 +50,7 @@ interface IApplicationSpyOptions {
   readonly clearQueuedMessages?: (sessionId: string) => IBuliQueuedMessages
   readonly compactSession?: IBuliApplication["compactSession"]
   readonly refreshModels?: IBuliApplication["refreshModels"]
+  readonly searchPaths?: NonNullable<IBuliApplication["searchPaths"]>
   readonly getSnapshot?: IBuliApplication["getSnapshot"]
   readonly pendingToolApprovals?: Readonly<Record<string, TToolApprovalRequest>>
   readonly resolveToolApproval?: IBuliApplication["resolveToolApproval"]
@@ -106,6 +108,7 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
       modelRefreshes.push(modelRefreshes.length + 1)
       await options.refreshModels?.(signal)
     },
+    ...(options.searchPaths ? { searchPaths: options.searchPaths } : {}),
     selectModel: (modelId) => {
       options.selectModel?.(modelId)
       selectedModels.push(modelId)
@@ -207,6 +210,44 @@ test("publishes all command suggestions from slash input", () => {
   expect(notifications).toBe(1)
 })
 
+test("publishes fd path suggestions and returns a selected capability", async () => {
+  const spy = applicationSpy({
+    searchPaths: async (query) => {
+      expect(query).toBe("sr")
+      return [{
+        kind: "file",
+        path: "/workspace/src/main.ts",
+        displayPath: "src/main.ts",
+      }]
+    },
+  })
+  const controller = new BuliUiController({ application: spy.application })
+
+  controller.updateDraft(
+    { text: "Review @sr" },
+    { query: "sr", start: 7, end: 10 },
+  )
+  await Bun.sleep(30)
+
+  expect(controller.getSnapshot().menu).toMatchObject({
+    mode: "paths",
+    triggerStart: 7,
+    triggerEnd: 10,
+    items: [{ label: "src/main.ts", kind: "file" }],
+  })
+  await expect(controller.activateSelectedMenuItem()).resolves.toEqual({
+    triggerStart: 7,
+    triggerEnd: 10,
+    value: "@src/main.ts",
+    reference: {
+      type: "path",
+      kind: "file",
+      path: "/workspace/src/main.ts",
+    },
+  })
+  expect(controller.getSnapshot().menu).toBeNull()
+})
+
 test("creates the first session only when a prompt is submitted from Home", async () => {
   const spy = applicationSpy()
   const controller = new BuliUiController({ application: spy.application })
@@ -276,6 +317,27 @@ test("retains a second submission while prompt acceptance is pending", async () 
 
   accepted.resolve()
   expect(await firstSubmission).toBe("consumed")
+})
+
+test("acceptance does not erase newer resources with the same visible text", async () => {
+  const accepted = Promise.withResolvers<void>()
+  const spy = applicationSpy({
+    accepted: accepted.promise,
+    settled: accepted.promise,
+  })
+  const controller = new BuliUiController({ application: spy.application })
+  const first = imageDraft("first")
+  const newer = imageDraft("newer")
+  controller.updateDraft(first)
+
+  const submission = controller.submitInput(first)
+  await Promise.resolve()
+  controller.updateDraft(newer)
+  accepted.resolve()
+
+  expect(await submission).toBe("consumed")
+  expect(controller.getInputDraft()).toEqual(newer)
+  expect(controller.getSnapshot().input).toBe("[Image 1]")
 })
 
 test("allows only one concurrent unknown slash command submission", async () => {
@@ -896,6 +958,19 @@ test("dismissMenu removes an open menu before approval details are shown", () =>
   controller.dismissMenu()
   expect(controller.getSnapshot().menu).toBeNull()
 })
+
+function imageDraft(data: string): IUserInput {
+  return {
+    text: "[Image 1]",
+    attachments: [{
+      type: "image",
+      mimeType: "image/png",
+      data,
+      filename: "clipboard-1.png",
+      source: { value: "[Image 1]", start: 0, end: 9 },
+    }],
+  }
+}
 
 function sessionInfo(id: string, title: string, updatedAt: number): ISessionInfo {
   return {

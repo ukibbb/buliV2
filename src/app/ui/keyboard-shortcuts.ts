@@ -11,6 +11,7 @@ export type TBuliKeyboardAction =
     | "cancel"
     | "console.toggle"
     | "input.followUp"
+    | "input.pasteClipboard"
     | "approval.previous"
     | "approval.next"
     | "approval.activate"
@@ -30,6 +31,7 @@ type TBuliKeyboardShortcut = IKeyboardShortcut<
 const SHORTCUTS: readonly TBuliKeyboardShortcut[] = [
     { scope: "global", key: { name: "escape" }, action: "cancel" },
     { scope: "global", key: { name: "d", ctrl: true }, action: "console.toggle" },
+    { scope: "input", key: { name: "v", ctrl: true }, action: "input.pasteClipboard" },
     { scope: "approval", key: { name: "up" }, action: "approval.previous" },
     { scope: "approval", key: { name: "left" }, action: "approval.previous" },
     { scope: "approval", key: { name: "down" }, action: "approval.next" },

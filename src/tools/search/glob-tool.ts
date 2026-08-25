@@ -3,7 +3,9 @@ import { isAbsolute, resolve, sep, win32 } from "node:path"
 
 import type { IAgentTool } from "@/agent"
 import {
+    isPathInside,
     toWorkspaceRelativePath,
+    type TSelectedPathResolver,
     type TWorkspacePathResolver,
 } from "@/tools/paths"
 import {
@@ -29,10 +31,12 @@ const GLOB_TIMEOUT_MS = 10_000
 export function createGlobTool(
     resolveWorkspacePath: TWorkspacePathResolver,
     resolveRipgrepExecutable: TRipgrepExecutableResolver,
+    resolveSelectedPath?: TSelectedPathResolver,
 ): IAgentTool {
     return {
         name: "glob",
-        description: "Find workspace files using a relative glob pattern.",
+        description: "Find files in a workspace directory or a directory explicitly selected with @.",
+        acceptsSelectedPathReferences: resolveSelectedPath !== undefined,
         inputSchema: {
             type: "object",
             properties: {
@@ -74,7 +78,14 @@ export function createGlobTool(
                 1,
                 SEARCH_MAX_LIMIT,
             )
-            const resolved = await resolveWorkspacePath(path, context.signal)
+            const resolvePath = (candidate: string) => resolveSelectedPath
+                ? resolveSelectedPath(
+                    candidate,
+                    context.selectedPathReferences ?? [],
+                    context.signal,
+                )
+                : resolveWorkspacePath(candidate, context.signal)
+            const resolved = await resolvePath(path)
             const pathStat = await safeStat(resolved.target, path)
             context.signal.throwIfAborted()
             if (!pathStat.isDirectory()) {
@@ -83,6 +94,7 @@ export function createGlobTool(
 
             const matcher = new Bun.Glob(pattern)
             const matches: string[] = []
+            const rawMatches: string[] = []
             const args = [
                 "--files",
                 "--no-config",
@@ -104,14 +116,8 @@ export function createGlobTool(
                     if (!record) return
                     const relativeMatch = record.split(sep).join("/")
                     if (!matcher.match(relativeMatch)) return
-                    const target = resolve(resolved.target, record)
-                    const workspacePath = toWorkspaceRelativePath(resolved.root, target)
-                    if (
-                        hasExcludedSearchSegment(workspacePath)
-                        || (!hidden && hasHiddenSegment(workspacePath))
-                    ) return
-                    matches.push(singleLine(workspacePath))
-                    if (matches.length > limit) stop()
+                    rawMatches.push(record)
+                    if (rawMatches.length > limit * 4) stop()
                 },
             })
 
@@ -119,6 +125,20 @@ export function createGlobTool(
                 throw new Error(
                     `ripgrep glob failed: ${result.stderr || `exit code ${result.exitCode}`}`,
                 )
+            }
+
+            for (const record of rawMatches) {
+                const target = resolve(resolved.target, record)
+                const authorized = await resolvePath(target)
+                const display = isPathInside(authorized.root, authorized.target)
+                    ? toWorkspaceRelativePath(authorized.root, authorized.target)
+                    : authorized.target.split(sep).join("/")
+                if (
+                    hasExcludedSearchSegment(display)
+                    || (!hidden && hasHiddenSegment(display))
+                ) continue
+                matches.push(singleLine(display))
+                if (matches.length > limit) break
             }
 
             matches.sort(compareStrings)

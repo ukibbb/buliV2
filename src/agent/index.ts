@@ -12,11 +12,24 @@ export type {
     ITextContent,
     IToolCallContent,
     IToolResultMessage,
+    IUserImageAttachment,
+    IUserInput,
     IUserMessage,
+    IUserPathReference,
+    IUserSourceText,
     TAgentMessage,
     TAssistantContent,
+    TUserInput,
     TUserMessageSource,
 } from "@/agent/messages"
+export {
+    USER_IMAGE_ATTACHMENTS_MAX,
+    USER_IMAGE_MAX_BYTES,
+    USER_IMAGE_TOTAL_MAX_BYTES,
+    USER_PATH_REFERENCES_PER_MESSAGE_MAX,
+    USER_PATH_REFERENCES_PER_SESSION_MAX,
+} from "@/agent/messages"
+export { isValidUserImage } from "@/agent/user-image"
 export type {
     IAgentModel,
     IAgentModelEvent,

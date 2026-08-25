@@ -10,9 +10,13 @@ import type {
 } from "@/agent/model"
 import type {
     IUserMessage,
+    IUserInput,
+    IUserPathReference,
     TAgentMessage,
+    TUserInput,
     TUserMessageSource,
 } from "@/agent/messages"
+import { USER_PATH_REFERENCES_PER_SESSION_MAX } from "@/agent/messages"
 import type {
     IAgentRunHandle,
     IAgentState,
@@ -125,8 +129,11 @@ export class Agent {
         return () => this.listeners.delete(listener)
     }
 
-    prompt(text: string): IAgentRunHandle {
-        if (!text.trim()) throw new Error("Prompt cannot be empty")
+    prompt(input: TUserInput): IAgentRunHandle {
+        const normalizedInput = normalizeUserInput(input)
+        if (!normalizedInput.text.trim() && !normalizedInput.attachments?.length) {
+            throw new Error("Prompt cannot be empty")
+        }
         if (this.activeRun) {
             throw new Error("Agent is already processing a prompt")
         }
@@ -141,7 +148,7 @@ export class Agent {
             messages: this.stateValue.messages,
         }
         const runId = this.generateId()
-        const prompt = this.createUserMessage(text, runId, "prompt")
+        const prompt = this.createUserMessage(normalizedInput, runId, "prompt")
         const abortController = new AbortController()
         const accepted = Promise.withResolvers<void>()
         const settled = Promise.withResolvers<void>()
@@ -187,14 +194,14 @@ export class Agent {
         }
     }
 
-    steer(text: string): void {
-        this.enqueueQueuedMessage(text, "steer")
+    steer(input: TUserInput): void {
+        this.enqueueQueuedMessage(input, "steer")
     }
 
-    followUp(text: string): void {
+    followUp(input: TUserInput): void {
         // Follow-up nie zmienia bieżącego turnu. Czeka, aż skończą się tool
         // continuation i steering, a dopiero potem uruchamia kolejny request.
-        this.enqueueQueuedMessage(text, "followUp")
+        this.enqueueQueuedMessage(input, "followUp")
     }
 
     clearQueuedMessages(): IQueuedAgentMessages {
@@ -223,17 +230,24 @@ export class Agent {
     }
 
     private enqueueQueuedMessage(
-        text: string,
+        input: TUserInput,
         source: "steer" | "followUp",
     ): void {
+        const normalizedInput = normalizeUserInput(input)
         const label = source === "steer" ? "Steering" : "Follow-up"
-        if (!text.trim()) throw new Error(`${label} message cannot be empty`)
+        if (!normalizedInput.text.trim() && !normalizedInput.attachments?.length) {
+            throw new Error(`${label} message cannot be empty`)
+        }
         const activeRun = this.activeRun
         if (!activeRun?.acceptingQueuedInput || !activeRun.acceptedCompleted) {
             throw new Error(`Agent is not accepting ${label.toLowerCase()} messages`)
         }
 
-        const message = this.createUserMessage(text, activeRun.runId, source)
+        const message = this.createUserMessage(
+            normalizedInput,
+            activeRun.runId,
+            source,
+        )
         if (source === "steer") this.steeringQueue.push(message)
         else this.followUpQueue.push(message)
     }
@@ -296,6 +310,10 @@ export class Agent {
                     ? {}
                     : { contextSummary: context.contextSummary }),
                 prompt,
+                selectedPathReferences: collectPathReferences(
+                    this.stateValue.messages,
+                    prompt,
+                ),
                 model: runConfiguration.model,
                 ...(runConfiguration.modelProfile === undefined
                     ? {}
@@ -584,7 +602,7 @@ export class Agent {
     }
 
     private createUserMessage(
-        text: string,
+        input: IUserInput,
         runId: string,
         source: TUserMessageSource,
     ): IUserMessage {
@@ -594,10 +612,59 @@ export class Agent {
             runId,
             role: "user",
             source,
-            content: text,
+            content: input.text,
+            ...(input.references?.length
+                ? { references: structuredClone(input.references) }
+                : {}),
+            ...(input.attachments?.length
+                ? { attachments: structuredClone(input.attachments) }
+                : {}),
             createdAt: this.now(),
         }
     }
+}
+
+function normalizeUserInput(input: TUserInput): IUserInput {
+    if (typeof input === "string") return { text: input }
+    return {
+        text: input.text,
+        ...(input.references?.length
+            ? { references: structuredClone(input.references) }
+            : {}),
+        ...(input.attachments?.length
+            ? { attachments: structuredClone(input.attachments) }
+            : {}),
+    }
+}
+
+function collectPathReferences(
+    messages: readonly TAgentMessage[],
+    prompt: IUserMessage,
+): IUserPathReference[] {
+    const references: IUserPathReference[] = []
+    const seen = new Set<string>()
+    const conversation = [...messages, prompt]
+    outer: for (let messageIndex = conversation.length - 1; messageIndex >= 0; messageIndex -= 1) {
+        const message = conversation[messageIndex]
+        if (!message || message.role !== "user") continue
+        const messageReferences = message.references ?? []
+        for (
+            let referenceIndex = messageReferences.length - 1;
+            referenceIndex >= 0;
+            referenceIndex -= 1
+        ) {
+            const reference = messageReferences[referenceIndex]
+            if (!reference) continue
+            const key = `${reference.kind}\0${reference.path}`
+            if (seen.has(key)) continue
+            seen.add(key)
+            references.push(structuredClone(reference))
+            if (references.length === USER_PATH_REFERENCES_PER_SESSION_MAX) {
+                break outer
+            }
+        }
+    }
+    return references.reverse()
 }
 
 function toErrorMessage(error: unknown): string {

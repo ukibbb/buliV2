@@ -38,15 +38,15 @@ npm install --global @ukibbb/buli@latest
 
 ### Standalone installer
 
-Install the latest stable release on macOS or Linux without Bun, npm, or a
-system-wide ripgrep installation:
+Install the latest stable release on macOS or Linux without Bun, npm, ripgrep,
+or fd installed system-wide:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ukibbb/buliV2/main/install.sh | sh
 ```
 
-The installer verifies the release checksum and installs Buli and its private
-ripgrep sidecar under `~/.local`. If necessary, it adds `~/.local/bin` to the
+The installer verifies the release checksum and installs Buli with private
+ripgrep and fd sidecars under `~/.local`. If necessary, it adds `~/.local/bin` to the
 configuration file for zsh, bash, sh, or fish. Open a new terminal afterward.
 
 Verify the installation after opening a new terminal:
@@ -82,6 +82,7 @@ only after those checks pass. Package-manager installations are not modified.
 
 - Bun 1.3.12 or newer
 - [ripgrep](https://github.com/BurntSushi/ripgrep) available as `rg`
+- [fd](https://github.com/sharkdp/fd) available as `fd` or `fdfind`
 
 ## Terminal app development
 
@@ -95,6 +96,9 @@ That runs `cli/main.ts` with Bun watch and opens the OpenTUI console overlay so 
 
 Inside the TUI:
 
+- type `@` to complete files and directories with fd; selected paths are read lazily and may point outside the workspace
+- press `Ctrl+V` to attach a clipboard screenshot directly to the next model request
+- drag over terminal text to copy the selection to the clipboard
 - press `Enter` during an active response to queue steering for the next model request
 - press `Alt+Enter` to queue follow-up work after tools and steering finish
 - press `Escape` to restore undelivered queued input and stop the active response
@@ -107,6 +111,10 @@ Inside the TUI:
 - use `+`/`-` to resize the console
 - press `Ctrl+S` to save the console logs
 - press `Ctrl+C` to exit
+
+Selected external paths authorize only `read` and `glob`; other workspace tools
+keep their existing boundaries. Screenshot bytes are stored as base64 in the
+local, unencrypted JSONL session and sent to the selected model.
 
 If you want watch mode with the console hidden at startup:
 

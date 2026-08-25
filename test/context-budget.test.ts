@@ -5,6 +5,7 @@ import {
   CONTEXT_COMPACTION_THRESHOLD,
   contextCompactionThresholdTokens,
   ESTIMATED_CHARS_PER_TOKEN,
+  ESTIMATED_IMAGE_TOKENS,
   estimateContextInputTokens,
   estimateContextUsage,
   estimateMessagesInputTokens,
@@ -93,6 +94,24 @@ test("does not count reasoning or failed and aborted assistant content", () => {
   )
 })
 
+test("adds a conservative token estimate for direct image inputs", () => {
+  const plain = user("plain", "Inspect image")
+  const withImage: TAgentMessage = {
+    ...plain,
+    attachments: [{
+      type: "image",
+      mimeType: "image/png",
+      data: "ignored-by-estimator",
+      filename: "image.png",
+      source: { value: "image", start: 8, end: 13 },
+    }],
+  }
+
+  expect(estimateMessagesInputTokens([withImage])).toBe(
+    estimateMessagesInputTokens([plain]) + ESTIMATED_IMAGE_TOKENS,
+  )
+})
+
 test("reports the fixed 80 percent threshold and optional context usage", () => {
   expect(CONTEXT_COMPACTION_THRESHOLD).toBe(0.8)
   expect(contextCompactionThresholdTokens(100)).toBe(80)
@@ -121,7 +140,10 @@ test("reports the fixed 80 percent threshold and optional context usage", () => 
   })
 })
 
-function user(id: string, content: string): TAgentMessage {
+function user(
+  id: string,
+  content: string,
+): Extract<TAgentMessage, { role: "user" }> {
   return {
     id,
     sessionId: "session-1",

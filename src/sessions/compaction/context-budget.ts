@@ -8,6 +8,7 @@ export const CONTEXT_COMPACTION_THRESHOLD = 0.8
 
 /** Deliberately simple approximation used instead of a provider tokenizer. */
 export const ESTIMATED_CHARS_PER_TOKEN = 4
+export const ESTIMATED_IMAGE_TOKENS = 2_000
 
 /** Provider-visible inputs used by the context estimate. */
 export interface IContextInput {
@@ -41,7 +42,7 @@ export function estimateContextInputTokens(input: IContextInput): number {
             description: tool.description,
             inputSchema: tool.inputSchema,
         })),
-    })
+    }) + estimatedImageTokens(input.messages)
 }
 
 /** Estimates only the serialized message portion of a provider request. */
@@ -49,6 +50,15 @@ export function estimateMessagesInputTokens(
     messages: readonly TAgentMessage[],
 ): number {
     return estimateSerializedTokens(providerVisibleMessages(messages))
+        + estimatedImageTokens(messages)
+}
+
+function estimatedImageTokens(messages: readonly TAgentMessage[]): number {
+    return messages.reduce((total, message) => total + (
+        message.role === "user"
+            ? (message.attachments?.length ?? 0) * ESTIMATED_IMAGE_TOKENS
+            : 0
+    ), 0)
 }
 
 /** Returns the first whole-token count at or above 80% of a context window. */

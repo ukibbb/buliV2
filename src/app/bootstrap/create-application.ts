@@ -23,7 +23,7 @@ import {
     type ISessionManager,
     JsonlSessionManager,
 } from "@/sessions"
-import { createWorkspaceTools } from "@/tools"
+import { createFdPathSearcher, createWorkspaceTools } from "@/tools"
 
 const BULI_AGENT_ID = "buli"
 
@@ -34,6 +34,23 @@ function defaultWorkspaceTools(workspaceRoot: string): readonly IAgentTool[] {
     const executableName = process.platform === "win32" ? "rg.exe" : "rg"
     return createWorkspaceTools(workspaceRoot, {
         ripgrepExecutablePath: resolve(
+            dirname(process.execPath),
+            "..",
+            "lib",
+            "buli",
+            executableName,
+        ),
+    })
+}
+
+function defaultPathSearcher(workspaceRoot: string) {
+    if (process.env.BULI_DEVELOPMENT === "1") {
+        return createFdPathSearcher(workspaceRoot)
+    }
+    const executableName = process.platform === "win32" ? "fd.exe" : "fd"
+    return createFdPathSearcher(workspaceRoot, {
+        fallbackWhenMissing: true,
+        executablePath: resolve(
             dirname(process.execPath),
             "..",
             "lib",
@@ -130,6 +147,7 @@ export async function createBuliApplication(
             defaultAgentId: BULI_AGENT_ID,
             models,
             selection,
+            searchPaths: defaultPathSearcher(workspaceRoot),
             ...(options.model === undefined
                 ? {
                     loadModels: async (signal: AbortSignal) => (

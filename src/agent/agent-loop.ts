@@ -3,8 +3,10 @@ import type {
     IAssistantMessage,
     IToolCallContent,
     IUserMessage,
+    IUserPathReference,
     TAgentMessage,
 } from "@/agent/messages"
+import { USER_PATH_REFERENCES_PER_SESSION_MAX } from "@/agent/messages"
 import type { IAgentModel } from "@/agent/model"
 import { streamModelTurn } from "@/agent/model-turn"
 import type {
@@ -32,6 +34,7 @@ interface IRunAgentLoopOptions {
     readonly messages: readonly TAgentMessage[]
     readonly contextSummary?: string
     readonly prompt: IUserMessage
+    readonly selectedPathReferences?: readonly IUserPathReference[]
     readonly model: IAgentModel
     readonly modelProfile?: IModelProfile
     readonly providerAccountId?: string
@@ -69,6 +72,10 @@ export async function runAgentLoop(
     const activeTools = [...toolsByName.values()]
     const messages = structuredClone([...options.messages, options.prompt])
     const newMessages: TAgentMessage[] = [structuredClone(options.prompt)]
+    const selectedPathReferences = mergePathReferences(
+        [],
+        options.selectedPathReferences ?? [],
+    )
     let providerAccountId = options.providerAccountId
 
     await options.emit({ type: "agent_start", runId: options.runId })
@@ -113,6 +120,10 @@ export async function runAgentLoop(
                 )
                 messages.push(queuedMessage)
                 newMessages.push(queuedMessage)
+                mergePathReferences(
+                    selectedPathReferences,
+                    queuedMessage.references ?? [],
+                )
             }
         } catch (error) {
             if (queuedMessage) {
@@ -182,6 +193,7 @@ export async function runAgentLoop(
                     ? {}
                     : { providerAccountId }),
                 messages,
+                selectedPathReferences,
                 signal: options.signal,
                 emit: options.emit,
                 ...(options.requestApproval === undefined
@@ -225,6 +237,22 @@ export async function runAgentLoop(
         }
         continueForTools = toolResults.length > 0
     }
+}
+
+function mergePathReferences(
+    target: IUserPathReference[],
+    additions: readonly IUserPathReference[],
+): IUserPathReference[] {
+    for (const reference of additions) {
+        const key = `${reference.kind}\0${reference.path}`
+        const existingIndex = target.findIndex((candidate) => (
+            `${candidate.kind}\0${candidate.path}` === key
+        ))
+        if (existingIndex >= 0) target.splice(existingIndex, 1)
+        target.push(structuredClone(reference))
+        if (target.length > USER_PATH_REFERENCES_PER_SESSION_MAX) target.shift()
+    }
+    return target
 }
 
 async function emitCompletedMessage(

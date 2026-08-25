@@ -1,7 +1,9 @@
 import type {
+    IUserInput,
     TReasoningEffort,
     TToolApprovalDecision,
 } from "@/agent"
+import type { IFdPathSuggestion } from "@/tools"
 import type {
     ICompactionCheckpoint,
     ISessionInfo,
@@ -13,10 +15,11 @@ export interface ISnapshotSource<Snapshot> {
     readonly getSnapshot: () => Snapshot
 }
 
-export interface IBuliPromptInput {
+export interface IBuliPromptInput extends IUserInput {
     readonly sessionId?: string
-    readonly text: string
 }
+
+export type IBuliPathSuggestion = IFdPathSuggestion
 
 export interface IBuliPromptSubmission {
     readonly sessionId: string
@@ -26,8 +29,8 @@ export interface IBuliPromptSubmission {
 }
 
 export interface IBuliQueuedMessages {
-    readonly steering: readonly string[]
-    readonly followUp: readonly string[]
+    readonly steering: readonly (string | IUserInput)[]
+    readonly followUp: readonly (string | IUserInput)[]
 }
 
 export interface IBuliAgentDisplayInfo {
@@ -72,9 +75,21 @@ export interface IBuliApplication
     ) => void
 
     readonly submitPrompt: (prompt: IBuliPromptInput) => IBuliPromptSubmission
-    readonly steer: (sessionId: string, text: string) => void
-    readonly followUp: (sessionId: string, text: string) => void
+    readonly steer: (
+        sessionId: string,
+        text: string,
+        resources?: Omit<IUserInput, "text">,
+    ) => void
+    readonly followUp: (
+        sessionId: string,
+        text: string,
+        resources?: Omit<IUserInput, "text">,
+    ) => void
     readonly clearQueuedMessages: (sessionId: string) => IBuliQueuedMessages
+    readonly searchPaths?: (
+        query: string,
+        signal?: AbortSignal,
+    ) => Promise<readonly IBuliPathSuggestion[]>
     readonly resolveToolApproval: (
         sessionId: string,
         approvalId: string,

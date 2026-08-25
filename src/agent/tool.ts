@@ -2,7 +2,10 @@ import type {
     TToolApprovalDecision,
     TToolApprovalDraft,
 } from "@/agent/tool-approval"
-import type { TAgentMessage } from "@/agent/messages"
+import type {
+    IUserPathReference,
+    TAgentMessage,
+} from "@/agent/messages"
 import type { IModelProfile } from "@/agent/model-values"
 
 export type TToolApprovalKind = TToolApprovalDraft["kind"]
@@ -31,6 +34,7 @@ export interface IAgentToolExecutionContext {
     readonly modelProfile?: IModelProfile
     readonly providerAccountId?: string
     readonly messages?: readonly TAgentMessage[]
+    readonly selectedPathReferences?: readonly IUserPathReference[]
     readonly signal: AbortSignal
     readonly reportProgress?: (progress: string) => void
     readonly requestApproval?: (
@@ -48,6 +52,7 @@ export interface IAgentToolExecutionResult {
 export interface IAgentTool extends IAgentToolDescriptor {
     readonly approvalKind?: TToolApprovalKind
     readonly requiresConversationContext?: boolean
+    readonly acceptsSelectedPathReferences?: boolean
     readonly execute: (
         input: Record<string, unknown>,
         context: IAgentToolExecutionContext,

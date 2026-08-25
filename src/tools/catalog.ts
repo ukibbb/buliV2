@@ -1,6 +1,9 @@
 import type { IAgentTool } from "@/agent"
 import { createBashTool } from "@/tools/command/bash-tool"
-import { createWorkspacePathResolver } from "@/tools/paths"
+import {
+    createSelectedPathResolver,
+    createWorkspacePathResolver,
+} from "@/tools/paths"
 import { createApplyPatchTool } from "@/tools/patch/apply-patch-tool"
 import { createReadTool } from "@/tools/read/read-tool"
 import { createGlobTool } from "@/tools/search/glob-tool"
@@ -17,6 +20,7 @@ export function createWorkspaceTools(
     } = {},
 ): readonly IAgentTool[] {
     const resolveWorkspacePath = createWorkspacePathResolver(workspaceRoot)
+    const resolveSelectedPath = createSelectedPathResolver(workspaceRoot)
     const resolveRipgrepExecutable = createRipgrepExecutableResolver(
         workspaceRoot,
         {
@@ -33,8 +37,12 @@ export function createWorkspaceTools(
     )
 
     return [
-        createReadTool(resolveWorkspacePath),
-        createGlobTool(resolveWorkspacePath, resolveRipgrepExecutable),
+        createReadTool(resolveWorkspacePath, resolveSelectedPath),
+        createGlobTool(
+            resolveWorkspacePath,
+            resolveRipgrepExecutable,
+            resolveSelectedPath,
+        ),
         createGrepTool(resolveWorkspacePath, resolveRipgrepExecutable),
         createApplyPatchTool(workspaceRoot),
         createBashTool(workspaceRoot),

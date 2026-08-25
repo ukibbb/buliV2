@@ -11,6 +11,7 @@ import {
     type ModelMessage,
     type ToolContent,
     type ToolSet,
+    type UserContent,
 } from "ai"
 
 import type {
@@ -174,7 +175,21 @@ function toModelMessages(
     const projected = messages.flatMap((message): ModelMessage[] => {
         switch (message.role) {
             case "user":
-                return [{ role: "user", content: message.content }]
+                if (!message.attachments?.length) {
+                    return [{ role: "user", content: message.content }]
+                }
+                return [{
+                    role: "user",
+                    content: [
+                        { type: "text", text: message.content },
+                        ...message.attachments.map((attachment) => ({
+                            type: "file" as const,
+                            data: attachment.data,
+                            mediaType: attachment.mimeType,
+                            filename: attachment.filename,
+                        })),
+                    ] satisfies UserContent,
+                }]
             case "assistant": {
                 if (message.stopReason === "error" || message.stopReason === "aborted") {
                     return []

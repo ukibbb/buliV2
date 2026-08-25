@@ -1,5 +1,8 @@
-import { realpath } from "node:fs/promises"
+import { realpath, stat } from "node:fs/promises"
+import { homedir } from "node:os"
 import { isAbsolute, relative, resolve, sep } from "node:path"
+
+import type { IUserPathReference } from "@/agent"
 
 export interface IResolvedWorkspacePath {
     readonly root: string
@@ -9,6 +12,12 @@ export interface IResolvedWorkspacePath {
 
 export type TWorkspacePathResolver = (
     path: string,
+    signal: AbortSignal,
+) => Promise<IResolvedWorkspacePath>
+
+export type TSelectedPathResolver = (
+    path: string,
+    references: readonly IUserPathReference[],
     signal: AbortSignal,
 ) => Promise<IResolvedWorkspacePath>
 
@@ -47,6 +56,74 @@ export function createWorkspacePathResolver(
     }
 }
 
+/** Resolves workspace paths plus exact path capabilities selected through `@`. */
+export function createSelectedPathResolver(
+    workspaceRoot: string,
+): TSelectedPathResolver {
+    let canonicalRoot: Promise<string> | undefined
+
+    return async (path, references, signal) => {
+        signal.throwIfAborted()
+        if (path.includes("\0")) throw new Error("Path cannot contain a NUL byte")
+
+        canonicalRoot ??= resolveCanonicalRoot(workspaceRoot)
+        const root = await canonicalRoot
+        signal.throwIfAborted()
+        const expanded = path === "~"
+            ? homedir()
+            : path.startsWith(`~${sep}`) ? resolve(homedir(), path.slice(2)) : path
+        const candidate = isAbsolute(expanded)
+            ? resolve(expanded)
+            : resolve(root, expanded)
+        let target: string
+        try {
+            target = await realpath(candidate)
+        } catch (error) {
+            throw workspacePathError(path, error)
+        }
+        signal.throwIfAborted()
+
+        if (isPathInside(root, target)) {
+            return {
+                root,
+                target,
+                relativePath: toWorkspaceRelativePath(root, target),
+            }
+        }
+
+        for (const reference of references) {
+            signal.throwIfAborted()
+            let currentReference: string
+            try {
+                currentReference = await realpath(reference.path)
+                const referenceStat = await stat(currentReference)
+                if (currentReference !== reference.path) continue
+                if (reference.kind === "file" && !referenceStat.isFile()) continue
+                if (
+                    reference.kind === "directory"
+                    && !referenceStat.isDirectory()
+                ) continue
+            } catch {
+                continue
+            }
+
+            const allowed = reference.kind === "file"
+                ? target === currentReference
+                : isPathInside(currentReference, target)
+            if (!allowed) continue
+            return {
+                root,
+                target,
+                relativePath: target.split(sep).join("/"),
+            }
+        }
+
+        throw new Error(
+            `Path is outside the workspace and was not selected with @: ${displayPath(path)}`,
+        )
+    }
+}
+
 /** Converts an absolute in-workspace path to a normalized relative path. */
 export function toWorkspaceRelativePath(root: string, target: string): string {
     if (!isPathInside(root, target)) {
@@ -57,7 +134,7 @@ export function toWorkspaceRelativePath(root: string, target: string): string {
     return workspacePath ? workspacePath.split(sep).join("/") : "."
 }
 
-function isPathInside(root: string, target: string): boolean {
+export function isPathInside(root: string, target: string): boolean {
     const workspacePath = relative(root, target)
     return workspacePath === "" || (
         workspacePath !== ".."

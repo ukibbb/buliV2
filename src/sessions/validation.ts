@@ -1,10 +1,28 @@
+import { Buffer } from "node:buffer"
+import { isAbsolute } from "node:path"
+
 import type {
     IAssistantMessage,
     TAgentMessage,
     TToolExecutionOutcome,
 } from "@/agent"
+import {
+    isValidUserImage,
+    USER_IMAGE_ATTACHMENTS_MAX,
+    USER_IMAGE_MAX_BYTES,
+    USER_IMAGE_TOTAL_MAX_BYTES,
+    USER_PATH_REFERENCES_PER_MESSAGE_MAX,
+} from "@/agent"
+import { displayTextSlice } from "@/common/display-text"
 import type { ICompactionCheckpoint } from "@/sessions/compaction/checkpoint"
 import type { ISessionInfo } from "@/sessions/repository"
+
+const USER_IMAGE_MIME_TYPES = new Set([
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+])
 
 /** Asserts that a value is an exact durable compaction checkpoint. */
 export function assertCompactionCheckpoint(
@@ -80,10 +98,15 @@ export function assertDurableSessionMessage(
                     "role",
                     "source",
                     "content",
+                    ...(value.references === undefined ? [] : ["references"]),
+                    ...(value.attachments === undefined ? [] : ["attachments"]),
                     "createdAt",
                 ])
                 || typeof value.content !== "string"
-                || value.content.trim().length === 0
+                || (
+                    value.content.trim().length === 0
+                    && (!Array.isArray(value.attachments) || value.attachments.length === 0)
+                )
                 || (
                     value.source !== "prompt"
                     && value.source !== "steer"
@@ -92,6 +115,8 @@ export function assertDurableSessionMessage(
             ) {
                 throw new Error("Invalid user message")
             }
+            assertUserPathReferences(value.references, value.content)
+            assertUserImageAttachments(value.attachments, value.content)
             return
         case "assistant":
             if (!hasExactKeys(value, [
@@ -154,6 +179,101 @@ export function assertDurableSessionMessage(
             throw new Error("Unknown session message role")
     }
 }
+
+function assertUserPathReferences(value: unknown, content: string): void {
+    if (value === undefined) return
+    if (
+        !Array.isArray(value)
+        || value.length === 0
+        || value.length > USER_PATH_REFERENCES_PER_MESSAGE_MAX
+    ) {
+        throw new Error("Invalid user path references")
+    }
+    for (const reference of value) {
+        if (
+            !isRecord(reference)
+            || !hasExactKeys(reference, ["type", "kind", "path", "source"])
+            || reference.type !== "path"
+            || (reference.kind !== "file" && reference.kind !== "directory")
+            || typeof reference.path !== "string"
+            || !isAbsolute(reference.path)
+        ) throw new Error("Invalid user path reference")
+        assertUserSourceText(reference.source, content)
+    }
+}
+
+function assertUserImageAttachments(value: unknown, content: string): void {
+    if (value === undefined) return
+    if (
+        !Array.isArray(value)
+        || value.length === 0
+        || value.length > USER_IMAGE_ATTACHMENTS_MAX
+    ) {
+        throw new Error("Invalid user image attachments")
+    }
+    let totalBytes = 0
+    for (const attachment of value) {
+        if (
+            !isRecord(attachment)
+            || !hasExactKeys(attachment, [
+                "type",
+                "mimeType",
+                "data",
+                "filename",
+                "source",
+            ])
+            || attachment.type !== "image"
+            || typeof attachment.mimeType !== "string"
+            || !USER_IMAGE_MIME_TYPES.has(attachment.mimeType)
+            || typeof attachment.filename !== "string"
+            || attachment.filename.trim().length === 0
+            || typeof attachment.data !== "string"
+        ) throw new Error("Invalid user image attachment")
+        const bytes = decodeBase64Image(attachment.data)
+        totalBytes += bytes.byteLength
+        if (
+            totalBytes > USER_IMAGE_TOTAL_MAX_BYTES
+            || !isValidUserImage(attachment.mimeType, bytes)
+        ) {
+            throw new Error("Invalid user image attachment")
+        }
+        assertUserSourceText(attachment.source, content)
+    }
+}
+
+function assertUserSourceText(value: unknown, content: string): void {
+    if (
+        !isRecord(value)
+        || !hasExactKeys(value, ["value", "start", "end"])
+        || typeof value.value !== "string"
+        || value.value.length === 0
+        || !Number.isSafeInteger(value.start)
+        || Number(value.start) < 0
+        || !Number.isSafeInteger(value.end)
+        || Number(value.end) <= Number(value.start)
+    ) throw new Error("Invalid user resource source")
+    if (
+        displayTextSlice(content, Number(value.start), Number(value.end))
+        !== value.value
+    ) throw new Error("User resource source does not match message content")
+}
+
+function decodeBase64Image(data: string): Uint8Array {
+    if (
+        data.length === 0
+        || data.length > Math.ceil(USER_IMAGE_MAX_BYTES / 3) * 4
+        || data.length % 4 !== 0
+        || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data)
+    ) throw new Error("Invalid user image attachment")
+    const bytes = Buffer.from(data, "base64")
+    if (
+        bytes.byteLength === 0
+        || bytes.byteLength > USER_IMAGE_MAX_BYTES
+        || bytes.toString("base64") !== data
+    ) throw new Error("Invalid user image attachment")
+    return bytes
+}
+
 
 function assertAssistantMessage(
     message: Record<string, unknown>,

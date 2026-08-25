@@ -5,6 +5,7 @@ import {
     isModelContextOverflowError,
     type IAgentModelEvent,
     type IAgentToolDescriptor,
+    type IUserMessage,
     type TAgentMessage,
 } from "@/agent"
 import { systemPrompt } from "@/agent/system-prompt"
@@ -363,6 +364,40 @@ test("lowers direct assistant and text-only toolResult messages", async () => {
       output: "README contents",
     },
   ])
+})
+
+test("lowers user image attachments to OpenAI input_image parts", async () => {
+  const capturedRequests: Request[] = []
+  const model = createModel(async (...args) => {
+    capturedRequests.push(new Request(...args))
+    return streamResponse()
+  })
+  const pngData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlL8AAAAASUVORK5CYII="
+
+  await collectEvents(model, [{
+    ...userMessage("Inspect [Image 1]"),
+    attachments: [{
+      type: "image",
+      mimeType: "image/png",
+      data: pngData,
+      filename: "clipboard-1.png",
+      source: { value: "[Image 1]", start: 8, end: 17 },
+    }],
+  }], [])
+
+  const request = capturedRequests[0]
+  if (!request) throw new Error("Expected an OpenAI request")
+  const body = (await request.json()) as Record<string, unknown>
+  expect(body.input).toEqual([{
+    role: "user",
+    content: [
+      { type: "input_text", text: "Inspect [Image 1]" },
+      {
+        type: "input_image",
+        image_url: `data:image/png;base64,${pngData}`,
+      },
+    ],
+  }])
 })
 
 test("projects structured tool outcomes as text-only provider results", async () => {
@@ -889,7 +924,7 @@ async function collectEvents(
   return events
 }
 
-function userMessage(content: string): TAgentMessage {
+function userMessage(content: string): IUserMessage {
   return {
     id: "user-message",
     sessionId: "session-1",

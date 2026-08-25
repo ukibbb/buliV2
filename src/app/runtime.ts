@@ -11,6 +11,7 @@ import type {
     IBuliApplicationSnapshot,
     IBuliModelDisplayInfo,
     IBuliModelSelection,
+    IBuliPathSuggestion,
     IBuliPromptInput,
     IBuliPromptSubmission,
     IBuliSessionCreationOptions,
@@ -23,6 +24,7 @@ import {
     type ISessionManager,
     type ISessionSnapshot,
 } from "@/sessions"
+import type { TFdPathSearcher } from "@/tools"
 
 type TBuliRuntimeListener = () => void
 type TBuliRuntimeSubscribe = () => void
@@ -43,6 +45,8 @@ export type TBuliModelRegistrationLoader = (
     signal: AbortSignal,
 ) => Promise<readonly IBuliModelRuntimeConfig[]>
 
+export type TBuliPathSearcher = TFdPathSearcher
+
 export interface IBuliRuntimeOptions {
     readonly workspaceRoot: string
     readonly manager: ISessionManager
@@ -52,6 +56,7 @@ export interface IBuliRuntimeOptions {
     readonly models: readonly IBuliModelRuntimeConfig[]
     readonly selection: IBuliModelSelection
     readonly loadModels?: TBuliModelRegistrationLoader
+    readonly searchPaths?: TBuliPathSearcher
     readonly now?: () => number
     readonly generateId?: () => string
 }
@@ -67,6 +72,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
     private readonly defaultAgentId: string
     private models: readonly IBuliModelRuntimeConfig[]
     private readonly loadModels: TBuliModelRegistrationLoader | undefined
+    private readonly pathSearcher: TBuliPathSearcher | undefined
     private readonly now: () => number
     private readonly generateId: () => string
     private readonly lifetime = new AbortController()
@@ -101,6 +107,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
         this.defaultAgentId = options.defaultAgentId
         this.models = copyModelRegistrations(options.models)
         this.loadModels = options.loadModels
+        this.pathSearcher = options.searchPaths
         this.selection = { ...options.selection }
         this.now = options.now ?? Date.now
         this.generateId = options.generateId ?? generateRandomId
@@ -172,7 +179,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
         const session = this.getOrOpenAgentSession(sessionId)
         let run: ReturnType<AgentSession["prompt"]>
         try {
-            run = session.prompt(prompt.text)
+            run = session.prompt(prompt)
         } catch (error) {
             if (createdSession) {
                 this.sessions.delete(sessionId)
@@ -208,14 +215,34 @@ export class BuliApplicationRuntime implements IBuliApplication {
         return this.getOrOpenAgentSession(sessionId).compact("manual")
     }
 
-    readonly steer = (sessionId: string, text: string): void => {
+    readonly steer = (
+        sessionId: string,
+        text: string,
+        resources: Omit<IBuliPromptInput, "sessionId" | "text"> = {},
+    ): void => {
         if (this.disposed) throw new Error("Buli runtime is disposed")
-        this.getOrOpenAgentSession(sessionId).steer(text)
+        this.getOrOpenAgentSession(sessionId).steer({ text, ...resources })
     }
 
-    readonly followUp = (sessionId: string, text: string): void => {
+    readonly followUp = (
+        sessionId: string,
+        text: string,
+        resources: Omit<IBuliPromptInput, "sessionId" | "text"> = {},
+    ): void => {
         if (this.disposed) throw new Error("Buli runtime is disposed")
-        this.getOrOpenAgentSession(sessionId).followUp(text)
+        this.getOrOpenAgentSession(sessionId).followUp({ text, ...resources })
+    }
+
+    readonly searchPaths = async (
+        query: string,
+        signal?: AbortSignal,
+    ): Promise<readonly IBuliPathSuggestion[]> => {
+        if (this.disposed) throw new Error("Buli runtime is disposed")
+        if (!this.pathSearcher) return []
+        const operationSignal = signal
+            ? AbortSignal.any([signal, this.lifetime.signal])
+            : this.lifetime.signal
+        return structuredClone(await this.pathSearcher(query, operationSignal))
     }
 
     readonly clearQueuedMessages = (

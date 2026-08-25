@@ -38,6 +38,7 @@ const APPLICATION_SNAPSHOT: IBuliApplicationSnapshot = {
 
 interface IApplicationSpyOptions {
   readonly runningSessionId?: string
+  readonly compactingSessionId?: string
   readonly selectModel?: (modelId: string) => void
   readonly selectReasoningEffort?: (effort: TReasoningEffort) => void
   readonly accepted?: Promise<void>
@@ -83,6 +84,7 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
       sessionSource(
         sessionId === options.runningSessionId,
         options.pendingToolApprovals?.[sessionId],
+        sessionId === options.compactingSessionId,
       ),
     ]),
   )
@@ -748,6 +750,41 @@ test("shows an error when direct new is blocked by an active run", async () => {
   })
 })
 
+test("blocks slash commands while the current session is compacting", async () => {
+  const spy = applicationSpy({ compactingSessionId: "session-1" })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+
+  await controller.submitInput("/new")
+
+  expect(controller.getSnapshot().route).toEqual({
+    type: "session",
+    sessionId: "session-1",
+  })
+  expect(controller.getSnapshot()).toMatchObject({
+    menu: null,
+    inputError: "Cannot submit input while compacting the session",
+  })
+})
+
+test("blocks command-menu activation while the session is compacting", async () => {
+  const spy = applicationSpy({ compactingSessionId: "session-1" })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+  controller.updateInput("/login")
+
+  await controller.activateSelectedMenuItem()
+
+  expect(controller.getSnapshot()).toMatchObject({
+    authenticationMode: null,
+    input: "/login",
+    menu: {
+      mode: "commands",
+      errorMessage: "Cannot submit input while compacting the session",
+    },
+  })
+})
+
 test("compact command targets the active session", async () => {
   const spy = applicationSpy()
   const controller = new BuliUiController({ application: spy.application })
@@ -873,12 +910,14 @@ function sessionInfo(id: string, title: string, updatedAt: number): ISessionInfo
 function sessionSource(
   isRunning: boolean,
   pendingToolApproval?: TToolApprovalRequest,
+  isCompacting = false,
 ) {
   const snapshot: ISessionSnapshot = {
     messages: [],
     pendingSteeringMessages: [],
     pendingFollowUpMessages: [],
     isRunning,
+    isCompacting,
     pendingToolCallIds: [],
     ...(pendingToolApproval ? { pendingToolApproval } : {}),
   }

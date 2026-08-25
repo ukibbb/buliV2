@@ -13,9 +13,12 @@ import type {
     TAgentRunEndReason,
     TToolApprovalRequest,
 } from "@/agent"
+import type { IContextUsage } from "@/sessions"
 
 interface IChatProps {
     readonly isRunning?: boolean
+    readonly isCompacting?: boolean
+    readonly contextUsage?: IContextUsage | undefined
     readonly pendingSteeringMessages?: readonly IUserMessage[]
     readonly pendingFollowUpMessages?: readonly IUserMessage[]
     readonly pendingToolApproval?: TToolApprovalRequest
@@ -55,6 +58,8 @@ export function Chat(props: IChatProps) {
             />
             <ChatStatus
                 isRunning={props.isRunning}
+                isCompacting={props.isCompacting}
+                contextUsage={props.contextUsage}
                 pendingSteeringMessages={props.pendingSteeringMessages}
                 pendingFollowUpMessages={props.pendingFollowUpMessages}
                 pendingToolApproval={props.pendingToolApproval}

@@ -139,6 +139,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
             const session = this.application.openSession(sessionId).getSnapshot()
             if (
                 !session.isRunning
+                && !session.isCompacting
                 && session.pendingSteeringMessages.length === 0
                 && session.pendingFollowUpMessages.length === 0
             ) {
@@ -252,8 +253,12 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
         const sessionId = this.activeSessionId()
         if (!sessionId) return
 
-        if (this.application.openSession(sessionId).getSnapshot().isRunning) {
+        const session = this.application.openSession(sessionId).getSnapshot()
+        if (session.isRunning) {
             throw new Error("Cannot switch sessions while the current session is running")
+        }
+        if (session.isCompacting) {
+            throw new Error("Cannot switch sessions while the current session is compacting")
         }
     }
 }

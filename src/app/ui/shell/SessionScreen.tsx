@@ -50,6 +50,8 @@ export function SessionScreen(props: ISessionScreenProps): ReactNode {
 
       <Chat
         isRunning={session.isRunning}
+        isCompacting={session.isCompacting}
+        contextUsage={session.contextUsage}
         {...(session.pendingToolApproval
           ? { pendingToolApproval: session.pendingToolApproval }
           : {})}

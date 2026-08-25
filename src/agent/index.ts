@@ -24,6 +24,10 @@ export type {
     IAgentRunConfiguration,
     TAgentRunConfigurationResolver,
 } from "@/agent/model"
+export {
+    isModelContextOverflowError,
+    ModelContextOverflowError,
+} from "@/agent/model"
 export type {
     IModelProfile,
     IModelUsage,

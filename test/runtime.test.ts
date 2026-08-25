@@ -430,6 +430,7 @@ test("application runtime replaces models atomically and reconciles selection", 
     }],
     generateId: () => "session-1",
   })
+  const session = createSession(runtime)
   const previous = runtime.getSnapshot()
   let notifications = 0
   runtime.subscribe(() => {
@@ -451,6 +452,10 @@ test("application runtime replaces models atomically and reconciles selection", 
       reasoningEfforts: ["high"],
     }],
     selection: { modelId: "loaded", reasoningEffort: "high" },
+  })
+  expect(session.getSnapshot().contextUsage).toMatchObject({
+    contextWindowTokens: 200_000,
+    shouldCompact: false,
   })
   expect(Object.isFrozen(runtime.getSnapshot().models[0])).toBe(true)
   expect(Object.isFrozen(runtime.getSnapshot().models[0]?.reasoningEfforts)).toBe(true)
@@ -611,6 +616,11 @@ test("model refresh keeps an active run on its captured adapter", async () => {
       id: "initial",
       name: "Initial",
       model: initialModel,
+      modelProfile: {
+        providerId: "test",
+        modelId: "initial",
+        contextWindowTokens: 1_000,
+      },
       reasoningEfforts: ["medium"],
       defaultReasoningEffort: "medium",
     }],
@@ -619,6 +629,11 @@ test("model refresh keeps an active run on its captured adapter", async () => {
       id: "loaded",
       name: "Loaded",
       model: loadedModel,
+      modelProfile: {
+        providerId: "test",
+        modelId: "loaded",
+        contextWindowTokens: 200_000,
+      },
       reasoningEfforts: ["high"],
       defaultReasoningEffort: "high",
     }],
@@ -633,8 +648,12 @@ test("model refresh keeps an active run on its captured adapter", async () => {
   await firstStarted.promise
 
   await runtime.refreshModels()
+  expect(runtime.openSession("session-1").getSnapshot().contextUsage)
+    .toMatchObject({ contextWindowTokens: 1_000 })
   releaseFirst.resolve()
   await first.settled
+  expect(runtime.openSession("session-1").getSnapshot().contextUsage)
+    .toMatchObject({ contextWindowTokens: 200_000 })
   const second = runtime.submitPrompt({
     sessionId: "session-1",
     text: "Second",

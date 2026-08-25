@@ -55,7 +55,7 @@ test("renders direct, streaming, and tool messages", async () => {
             content: [
                 {
                     type: "reasoning",
-                    text: "Hidden reasoning",
+                    text: "Released reasoning summary",
                 },
                 {
                     type: "toolCall",
@@ -183,7 +183,7 @@ test("renders direct, streaming, and tool messages", async () => {
         createdAt: 9,
         stopReason: "pending",
         content: [
-            { type: "reasoning", text: "Streaming hidden reasoning" },
+            { type: "reasoning", text: "Streaming reasoning summary" },
             { type: "text", text: "Streaming answer" },
             {
                 type: "toolCall",
@@ -227,8 +227,8 @@ test("renders direct, streaming, and tool messages", async () => {
         expect(frame).toContain("Streaming answer")
         expect(frame).toContain("[running] glob")
         expect(frame).toContain("TypeError: Invalid OpenAI authentication")
-        expect(frame).not.toContain("Hidden reasoning")
-        expect(frame).not.toContain("Streaming hidden reasoning")
+        expect(frame).toContain("Released reasoning summary")
+        expect(frame).toContain("Streaming reasoning summary")
         expect(frame).not.toContain("src/session/agent-session.ts:28")
         const completedLine = textRenderables(setup.renderer.root).find((renderable) =>
             renderable.plainText.includes("[done] grep")
@@ -252,6 +252,126 @@ test("renders direct, streaming, and tool messages", async () => {
         )
         expect(unknownLine?.plainText).toContain("Inspect current state before retrying")
         expect(unknownLine?.fg.equals(RGBA.fromHex(theme.red))).toBe(true)
+    } finally {
+        act(() => {
+            setup.renderer.destroy()
+        })
+    }
+})
+
+test("renders full reasoning summaries as plain text in content order", async () => {
+    const summary = [
+        "First summary line",
+        "**literal Markdown syntax**",
+        "Final summary line remains available without truncation.",
+    ].join("\n")
+    const completedMessage: IAssistantMessage = {
+        id: "completed-reasoning",
+        sessionId: "default",
+        runId: "run-completed-reasoning",
+        role: "assistant",
+        createdAt: 1,
+        stopReason: "stop",
+        content: [
+            { type: "text", text: "Before summary" },
+            { type: "reasoning", text: summary },
+            { type: "text", text: "After summary" },
+        ],
+    }
+    const streamingMessage: IAssistantMessage = {
+        id: "streaming-reasoning",
+        sessionId: "default",
+        runId: "run-streaming-reasoning",
+        role: "assistant",
+        createdAt: 2,
+        stopReason: "pending",
+        content: [{ type: "reasoning", text: "Live released summary" }],
+    }
+    const setup = await testRender(<Transcript
+        messages={[completedMessage]}
+        streamingMessage={streamingMessage}
+    />, {
+        width: 80,
+        height: 20,
+    })
+
+    try {
+        await act(async () => {
+            await setup.renderOnce()
+            await Promise.all(
+                codeRenderables(setup.renderer.root).map((renderable) =>
+                    renderable.highlightingDone
+                ),
+            )
+            await setup.renderOnce()
+        })
+
+        const texts = textRenderables(setup.renderer.root)
+        const completedReasoning = texts.find((renderable) =>
+            renderable.plainText === `Reasoning: ${summary}`
+        )
+        const streamingReasoning = texts.find((renderable) =>
+            renderable.plainText === "Reasoning: Live released summary"
+        )
+        expect(completedReasoning).toBeDefined()
+        expect(completedReasoning?.fg.equals(RGBA.fromHex(theme.textMuted))).toBe(true)
+        expect(completedReasoning?.wrapMode).toBe("word")
+        expect(completedReasoning?.truncate).toBe(false)
+        expect(streamingReasoning).toBeDefined()
+        expect(streamingReasoning?.fg.equals(RGBA.fromHex(theme.amber))).toBe(true)
+        expect(streamingReasoning?.wrapMode).toBe("word")
+        expect(streamingReasoning?.truncate).toBe(false)
+        expect(markdownRenderables(setup.renderer.root)).toHaveLength(2)
+
+        const frame = setup.captureCharFrame()
+        expect(frame).toContain("**literal Markdown syntax**")
+        expect(frame.indexOf("Before summary")).toBeLessThan(frame.indexOf("Reasoning:"))
+        expect(frame.indexOf("Reasoning:")).toBeLessThan(frame.indexOf("After summary"))
+    } finally {
+        act(() => {
+            setup.renderer.destroy()
+        })
+    }
+})
+
+test("shows work for empty streaming reasoning and hides empty completed reasoning", async () => {
+    const completedMessage: IAssistantMessage = {
+        id: "empty-completed-reasoning",
+        sessionId: "default",
+        runId: "run-empty-completed-reasoning",
+        role: "assistant",
+        createdAt: 1,
+        stopReason: "stop",
+        content: [{ type: "reasoning", text: "" }],
+    }
+    const streamingMessage: IAssistantMessage = {
+        id: "empty-streaming-reasoning",
+        sessionId: "default",
+        runId: "run-empty-streaming-reasoning",
+        role: "assistant",
+        createdAt: 2,
+        stopReason: "pending",
+        content: [{ type: "reasoning", text: "" }],
+    }
+    const setup = await testRender(<Transcript
+        messages={[completedMessage]}
+        streamingMessage={streamingMessage}
+    />, {
+        width: 80,
+        height: 10,
+    })
+
+    try {
+        await act(async () => {
+            await setup.renderOnce()
+        })
+
+        const reasoning = textRenderables(setup.renderer.root).filter((renderable) =>
+            renderable.plainText.startsWith("Reasoning")
+        )
+        expect(reasoning).toHaveLength(1)
+        expect(reasoning[0]?.plainText).toBe("Reasoning...")
+        expect(reasoning[0]?.fg.equals(RGBA.fromHex(theme.amber))).toBe(true)
     } finally {
         act(() => {
             setup.renderer.destroy()

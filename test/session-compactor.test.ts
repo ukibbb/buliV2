@@ -7,12 +7,15 @@ import type {
 } from "@/agent"
 import {
   compactSessionMessages,
+  estimateMessagesInputTokens,
   findCompactionCutoff,
   type ICompactionCheckpoint,
+  MAX_RETAINED_CONTEXT_TOKENS,
   projectAgentContext,
+  retainedContextTargetTokens,
 } from "@/sessions"
 
-test("findCompactionCutoff never separates a tool call from its result", () => {
+test("findCompactionCutoff retains a user-led suffix and complete tool batches", () => {
   const messages: readonly TAgentMessage[] = [
     user("user-1", "Inspect the file"),
     assistant("assistant-tools", [{
@@ -36,12 +39,50 @@ test("findCompactionCutoff never separates a tool call from its result", () => {
     assistant("assistant-2", [{ type: "text", text: "Done" }], 5),
   ]
 
-  // Przy maksymalnym cutoff=2 jedyną bezpieczną granicą jest po pierwszym userze.
-  expect(findCompactionCutoff(messages, 3)).toBe(1)
-  expect(findCompactionCutoff(messages, 1)).toBe(4)
-  expect(() => findCompactionCutoff(messages.slice(0, 2), 1)).toThrow(
+  const latestTurnBudget = estimateMessagesInputTokens(messages.slice(3))
+  const cutoff = findCompactionCutoff(messages, latestTurnBudget)
+  expect(cutoff).toBe(3)
+  expect(messages[cutoff!]?.role).toBe("user")
+  expect(messages.slice(0, cutoff).map((message) => message.role)).toEqual([
+    "user",
+    "assistant",
+    "toolResult",
+  ])
+  expect(() => findCompactionCutoff(messages.slice(0, 2), latestTurnBudget)).toThrow(
     "Incomplete tool sequence in compaction history",
   )
+})
+
+test("findCompactionCutoff adapts retained turns to the request budget", () => {
+  const messages = conversation(8)
+  const threeTurnBudget = estimateMessagesInputTokens(messages.slice(2))
+
+  expect(findCompactionCutoff(messages, threeTurnBudget)).toBe(2)
+  expect(messages.slice(2)).toHaveLength(6)
+
+  const oversizedLatestTurn = [
+    ...conversation(2),
+    user("large-user", "U".repeat(10_000), 3),
+    assistant("large-assistant", [{
+      type: "text",
+      text: "A".repeat(10_000),
+    }], 4),
+  ]
+  expect(findCompactionCutoff(oversizedLatestTurn, 0)).toBe(2)
+})
+
+test("findCompactionCutoff caps retained context at 20k tokens", () => {
+  const messages: readonly TAgentMessage[] = [
+    user("large-user", "U".repeat(80_000)),
+    assistant("large-assistant", [{ type: "text", text: "Large answer" }]),
+    user("latest-user", "Latest question", 3),
+    assistant("latest-assistant", [{ type: "text", text: "Latest answer" }], 4),
+  ]
+
+  expect(retainedContextTargetTokens(100_000)).toBe(
+    MAX_RETAINED_CONTEXT_TOKENS,
+  )
+  expect(findCompactionCutoff(messages, 100_000)).toBe(2)
 })
 
 test("compactSessionMessages updates a previous summary using only the new prefix", async () => {
@@ -75,12 +116,13 @@ test("compactSessionMessages updates a previous summary using only the new prefi
     sessionId: "session-1",
     messages,
     previousCheckpoint: previous,
+    requestBudgetTokens: estimateMessagesInputTokens(messages.slice(4)),
     runConfiguration: {
       model,
       modelProfile: {
         providerId: "test",
         modelId: "model-1",
-        contextWindowTokens: 1_000,
+        contextWindowTokens: 4_096,
       },
       reasoningEffort: "low",
     },
@@ -111,11 +153,88 @@ test("compactSessionMessages updates a previous summary using only the new prefi
     model: {
       providerId: "test",
       modelId: "model-1",
-      contextWindowTokens: 1_000,
+      contextWindowTokens: 4_096,
     },
     usage: { inputTokens: 20, outputTokens: 3, totalTokens: 23 },
   })
   expect(messages).toEqual(original)
+})
+
+test("compactSessionMessages rejects summary input that cannot fit its model", async () => {
+  let modelCalled = false
+  const model: IAgentModel = {
+    async *stream() {
+      modelCalled = true
+      yield { type: "finish", reason: "stop" }
+    },
+  }
+
+  await expect(compactSessionMessages({
+    sessionId: "session-1",
+    messages: conversation(4),
+    requestBudgetTokens: 0,
+    runConfiguration: {
+      model,
+      modelProfile: {
+        providerId: "test",
+        modelId: "small-summarizer",
+        contextWindowTokens: 2_050,
+      },
+      reasoningEffort: "low",
+    },
+    reason: "manual",
+    signal: new AbortController().signal,
+    now: () => 100,
+    generateId: () => "checkpoint-small",
+  })).rejects.toThrow(
+    "Compaction summary input does not fit the summarizer model context",
+  )
+  expect(modelCalled).toBe(false)
+})
+
+test("compactSessionMessages rejects a truncated summary", async () => {
+  const model: IAgentModel = {
+    async *stream() {
+      yield { type: "text-delta", id: "summary", delta: "Partial summary" }
+      yield { type: "finish", reason: "max_output_tokens" }
+    },
+  }
+
+  await expect(compactSessionMessages({
+    sessionId: "session-1",
+    messages: conversation(4),
+    requestBudgetTokens: 0,
+    runConfiguration: { model, reasoningEffort: "low" },
+    reason: "automatic",
+    signal: new AbortController().signal,
+    now: () => 100,
+    generateId: () => "checkpoint-truncated",
+  })).rejects.toThrow(
+    "Compaction model returned an incomplete summary (max_output_tokens)",
+  )
+})
+
+test("compactSessionMessages performs a final abort check", async () => {
+  const controller = new AbortController()
+  const lateAbort = new Error("Late compaction abort")
+  const model: IAgentModel = {
+    async *stream() {
+      yield { type: "text-delta", id: "summary", delta: "Summary" }
+      yield { type: "finish", reason: "stop" }
+      controller.abort(lateAbort)
+    },
+  }
+
+  await expect(compactSessionMessages({
+    sessionId: "session-1",
+    messages: conversation(4),
+    requestBudgetTokens: 0,
+    runConfiguration: { model, reasoningEffort: "low" },
+    reason: "manual",
+    signal: controller.signal,
+    now: () => 100,
+    generateId: () => "checkpoint-abort",
+  })).rejects.toBe(lateAbort)
 })
 
 test("projectAgentContext returns summary plus tail and rejects a stale anchor", () => {

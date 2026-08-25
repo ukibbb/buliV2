@@ -186,10 +186,12 @@ export async function updateStandalone(
     const bundleDirectory = join(extractionDirectory, `buli-${target}`);
     const stagedExecutable = join(bundleDirectory, "bin", "buli");
     const stagedRipgrep = join(bundleDirectory, "lib", "buli", "rg");
+    const stagedFd = join(bundleDirectory, "lib", "buli", "fd");
     const stagedLicenses = join(bundleDirectory, "THIRD_PARTY_LICENSES");
     await Promise.all([
       chmod(stagedExecutable, 0o755),
       chmod(stagedRipgrep, 0o755),
+      chmod(stagedFd, 0o755),
     ]);
     const installedVersion = (await run([stagedExecutable, "--version"], true)).trim();
     if (installedVersion !== result.latestVersion) {
@@ -199,10 +201,12 @@ export async function updateStandalone(
       );
     }
     await run([stagedRipgrep, "--version"]);
+    await run([stagedFd, "--version"]);
     await readFile(stagedLicenses);
 
     await replaceInstallation([
       { source: stagedRipgrep, destination: join(prefix, "lib", "buli", "rg") },
+      { source: stagedFd, destination: join(prefix, "lib", "buli", "fd") },
       {
         source: stagedLicenses,
         destination: join(prefix, "share", "buli", "THIRD_PARTY_LICENSES"),
@@ -229,28 +233,46 @@ export function npmUpdateInstruction(
 async function replaceInstallation(
   files: readonly { readonly source: string; readonly destination: string }[],
 ): Promise<void> {
-  const replaced: Array<{ readonly destination: string; readonly backup: string }> = [];
+  const replaced: Array<{
+    readonly destination: string;
+    readonly backup: string;
+    readonly hadPrevious: boolean;
+  }> = [];
   try {
     for (const file of files) {
       const backup = `${file.destination}.buli-backup-${process.pid}`;
       await rm(backup, { force: true });
-      await rename(file.destination, backup);
+      let hadPrevious = true;
+      try {
+        await rename(file.destination, backup);
+      } catch (error) {
+        if (!isMissingPathError(error)) throw error;
+        hadPrevious = false;
+      }
       try {
         await rename(file.source, file.destination);
       } catch (error) {
-        await rename(backup, file.destination);
+        if (hadPrevious) await rename(backup, file.destination);
         throw error;
       }
-      replaced.push({ destination: file.destination, backup });
+      replaced.push({ destination: file.destination, backup, hadPrevious });
     }
   } catch (error) {
     for (const file of replaced.reverse()) {
       await rm(file.destination, { force: true });
-      await rename(file.backup, file.destination);
+      if (file.hadPrevious) await rename(file.backup, file.destination);
     }
     throw error;
   }
-  await Promise.all(replaced.map(({ backup }) => rm(backup, { force: true })));
+  await Promise.all(replaced.map(({ backup, hadPrevious }) => hadPrevious
+    ? rm(backup, { force: true })
+    : Promise.resolve()));
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return error instanceof Error
+    && "code" in error
+    && String(error.code) === "ENOENT";
 }
 
 function releaseTarget(platform: NodeJS.Platform, architecture: string): string {

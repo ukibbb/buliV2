@@ -27,6 +27,7 @@ test.skipIf(process.platform === "win32")(
         `#!/bin/sh\nprintf '${packageMetadata.version}\\n'\n`,
       );
       await executable(join(bundle, "lib", "buli", "rg"), "#!/bin/sh\nprintf 'fixture rg\\n'\n");
+      await executable(join(bundle, "lib", "buli", "fd"), "#!/bin/sh\nprintf 'fixture fd\\n'\n");
       await writeFile(join(bundle, "THIRD_PARTY_LICENSES"), "fixture licenses\n");
       const archivePath = join(root, "buli-linux-x64.tar.gz");
       const tar = Bun.spawn([

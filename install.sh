@@ -94,21 +94,46 @@ bundle_directory="$extraction_directory/buli-$target"
 [ -x "$bundle_directory/lib/buli/rg" ] || fail "bundle does not contain executable lib/buli/rg"
 [ -f "$bundle_directory/THIRD_PARTY_LICENSES" ] \
     || fail "bundle does not contain THIRD_PARTY_LICENSES"
+bundle_version="1"
+if [ -f "$bundle_directory/BUNDLE_VERSION" ]; then
+    bundle_version="$(awk 'NR == 1 { print $1 }' "$bundle_directory/BUNDLE_VERSION")"
+    [ "$bundle_version" = "2" ] || fail "unsupported bundle version: $bundle_version"
+fi
+bundle_has_fd="false"
+if [ -x "$bundle_directory/lib/buli/fd" ]; then
+    bundle_has_fd="true"
+elif [ "$bundle_version" = "2" ]; then
+    fail "bundle does not contain executable lib/buli/fd"
+fi
 
 stage_directory="$PREFIX/.buli-install-$$"
 rm -rf "$stage_directory"
 mkdir -p "$stage_directory/bin" "$stage_directory/lib/buli" "$stage_directory/share/buli"
 cp "$bundle_directory/bin/buli" "$stage_directory/bin/buli"
 cp "$bundle_directory/lib/buli/rg" "$stage_directory/lib/buli/rg"
+if [ "$bundle_has_fd" = "true" ]; then
+    cp "$bundle_directory/lib/buli/fd" "$stage_directory/lib/buli/fd"
+fi
 cp "$bundle_directory/THIRD_PARTY_LICENSES" \
     "$stage_directory/share/buli/THIRD_PARTY_LICENSES"
 chmod 755 "$stage_directory/bin/buli" "$stage_directory/lib/buli/rg"
+if [ "$bundle_has_fd" = "true" ]; then
+    chmod 755 "$stage_directory/lib/buli/fd"
+fi
 
 "$stage_directory/bin/buli" --help >/dev/null
 "$stage_directory/lib/buli/rg" --version >/dev/null
+if [ "$bundle_has_fd" = "true" ]; then
+    "$stage_directory/lib/buli/fd" --version >/dev/null
+fi
 
 mkdir -p "$PREFIX/bin" "$PREFIX/lib/buli" "$PREFIX/share/buli"
 mv "$stage_directory/lib/buli/rg" "$PREFIX/lib/buli/rg"
+if [ "$bundle_has_fd" = "true" ]; then
+    mv "$stage_directory/lib/buli/fd" "$PREFIX/lib/buli/fd"
+else
+    rm -f "$PREFIX/lib/buli/fd"
+fi
 mv "$stage_directory/share/buli/THIRD_PARTY_LICENSES" \
     "$PREFIX/share/buli/THIRD_PARTY_LICENSES"
 mv "$stage_directory/bin/buli" "$PREFIX/bin/buli"

@@ -26,6 +26,8 @@ test.skipIf(process.platform === "win32")(
         .toContain("fixture buli")
       expect(await readFile(join(fixture.prefix, "lib", "buli", "rg"), "utf8"))
         .toContain("fixture ripgrep")
+      expect(await readFile(join(fixture.prefix, "lib", "buli", "fd"), "utf8"))
+        .toContain("fixture fd")
       expect(await readFile(
         join(fixture.prefix, "share", "buli", "THIRD_PARTY_LICENSES"),
         "utf8",
@@ -62,6 +64,37 @@ test.skipIf(process.platform === "win32")(
   },
 )
 
+test.skipIf(process.platform === "win32")(
+  "installs a historical bundle that predates the fd sidecar",
+  async () => {
+    const fixture = await createInstallerFixture({ legacy: true })
+    try {
+      const result = await runInstaller(fixture)
+      expect(result.exitCode).toBe(0)
+      expect(await readFile(join(fixture.prefix, "bin", "buli"), "utf8"))
+        .toContain("fixture buli")
+      expect(Bun.file(join(fixture.prefix, "lib", "buli", "fd")).exists())
+        .resolves.toBe(false)
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true })
+    }
+  },
+)
+
+test.skipIf(process.platform === "win32")(
+  "rejects a current bundle that omits the fd sidecar",
+  async () => {
+    const fixture = await createInstallerFixture({ missingFd: true })
+    try {
+      const result = await runInstaller(fixture)
+      expect(result.exitCode).not.toBe(0)
+      expect(result.stderr).toContain("bundle does not contain executable lib/buli/fd")
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true })
+    }
+  },
+)
+
 interface IInstallerFixture {
   readonly root: string
   readonly home: string
@@ -72,7 +105,9 @@ interface IInstallerFixture {
   readonly curlLog: string
 }
 
-async function createInstallerFixture(): Promise<IInstallerFixture> {
+async function createInstallerFixture(
+  options: { readonly legacy?: boolean; readonly missingFd?: boolean } = {},
+): Promise<IInstallerFixture> {
   const root = await mkdtemp(join(tmpdir(), "buli-installer-test-"))
   const home = join(root, "home")
   const prefix = join(home, ".local")
@@ -95,6 +130,15 @@ async function createInstallerFixture(): Promise<IInstallerFixture> {
     join(bundle, "lib", "buli", "rg"),
     "#!/bin/sh\nprintf 'fixture ripgrep\\n'\n",
   )
+  if (!options.legacy && !options.missingFd) {
+    await writeExecutable(
+      join(bundle, "lib", "buli", "fd"),
+      "#!/bin/sh\nprintf 'fixture fd\\n'\n",
+    )
+  }
+  if (!options.legacy) {
+    await writeFile(join(bundle, "BUNDLE_VERSION"), "2\n")
+  }
   await writeFile(join(bundle, "THIRD_PARTY_LICENSES"), "fixture licenses\n")
   await run(["tar", "-czf", archive, "-C", join(root, "bundle"), "buli-darwin-arm64"])
   const archiveBytes = await readFile(archive)

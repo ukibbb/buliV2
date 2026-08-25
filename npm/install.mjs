@@ -66,7 +66,12 @@ export async function installBinary(options = {}) {
     const bundle = join(extractionDirectory, `buli-${target}`);
     const executable = join(bundle, "bin", "buli");
     const ripgrep = join(bundle, "lib", "buli", "rg");
-    await Promise.all([chmod(executable, 0o755), chmod(ripgrep, 0o755)]);
+    const fd = join(bundle, "lib", "buli", "fd");
+    await Promise.all([
+      chmod(executable, 0o755),
+      chmod(ripgrep, 0o755),
+      chmod(fd, 0o755),
+    ]);
     const installedVersion = (await run(executable, ["--version"], true)).trim();
     if (installedVersion !== version) {
       throw new Error(
@@ -75,6 +80,7 @@ export async function installBinary(options = {}) {
       );
     }
     await run(ripgrep, ["--version"]);
+    await run(fd, ["--version"]);
     await readFile(join(bundle, "THIRD_PARTY_LICENSES"));
 
     const stagedDestination = join(temporaryDirectory, "vendor");

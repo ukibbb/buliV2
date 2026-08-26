@@ -78,6 +78,26 @@ The updater downloads the release for the current platform, verifies its
 SHA-256 checksum, validates the new executables, and replaces the installation
 only after those checks pass. Package-manager installations are not modified.
 
+## Workspace instructions
+
+Buli creates a `.buli` directory in the workspace root when it starts. To add
+project-specific instructions, create one of these files inside it:
+
+1. `.buli/BULI.md`
+2. `.buli/AGENTS.md`
+3. `.buli/CLAUDE.md`
+
+If several files exist, Buli loads only the first one in that order. Filenames
+are case-sensitive, and each file must be a regular, valid UTF-8 file no larger
+than 64 KiB. An empty higher-priority file still prevents lower-priority files
+from loading.
+
+Instructions are read once at startup, so restart Buli after editing them. Their
+contents are sent to the selected model as lower-priority project conventions;
+they cannot add tools, change workspace boundaries, or replace required command
+and patch approvals. A project may commit its `.buli` directory when the team
+wants to share the same instructions.
+
 ## Development requirements
 
 - Bun 1.3.12 or newer

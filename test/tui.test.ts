@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import {
   BoxRenderable,
   CodeRenderable,
@@ -315,8 +318,10 @@ function buliElementWithController(
 }
 
 test("provides the runtime above Buli", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "buli-tui-"))
   const startup = await createBuliApplication({
     signal: new AbortController().signal,
+    workspaceRoot: workspace,
     manager: new InMemorySessionManager(),
     model: { async *stream() {} },
     tools: [],
@@ -345,6 +350,7 @@ test("provides the runtime above Buli", async () => {
     expect(runtime.listSessions()).toEqual([])
   } finally {
     await startup.dispose()
+    await rm(workspace, { recursive: true, force: true })
     act(() => {
       setup.renderer.destroy()
     })

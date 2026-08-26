@@ -2,6 +2,7 @@
 export { Agent } from "@/agent/agent"
 export { isImmutableAssistantSnapshot } from "@/agent/assistant-message-builder"
 export { systemPrompt } from "@/agent/system-prompt"
+export type { IWorkspaceInstructions } from "@/agent/system-prompt"
 export type {
     IAgentEvent,
     TAgentCriticalEventSink,

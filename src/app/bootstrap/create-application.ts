@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path"
 import { systemPrompt, type IAgentModel, type IAgentTool } from "@/agent"
 import type { IAuthenticationService } from "@/authentication"
 import { createAuthentication } from "@/app/bootstrap/create-authentication"
+import { loadWorkspaceInstructions } from "@/app/bootstrap/load-workspace-instructions"
 import type { IBuliModelSelection } from "@/app/contracts"
 import type { IBuliApplication } from "@/app/contracts"
 import {
@@ -68,6 +69,7 @@ export interface IBuliApplicationStartup {
 
 export interface IBuliApplicationOptions {
     readonly signal: AbortSignal
+    readonly workspaceRoot?: string
     readonly manager?: ISessionManager
     readonly model?: IAgentModel
     readonly tools?: readonly IAgentTool[]
@@ -81,8 +83,14 @@ export async function createBuliApplication(
     // pierwszy checkpoint blokuje start po abort, drugi zatrzymuje dalszy startup,
     // ale rozpoczętego realpath nie da się tu przerwać. Po aborcie rzucany jest reason.
     options.signal.throwIfAborted()
-    const workspaceRoot: string = await realpath(process.cwd())
+    const workspaceRoot: string = await realpath(
+        options.workspaceRoot ?? process.cwd(),
+    )
     options.signal.throwIfAborted()
+    const workspaceInstructions = await loadWorkspaceInstructions(
+        workspaceRoot,
+        options.signal,
+    )
 
     const auth = createAuthentication()
     const authentication = auth.service
@@ -135,7 +143,11 @@ export async function createBuliApplication(
         const agents: readonly IBuliAgentRuntimeConfig[] = [{
             id: BULI_AGENT_ID,
             name: "Buli",
-            systemPrompt: systemPrompt(workspaceRoot, tools),
+            systemPrompt: systemPrompt(
+                workspaceRoot,
+                tools,
+                workspaceInstructions,
+            ),
             tools,
         }]
 

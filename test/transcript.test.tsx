@@ -860,7 +860,7 @@ test("shows work for empty streaming reasoning and hides empty completed reasoni
     }
 })
 
-test("updates streaming markdown without replacing its public renderable", async () => {
+test("keeps completed headings stable while streaming markdown grows", async () => {
     let updateText: ((text: string) => void) | undefined
 
     function StreamingTranscript(): React.ReactNode {
@@ -890,6 +890,8 @@ test("updates streaming markdown without replacing its public renderable", async
         const markdownBefore = markdownRenderables(setup.renderer.root)[0]
         expect(markdownBefore).toBeDefined()
         expect(markdownBefore?.streaming).toBe(true)
+        expect(markdownBefore?.internalBlockMode).toBe("top-level")
+        expect(markdownBefore?.renderNode).toBeUndefined()
         expect(markdownBefore?.tableOptions).toEqual({
             style: "grid",
             widthMode: "full",
@@ -903,6 +905,8 @@ test("updates streaming markdown without replacing its public renderable", async
             borderColor: theme.textMuted,
             selectable: true,
         })
+        const headingBefore = markdownBefore?._blockStates[0]?.renderable
+        expect(headingBefore).toBeDefined()
         expect(setup.captureCharFrame()).toContain("Partial paragraph")
 
         act(() => {
@@ -914,8 +918,68 @@ test("updates streaming markdown without replacing its public renderable", async
 
         const markdownAfter = markdownRenderables(setup.renderer.root)[0]
         expect(markdownAfter).toBe(markdownBefore)
+        expect(markdownAfter?._blockStates[0]?.renderable).toBe(headingBefore)
         expect(markdownAfter?.content).toBe("# Stable heading\n\nPartial paragraph continues")
         expect(setup.captureCharFrame()).toContain("Partial paragraph continues")
+    } finally {
+        act(() => {
+            setup.renderer.destroy()
+        })
+    }
+})
+
+test("updates streaming code without replacing its renderable", async () => {
+    let updateText: ((text: string) => void) | undefined
+
+    function StreamingCodeTranscript(): React.ReactNode {
+        const [text, setText] = useState("```typescript\nconst one = 1")
+        updateText = setText
+        return <Transcript
+            messages={[]}
+            streamingMessage={{
+                id: "streaming-code",
+                sessionId: "default",
+                runId: "run-streaming-code",
+                role: "assistant",
+                createdAt: 1,
+                stopReason: "pending",
+                content: [{ type: "text", text }],
+            }}
+        />
+    }
+
+    const setup = await testRender(<StreamingCodeTranscript />, {
+        width: 80,
+        height: 8,
+    })
+
+    try {
+        await act(async () => {
+            await setup.renderOnce()
+        })
+        const codeBefore = codeRenderables(setup.renderer.root).find(
+            (renderable) => renderable.filetype === "typescript",
+        )
+        expect(codeBefore).toBeDefined()
+        expect(lineNumberRenderables(setup.renderer.root)).toHaveLength(0)
+
+        act(() => {
+            updateText?.("```typescript\nconst one = 1\nconst two = 2\n```")
+        })
+        await act(async () => {
+            await setup.renderOnce()
+        })
+
+        const codeAfter = codeRenderables(setup.renderer.root).find(
+            (renderable) => renderable.filetype === "typescript",
+        )
+        expect(codeAfter).toBe(codeBefore)
+        expect(codeAfter?.content).toBe("const one = 1\nconst two = 2")
+        await act(async () => {
+            await codeAfter?.highlightingDone
+            await setup.renderOnce()
+        })
+        expect(setup.captureCharFrame()).toContain("const two = 2")
     } finally {
         act(() => {
             setup.renderer.destroy()
@@ -988,12 +1052,14 @@ test("keeps completed history renderables stable across streaming text updates",
             await setup.renderOnce()
         })
         const markdownBefore = markdownRenderables(setup.renderer.root)
-        const gutterBefore = lineNumberRenderables(setup.renderer.root)[0]
+        const historyCodeBefore = codeRenderables(markdownBefore[0]!).find(
+            (renderable) => renderable.filetype === "typescript",
+        )
         const toolBefore = textRenderables(setup.renderer.root).find((renderable) =>
             renderable.plainText.startsWith("Read [src/stable.ts]")
         )
         expect(markdownBefore).toHaveLength(2)
-        expect(gutterBefore).toBeDefined()
+        expect(historyCodeBefore).toBeDefined()
         expect(toolBefore).toBeDefined()
 
         act(() => {
@@ -1004,13 +1070,15 @@ test("keeps completed history renderables stable across streaming text updates",
         })
 
         const markdownAfter = markdownRenderables(setup.renderer.root)
-        const gutterAfter = lineNumberRenderables(setup.renderer.root)[0]
+        const historyCodeAfter = codeRenderables(markdownAfter[0]!).find(
+            (renderable) => renderable.filetype === "typescript",
+        )
         const toolAfter = textRenderables(setup.renderer.root).find((renderable) =>
             renderable.plainText.startsWith("Read [src/stable.ts]")
         )
         expect(markdownAfter[0]).toBe(markdownBefore[0])
         expect(markdownAfter[1]).toBe(markdownBefore[1])
-        expect(gutterAfter).toBe(gutterBefore)
+        expect(historyCodeAfter).toBe(historyCodeBefore)
         expect(toolAfter).toBe(toolBefore)
         expect(setup.captureCharFrame()).toContain("Live text continues")
     } finally {
@@ -1020,7 +1088,7 @@ test("keeps completed history renderables stable across streaming text updates",
     }
 })
 
-test("styles rich Markdown and numbers multiline common-language fences", async () => {
+test("styles rich Markdown and renders code without line numbers", async () => {
     const message: IAssistantMessage = {
         id: "styled-markdown",
         sessionId: "default",
@@ -1084,7 +1152,8 @@ test("styles rich Markdown and numbers multiline common-language fences", async 
         expect(markdown?.syntaxStyle).toBe(syntax)
         expect(markdown?.conceal).toBe(true)
         expect(markdown?.concealCode).toBe(false)
-        expect(markdown?.renderNode).toBeDefined()
+        expect(markdown?.internalBlockMode).toBe("top-level")
+        expect(markdown?.renderNode).toBeUndefined()
 
         const tables = tableRenderables(setup.renderer.root)
         expect(tables).toHaveLength(1)
@@ -1121,20 +1190,7 @@ test("styles rich Markdown and numbers multiline common-language fences", async 
         expect(fencedCode.every((renderable) => renderable.syntaxStyle === syntax))
             .toBe(true)
 
-        const gutters = lineNumberRenderables(setup.renderer.root)
-        expect(gutters).toHaveLength(2)
-        expect(gutters.map((gutter) =>
-            codeRenderables(gutter).map((renderable) => renderable.filetype)
-        )).toEqual([["typescript"], ["bash"]])
-        expect(gutters.every((gutter) => gutter.showLineNumbers)).toBe(true)
-        expect(gutters.every((gutter) => gutter.fg.equals(RGBA.fromHex(theme.textMuted))))
-            .toBe(true)
-        expect(gutters.every((gutter) => gutter.bg.equals(RGBA.fromHex(theme.surface))))
-            .toBe(true)
-        expect(fencedCode.find((renderable) => renderable.filetype === "python")?.parent)
-            .not.toBeInstanceOf(LineNumberRenderable)
-        expect(fencedCode.find((renderable) => renderable.filetype === "diff")?.parent)
-            .not.toBeInstanceOf(LineNumberRenderable)
+        expect(lineNumberRenderables(setup.renderer.root)).toHaveLength(0)
     } finally {
         act(() => {
             setup.renderer.destroy()
@@ -1142,7 +1198,7 @@ test("styles rich Markdown and numbers multiline common-language fences", async 
     }
 })
 
-test("keeps numbered code readable in a narrow transcript", async () => {
+test("keeps unnumbered code readable in a narrow transcript", async () => {
     const message: IAssistantMessage = {
         id: "narrow-code",
         sessionId: "default",
@@ -1165,10 +1221,10 @@ test("keeps numbered code readable in a narrow transcript", async () => {
             await setup.renderOnce()
         })
 
-        expect(lineNumberRenderables(setup.renderer.root)).toHaveLength(1)
+        expect(lineNumberRenderables(setup.renderer.root)).toHaveLength(0)
         const frame = setup.captureCharFrame()
-        expect(frame).toContain("1 const one")
-        expect(frame).toContain("2 const two")
+        expect(frame).toContain("const one = 1")
+        expect(frame).toContain("const two = 2")
     } finally {
         act(() => {
             setup.renderer.destroy()

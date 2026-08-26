@@ -6,7 +6,6 @@ import type {
     IToolResultMessage,
     TAgentMessage,
 } from "@/agent"
-import { renderRichMarkdownNode } from "@/sessions/ui/RichMarkdown"
 import { ToolActivityLine } from "@/sessions/ui/ToolActivity"
 import { syntax, theme } from "@/terminal/theme"
 
@@ -50,7 +49,7 @@ function AssistantCard(props: {
                         streaming={props.streaming}
                         conceal
                         concealCode={false}
-                        renderNode={renderRichMarkdownNode}
+                        internalBlockMode="top-level"
                         tableOptions={MARKDOWN_TABLE_OPTIONS}
                     />
                 }

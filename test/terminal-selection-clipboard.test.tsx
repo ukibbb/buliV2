@@ -202,6 +202,59 @@ test("copies double- and triple-click selections without resetting click state",
   }
 })
 
+test("keeps a newer mouse drag alive past the word clear delay", async () => {
+  const copiedTexts: string[] = []
+  const setup = await testRender(
+    <>
+      <SelectionClipboardBridge
+        clipboard={{
+          writeText: async (text) => {
+            copiedTexts.push(text)
+            return successfulWriteResult()
+          },
+        }}
+        onCopyComplete={() => {}}
+      />
+      <text selectable>alpha beta gamma</text>
+    </>,
+    { width: 80, height: 8 },
+  )
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+      await setup.mockMouse.click(6, 0)
+      await setup.mockMouse.click(6, 0)
+    })
+    await setup.waitFor(() => copiedTexts.length === 1)
+    expect(copiedTexts).toEqual(["beta"])
+
+    await act(async () => {
+      await setup.mockMouse.pressDown(6, 0)
+      await setup.mockMouse.moveTo(12, 0)
+    })
+    const newerSelection = setup.renderer.getSelection()
+    expect(newerSelection?.behavior).toBe("line")
+    expect(newerSelection?.getSelectedText()).toBe("alpha beta gamma")
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 550))
+    })
+    expect(setup.renderer.getSelection()).toBe(newerSelection)
+
+    await act(async () => {
+      await setup.mockMouse.release(12, 0)
+    })
+    await setup.waitFor(() => copiedTexts.length === 2)
+    expect(copiedTexts).toEqual(["beta", "alpha beta gamma"])
+    expect(setup.renderer.getSelection()).toBeNull()
+  } finally {
+    act(() => {
+      setup.renderer.destroy()
+    })
+  }
+})
+
 test("serializes selection writes so the newest text finishes last", async () => {
   const writes: Array<{
     readonly text: string

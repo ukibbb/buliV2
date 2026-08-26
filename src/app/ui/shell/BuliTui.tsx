@@ -9,6 +9,7 @@ import {
 } from "@/app/ui/context/ui-controller-context"
 import { buliKeyboardShortcuts } from "@/app/ui/keyboard-shortcuts"
 import { Home } from "@/app/ui/shell/Home"
+import { SessionCompletionNotifier } from "@/app/ui/shell/SessionCompletionNotifier"
 import { SessionScreen } from "@/app/ui/shell/SessionScreen"
 import type { IAuthenticationService } from "@/authentication"
 import { AuthenticationFlow } from "@/authentication/ui"
@@ -17,6 +18,7 @@ import { TerminalViewport } from "@/terminal"
 interface IBuliTuiProps {
     readonly authentication: IAuthenticationService
     readonly openUrl: (url: string) => unknown | Promise<unknown>
+    readonly now?: () => number
 }
 
 /** Renders and routes the connected application terminal interface. */
@@ -48,6 +50,13 @@ export function BuliTui(props: IBuliTuiProps) {
 
     return (
         <TerminalViewport width={width} height={height}>
+            {ui.route.type === "session" ? (
+                <SessionCompletionNotifier
+                    key={`completion:${ui.route.sessionId}`}
+                    sessionId={ui.route.sessionId}
+                    {...(props.now ? { now: props.now } : {})}
+                />
+            ) : null}
             {ui.authenticationMode ? (
                 <AuthenticationFlow
                     key={ui.authenticationMode}

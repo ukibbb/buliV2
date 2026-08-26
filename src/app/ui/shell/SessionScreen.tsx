@@ -1,11 +1,6 @@
 import type { ScrollBoxRenderable } from "@opentui/core"
-import {
-  useBlur,
-  useFocus,
-  useKeyboard,
-  useRenderer,
-} from "@opentui/react"
-import { useEffect, useRef, type ReactNode } from "react"
+import { useKeyboard } from "@opentui/react"
+import { useRef, type ReactNode } from "react"
 
 import { Chat } from "@/app/ui/chat/Chat"
 import { useSession } from "@/app/ui/context/application-context"
@@ -17,31 +12,13 @@ import { ToolApprovalPanel } from "@/tools/ui"
 
 interface ISessionScreenProps {
   sessionId: string
-  now?: () => number
 }
-
-export const COMPLETION_NOTIFICATION_MIN_DURATION_MS = 5_000
 
 /** Connects one session snapshot to transcript, approval, and prompt views. */
 export function SessionScreen(props: ISessionScreenProps): ReactNode {
   const session = useSession(props.sessionId)
   const controller = useBuliUiController()
-  const renderer = useRenderer()
   const transcriptScrollRef = useRef<ScrollBoxRenderable | null>(null)
-  const terminalFocusedRef = useRef(true)
-  const runStateRef = useRef({
-    initialized: false,
-    wasRunning: false,
-    startedAt: null as number | null,
-  })
-  const now = props.now ?? Date.now
-
-  useFocus(() => {
-    terminalFocusedRef.current = true
-  })
-  useBlur(() => {
-    terminalFocusedRef.current = false
-  })
 
   useKeyboard((key) => {
     const isAlt = key.meta || key.option
@@ -76,35 +53,6 @@ export function SessionScreen(props: ISessionScreenProps): ReactNode {
     key.preventDefault()
     key.stopPropagation()
   })
-
-  useEffect(() => {
-    const runState = runStateRef.current
-    if (!runState.initialized) {
-      runState.initialized = true
-      runState.wasRunning = session.isRunning
-      runState.startedAt = session.isRunning ? now() : null
-      return
-    }
-
-    const finishedRun = runState.wasRunning && !session.isRunning
-    if (!runState.wasRunning && session.isRunning) {
-      runState.startedAt = now()
-    }
-    runState.wasRunning = session.isRunning
-    if (!finishedRun) return
-
-    const startedAt = runState.startedAt
-    runState.startedAt = null
-    const duration = startedAt === null ? 0 : now() - startedAt
-    // Focus and duration guards avoid foreground noise and alerts for quick runs.
-    if (
-      !terminalFocusedRef.current
-      && duration >= COMPLETION_NOTIFICATION_MIN_DURATION_MS
-    ) {
-      // Unsupported terminals return false, making this best-effort call harmless.
-      void renderer.triggerNotification("Run finished", "Buli")
-    }
-  }, [now, renderer, session.isRunning])
 
   return (
     <box

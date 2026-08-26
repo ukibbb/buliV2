@@ -33,6 +33,7 @@ import type {
 import type { ISessionSnapshot } from "@/sessions"
 import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
 import { BuliTui } from "@/app/ui/shell/BuliTui"
+import { COMPLETION_NOTIFICATION_MIN_DURATION_MS } from "@/app/ui/shell/SessionCompletionNotifier"
 import { BuliUiController } from "@/app/ui/ui-controller"
 import { BuliUiControllerProvider } from "@/app/ui/context/ui-controller-context"
 import { glyphs, syntax } from "@/terminal/theme"
@@ -295,14 +296,19 @@ function buliElement(runtime: IBuliApplication, sessionId?: string) {
 function buliElementWithController(
   runtime: IBuliApplication,
   controller: BuliUiController,
+  options: {
+    readonly authentication?: IAuthenticationService
+    readonly now?: () => number
+  } = {},
 ) {
   return createElement(BuliRuntimeProvider, {
     runtime,
     children: createElement(BuliUiControllerProvider, {
       controller,
       children: createElement(BuliTui, {
-        authentication: AUTHENTICATION,
+        authentication: options.authentication ?? AUTHENTICATION,
         openUrl: () => {},
+        ...(options.now ? { now: options.now } : {}),
       }),
     }),
   })
@@ -684,6 +690,68 @@ test("submits textarea input as steering while the session is running", async ()
     expect(fake.prompts).toEqual([])
     expect(textareaRenderable(setup.renderer.root).plainText).toBe("")
   } finally {
+    act(() => {
+      setup.renderer.destroy()
+    })
+  }
+})
+
+test("notifies when a run finishes while authentication replaces the session", async () => {
+  let currentTime = 0
+  const fake = fakeApplication({
+    sessionSnapshot: {
+      messages: [],
+      pendingSteeringMessages: [],
+      pendingFollowUpMessages: [],
+      isRunning: true,
+      isCompacting: false,
+      activeRunId: "run-1",
+      pendingToolCallIds: [],
+    },
+  })
+  const controller = new BuliUiController({ application: fake.application })
+  controller.activateSession("default")
+  const setup = await testRender(
+    buliElementWithController(fake.application, controller, {
+      now: () => currentTime,
+    }),
+    { width: 80, height: 24 },
+  )
+  const notifications: Array<{ message: string; title?: string }> = []
+  setup.renderer.triggerNotification = (message, title) => {
+    notifications.push({ message, ...(title === undefined ? {} : { title }) })
+    return false
+  }
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+      setup.renderer.emit("blur")
+      controller.openAuthentication("login")
+      await setup.renderOnce()
+    })
+    expect(setup.captureCharFrame()).toContain("Buli Authentication")
+
+    currentTime = COMPLETION_NOTIFICATION_MIN_DURATION_MS
+    await act(async () => {
+      fake.setSessionSnapshot({
+        messages: [],
+        pendingSteeringMessages: [],
+        pendingFollowUpMessages: [],
+        isRunning: false,
+        isCompacting: false,
+        pendingToolCallIds: [],
+        lastRunReason: "completed",
+      })
+      await setup.renderOnce()
+    })
+
+    expect(notifications).toEqual([{
+      message: "Run finished",
+      title: "Buli",
+    }])
+  } finally {
+    controller.dispose()
     act(() => {
       setup.renderer.destroy()
     })

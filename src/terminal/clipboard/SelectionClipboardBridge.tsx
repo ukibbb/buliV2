@@ -43,7 +43,10 @@ export function SelectionClipboardBridge(
             // Keep OpenTUI's third-click window alive after copying a word.
             selectionClearTimerRef.current = setTimeout(() => {
                 selectionClearTimerRef.current = undefined
-                renderer.clearSelection()
+                // A newer drag starts before its release emits another selection event.
+                if (renderer.getSelection() === selection) {
+                    renderer.clearSelection()
+                }
             }, WORD_SELECTION_CLEAR_DELAY_MS)
         } else {
             renderer.clearSelection()

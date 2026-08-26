@@ -19,8 +19,9 @@ import { BuliRuntimeProvider } from "@/app/ui/context/application-context"
 import { BuliUiControllerProvider } from "@/app/ui/context/ui-controller-context"
 import {
   COMPLETION_NOTIFICATION_MIN_DURATION_MS,
-  SessionScreen,
-} from "@/app/ui/shell/SessionScreen"
+  SessionCompletionNotifier,
+} from "@/app/ui/shell/SessionCompletionNotifier"
+import { SessionScreen } from "@/app/ui/shell/SessionScreen"
 import { BuliUiController } from "@/app/ui/ui-controller"
 import type { ICommandToolApprovalRequest, IUserMessage } from "@/agent"
 import type { ISessionSnapshot } from "@/sessions"
@@ -140,16 +141,23 @@ function createSessionHarness(initialSnapshot: ISessionSnapshot) {
 
 function sessionElement(
   harness: ReturnType<typeof createSessionHarness>,
-  now?: () => number,
 ) {
   return (
     <BuliRuntimeProvider runtime={harness.application}>
       <BuliUiControllerProvider controller={harness.controller}>
-        <SessionScreen
-          sessionId={SESSION_ID}
-          {...(now ? { now } : {})}
-        />
+        <SessionScreen sessionId={SESSION_ID} />
       </BuliUiControllerProvider>
+    </BuliRuntimeProvider>
+  )
+}
+
+function notifierElement(
+  harness: ReturnType<typeof createSessionHarness>,
+  now: () => number,
+) {
+  return (
+    <BuliRuntimeProvider runtime={harness.application}>
+      <SessionCompletionNotifier sessionId={SESSION_ID} now={now} />
     </BuliRuntimeProvider>
   )
 }
@@ -302,7 +310,7 @@ test("notifies only for long runs completed while the terminal is blurred", asyn
     activeRunId: "initial-run",
   }))
   const setup = await testRender(
-    sessionElement(harness, () => currentTime),
+    notifierElement(harness, () => currentTime),
     { width: 60, height: 18 },
   )
   const notifications: Array<{ message: string; title?: string }> = []

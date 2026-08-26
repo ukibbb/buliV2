@@ -55,8 +55,8 @@ test("renders compaction lifecycle and estimated context usage", async () => {
       pendingSteeringMessages={[]}
       pendingFollowUpMessages={[]}
       pendingToolApproval={undefined}
-      lastRunReason={undefined}
-      errorMessage={undefined}
+      lastRunReason="error"
+      errorMessage="Stale provider failure"
       inputError={null}
       selectedModelName="GPT-5.6 Sol"
       reasoningEffort="medium"
@@ -72,6 +72,7 @@ test("renders compaction lifecycle and estimated context usage", async () => {
     const frame = setup.captureCharFrame()
     expect(frame).toContain("Compacting context | Esc stop")
     expect(frame).toContain("ctx ~142k/200k (71%)")
+    expect(frame).not.toContain("Stale provider failure")
   } finally {
     act(() => {
       setup.renderer.destroy()

@@ -126,7 +126,9 @@ export class OpenAiAgentModel implements IAgentModel {
                     // TODO: Verify with a live gpt-5.6-sol request that one response can
                     // contain multiple local calls. Buli intentionally executes that
                     // returned batch sequentially; benchmark before adding concurrency.
-                    parallelToolCalls: true,
+                    ...(request.tools.length === 0
+                        ? {}
+                        : { parallelToolCalls: true }),
                     reasoningEffort: request.reasoningEffort,
                     ...(request.reasoningEffort === "none"
                         ? {}
@@ -305,13 +307,14 @@ function toModelUsage(usage: LanguageModelUsage): IModelUsage | undefined {
 }
 
 function normalizeOpenAiModelError(error: unknown): unknown {
-    if (isModelContextOverflowError(error) || !isOpenAiContextOverflow(error)) {
-        return error
+    if (isModelContextOverflowError(error)) return error
+    if (isOpenAiContextOverflow(error)) {
+        return new ModelContextOverflowError(openAiErrorMessage(error), {
+            cause: error,
+        })
     }
-    const message = error instanceof Error
-        ? error.message
-        : "OpenAI model context window exceeded"
-    return new ModelContextOverflowError(message, { cause: error })
+    if (!APICallError.isInstance(error)) return error
+    return new Error(openAiErrorMessage(error), { cause: error })
 }
 
 function isOpenAiContextOverflow(error: unknown): boolean {
@@ -340,6 +343,38 @@ const CONTEXT_OVERFLOW_PATTERNS = [
     /prompt is too long/,
     /too many tokens/,
 ]
+
+function openAiErrorMessage(error: unknown): string {
+    if (!APICallError.isInstance(error)) {
+        return error instanceof Error
+            ? error.message
+            : "OpenAI model request failed"
+    }
+    const status = error.statusCode === undefined ? "" : ` (${error.statusCode})`
+    const detail = nestedErrorMessage(error.data)
+        ?? error.responseBody?.trim()
+        ?? error.message
+    const requestId = error.responseHeaders?.["x-request-id"]
+        ?? error.responseHeaders?.["request-id"]
+        ?? error.responseHeaders?.["openai-request-id"]
+    const message = `OpenAI request failed${status}: ${detail}`
+        + (requestId ? ` [request ${requestId}]` : "")
+    return truncateErrorMessage(message, 2_000)
+}
+
+function nestedErrorMessage(value: unknown): string | undefined {
+    if (!isRecord(value)) return undefined
+    if (typeof value.message === "string" && value.message.trim()) {
+        return value.message.trim()
+    }
+    return nestedErrorMessage(value.error)
+}
+
+function truncateErrorMessage(value: string, maximumCharacters: number): string {
+    const characters = [...value]
+    if (characters.length <= maximumCharacters) return value
+    return `${characters.slice(0, maximumCharacters - 3).join("")}...`
+}
 
 function safeJson(value: unknown): string | undefined {
     if (value === undefined) return undefined

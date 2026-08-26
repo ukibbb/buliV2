@@ -69,7 +69,7 @@ export function ChatStatus(props: IChatStatusProps) {
             {!props.isRunning && !props.isCompacting && props.lastRunReason === "aborted" ? (
                 <text fg={theme.textMuted}>Operation aborted</text>
             ) : null}
-            {props.errorMessage ? (
+            {!props.isCompacting && props.errorMessage ? (
                 <text
                     fg={theme.red}
                     minWidth={0}

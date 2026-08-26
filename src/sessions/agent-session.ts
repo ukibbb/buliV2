@@ -6,6 +6,7 @@ import {
     type IAgentRunHandle,
     type IAgentState,
     type IAgentTool,
+    type IModelProfile,
     type IUserInput,
     type TAgentMessage,
     type TAgentRunConfigurationResolver,
@@ -69,6 +70,7 @@ export class AgentSession {
     private snapshot: ISessionSnapshot
     private contextUsage: IContextUsage | undefined
     private currentContextWindowTokens: number | undefined
+    private currentModelProfile: IModelProfile | undefined
     private contextUsageRefreshPending = false
     private disposed = false
     private disposeTask: Promise<void> | undefined
@@ -166,10 +168,10 @@ export class AgentSession {
     private refreshContextUsageFromRunConfiguration(): void {
         try {
             const runConfiguration = this.resolveRunConfiguration()
-            this.currentContextWindowTokens =
-                runConfiguration.modelProfile?.contextWindowTokens
+            this.setCurrentModelProfile(runConfiguration.modelProfile)
         } catch {
             this.currentContextWindowTokens = undefined
+            this.currentModelProfile = undefined
         }
         this.updateContextUsageFromDurableHistory()
     }
@@ -306,12 +308,15 @@ export class AgentSession {
         const runConfiguration = this.resolveRunConfiguration()
         const contextWindowTokens =
             runConfiguration.modelProfile?.contextWindowTokens
-        this.currentContextWindowTokens = contextWindowTokens
+        this.setCurrentModelProfile(runConfiguration.modelProfile)
 
         return {
             ...runConfiguration,
             model: createContextAwareModel({
                 model: runConfiguration.model,
+                ...(runConfiguration.modelProfile === undefined
+                    ? {}
+                    : { modelProfile: runConfiguration.modelProfile }),
                 contextWindowTokens,
                 projectRequest: (request) => this.reprojectRequest(request),
                 compactAndReproject: (request, requestBudgetTokens) =>
@@ -425,8 +430,7 @@ export class AgentSession {
         const previousCheckpoint = this.manager.getCompactionCheckpoint(this.id)
         const runConfiguration = this.resolveRunConfiguration()
         if (!this.agent.state.isRunning) {
-            this.currentContextWindowTokens =
-                runConfiguration.modelProfile?.contextWindowTokens
+            this.setCurrentModelProfile(runConfiguration.modelProfile)
         }
         const checkpoint = await compactSessionMessages({
             sessionId: this.id,
@@ -461,10 +465,10 @@ export class AgentSession {
     ): void {
         try {
             const runConfiguration = this.resolveRunConfiguration()
-            this.currentContextWindowTokens =
-                runConfiguration.modelProfile?.contextWindowTokens
+            this.setCurrentModelProfile(runConfiguration.modelProfile)
         } catch {
             this.currentContextWindowTokens = undefined
+            this.currentModelProfile = undefined
         }
         this.contextUsage = this.estimateProjectedContext(messages)
     }
@@ -489,7 +493,17 @@ export class AgentSession {
                 : { contextSummary: projection.contextSummary }),
             messages: projection.messages,
             tools: this.tools,
+            ...(this.currentModelProfile === undefined
+                ? {}
+                : { modelProfile: this.currentModelProfile }),
         }, this.currentContextWindowTokens)
+    }
+
+    private setCurrentModelProfile(modelProfile: IModelProfile | undefined): void {
+        this.currentModelProfile = modelProfile === undefined
+            ? undefined
+            : structuredClone(modelProfile)
+        this.currentContextWindowTokens = modelProfile?.contextWindowTokens
     }
 
     private handleAgentEvent(event: IAgentEvent): void {

@@ -68,7 +68,7 @@ test("findCompactionCutoff adapts retained turns to the request budget", () => {
       text: "A".repeat(10_000),
     }], 4),
   ]
-  expect(findCompactionCutoff(oversizedLatestTurn, 0)).toBe(2)
+  expect(findCompactionCutoff(oversizedLatestTurn, 0)).toBe(4)
 })
 
 test("findCompactionCutoff caps retained context at 20k tokens", () => {
@@ -138,10 +138,12 @@ test("compactSessionMessages updates a previous summary using only the new prefi
     tools: [],
     maxOutputTokens: 2048,
   })
-  expect(requests[0]!.messages.slice(0, -1).map((message) => message.id)).toEqual([
-    messages[2]!.id,
-    messages[3]!.id,
-  ])
+  expect(requests[0]!.messages).toHaveLength(1)
+  expect(requests[0]!.messages[0]).toMatchObject({ role: "user" })
+  expect(requests[0]!.messages[0]?.role === "user"
+    && requests[0]!.messages[0].content).toContain("[User]\nQuestion 2")
+  expect(requests[0]!.messages[0]?.role === "user"
+    && requests[0]!.messages[0].content).toContain("[Assistant]\nAnswer 3")
   expect(checkpoint).toEqual({
     id: "checkpoint-new",
     sessionId: "session-1",
@@ -158,6 +160,88 @@ test("compactSessionMessages updates a previous summary using only the new prefi
     usage: { inputTokens: 20, outputTokens: 3, totalTokens: 23 },
   })
   expect(messages).toEqual(original)
+})
+
+test("compactSessionMessages sanitizes images and bounded tool output", async () => {
+  const imageData = "SECRET_IMAGE_DATA".repeat(1_000)
+  const toolOutputTail = "SECRET_TOOL_OUTPUT_TAIL"
+  const messages: readonly TAgentMessage[] = [
+    {
+      ...user("image-user", "Inspect the image"),
+      attachments: [{
+        type: "image",
+        mimeType: "image/png",
+        data: imageData,
+        filename: "screen.png",
+        source: { value: "image", start: 8, end: 13 },
+      }],
+    },
+    assistant("tool-assistant", [
+      { type: "reasoning", text: "SECRET_REASONING" },
+      {
+        type: "toolCall",
+        toolCallId: "call-1",
+        toolName: "read_file",
+        input: { path: "README.md" },
+      },
+    ]),
+    {
+      id: "tool-result",
+      sessionId: "session-1",
+      runId: "run-tool",
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "read_file",
+      content: "R".repeat(5_000) + toolOutputTail,
+      isError: false,
+      createdAt: 3,
+    },
+    user("retained-user", "Continue", 4),
+  ]
+  const requests: IAgentModelRequest[] = []
+  const checkpoint = await compactSessionMessages({
+    sessionId: "session-1",
+    messages,
+    requestBudgetTokens: estimateMessagesInputTokens(messages.slice(3)),
+    runConfiguration: {
+      model: {
+        async *stream(request) {
+          requests.push(request)
+          yield { type: "text-delta", id: "summary", delta: "Safe summary" }
+          yield { type: "finish", reason: "stop" }
+        },
+      },
+      modelProfile: {
+        providerId: "test",
+        modelId: "model-1",
+        contextWindowTokens: 4_096,
+      },
+      reasoningEffort: "low",
+    },
+    reason: "automatic",
+    signal: new AbortController().signal,
+    now: () => 100,
+    generateId: () => "checkpoint-sanitized",
+  })
+
+  expect(requests.length).toBeGreaterThan(1)
+  expect(requests.every((request) => request.messages.length === 1)).toBe(true)
+  expect(requests[0]?.contextSummary).toBeUndefined()
+  expect(requests[1]?.contextSummary).toBe("Safe summary")
+  const serializedRequest = JSON.stringify(requests)
+  expect(serializedRequest).toContain(
+    "[Image attachment: screen.png (image/png)]",
+  )
+  expect(serializedRequest).toContain("[Assistant tool call: read_file]")
+  expect(serializedRequest).toContain("tool output truncated for compaction")
+  expect(serializedRequest).toContain(toolOutputTail)
+  expect(serializedRequest).not.toContain("SECRET_IMAGE_DATA")
+  expect(serializedRequest).not.toContain("SECRET_REASONING")
+  expect(checkpoint).toMatchObject({
+    compactedMessageCount: 3,
+    throughMessageId: "tool-result",
+    summary: "Safe summary",
+  })
 })
 
 test("compactSessionMessages rejects summary input that cannot fit its model", async () => {
@@ -297,7 +381,11 @@ function conversation(count: number): TAgentMessage[] {
   ))
 }
 
-function user(id: string, content: string, createdAt = 1): TAgentMessage {
+function user(
+  id: string,
+  content: string,
+  createdAt = 1,
+): Extract<TAgentMessage, { role: "user" }> {
   return {
     id,
     sessionId: "session-1",

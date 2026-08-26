@@ -1,10 +1,12 @@
+import { Buffer } from "node:buffer"
+
 import { expect, test } from "bun:test"
 
 import type { TAgentMessage } from "@/agent"
 import {
   CONTEXT_COMPACTION_THRESHOLD,
   contextCompactionThresholdTokens,
-  ESTIMATED_CHARS_PER_TOKEN,
+  ESTIMATED_BYTES_PER_TOKEN,
   ESTIMATED_IMAGE_TOKENS,
   estimateContextInputTokens,
   estimateContextUsage,
@@ -12,7 +14,7 @@ import {
   shouldCompactContext,
 } from "@/sessions"
 
-test("estimates a documented provider-visible serialization at four chars per token", () => {
+test("estimates a documented provider-visible serialization at two UTF-8 bytes per token", () => {
   const input = {
     systemPrompt: "System",
     messages: [user("user-1", "Hello")],
@@ -24,9 +26,9 @@ test("estimates a documented provider-visible serialization at four chars per to
     tools: [],
   })
 
-  expect(ESTIMATED_CHARS_PER_TOKEN).toBe(4)
+  expect(ESTIMATED_BYTES_PER_TOKEN).toBe(2)
   expect(estimateContextInputTokens(input)).toBe(
-    Math.ceil(serialized.length / ESTIMATED_CHARS_PER_TOKEN),
+    Math.ceil(Buffer.byteLength(serialized, "utf8") / ESTIMATED_BYTES_PER_TOKEN),
   )
 })
 
@@ -138,6 +140,85 @@ test("reports the fixed 80 percent threshold and optional context usage", () => 
     usageRatio: 1,
     shouldCompact: true,
   })
+})
+
+test("uses retained provider input usage as a conservative estimate floor", () => {
+  const measured: TAgentMessage = {
+    ...assistant("measured-assistant", [{ type: "text", text: "Short answer" }]),
+    usage: { inputTokens: 238_000, outputTokens: 200, totalTokens: 238_200 },
+  }
+
+  const usage = estimateContextUsage({
+    systemPrompt: "System",
+    messages: [user("user-1", "Short question"), measured],
+    tools: [],
+  }, 272_000)
+
+  expect(usage).toMatchObject({
+    compactionThresholdTokens: 217_600,
+    shouldCompact: true,
+  })
+  expect(usage.estimatedInputTokens).toBeGreaterThan(238_000)
+
+  const appendedOutput = estimateContextUsage({
+    systemPrompt: "System",
+    messages: [user("user-2", "Question"), {
+      ...assistant("assistant-2", [{
+        type: "text",
+        text: "X".repeat(10_000),
+      }]),
+      usage: { inputTokens: 210_000, outputTokens: 4_000, totalTokens: 214_000 },
+    }],
+    tools: [],
+  }, 272_000)
+  expect(appendedOutput.estimatedInputTokens).toBeGreaterThan(217_600)
+  expect(appendedOutput.shouldCompact).toBe(true)
+
+  const changedPrefix = estimateContextUsage({
+    systemPrompt: "Changed system prompt",
+    contextSummary: "S".repeat(2_000),
+    messages: [{
+      ...assistant("assistant-3", [{ type: "text", text: "Answer" }]),
+      usage: { inputTokens: 79_000, outputTokens: 100, totalTokens: 79_100 },
+    }],
+    tools: [],
+  }, 100_000)
+  expect(changedPrefix.shouldCompact).toBe(true)
+})
+
+test("uses a byte-level safety bound before provider usage is available", () => {
+  const usage = estimateContextUsage({
+    systemPrompt: "System",
+    messages: [user("large-first-user", "X".repeat(220_000))],
+    tools: [],
+  }, 272_000)
+
+  expect(usage.estimatedInputTokens).toBeLessThan(217_600)
+  expect(usage.shouldCompact).toBe(true)
+})
+
+test("discards a provider usage anchor after the model changes", () => {
+  const usage = estimateContextUsage({
+    systemPrompt: "System",
+    modelProfile: {
+      providerId: "provider",
+      modelId: "new-model",
+      contextWindowTokens: 1_000,
+    },
+    messages: [user("old-user", "X".repeat(800)), {
+      ...assistant("old-assistant", [{ type: "text", text: "Answer" }]),
+      model: {
+        providerId: "provider",
+        modelId: "old-model",
+        contextWindowTokens: 2_000,
+      },
+      usage: { inputTokens: 100, outputTokens: 10, totalTokens: 110 },
+    }],
+    tools: [],
+  }, 1_000)
+
+  expect(usage.estimatedInputTokens).toBeLessThan(800)
+  expect(usage.shouldCompact).toBe(true)
 })
 
 function user(

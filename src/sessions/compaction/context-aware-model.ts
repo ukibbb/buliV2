@@ -2,13 +2,15 @@ import {
     type IAgentModel,
     type IAgentModelEvent,
     type IAgentModelRequest,
+    type IModelProfile,
     isModelContextOverflowError,
 } from "@/agent"
 import {
     contextCompactionThresholdTokens,
+    ESTIMATED_BYTES_PER_TOKEN,
     estimateContextInputTokens,
     estimateContextUsage,
-    estimateMessagesInputTokens,
+    reportedInputSafetyTokens,
     type IContextUsage,
 } from "@/sessions/compaction/context-budget"
 import {
@@ -16,9 +18,11 @@ import {
 } from "@/sessions/compaction/session-compactor"
 
 export const CONTEXT_SUMMARY_RESERVE_TOKENS = 2_048
+const MAX_COMPACTION_PASSES = 64
 
 export interface IContextAwareModelOptions {
     readonly model: IAgentModel
+    readonly modelProfile?: IModelProfile
     readonly contextWindowTokens: number | undefined
     readonly projectRequest: (
         originalRequest: IAgentModelRequest,
@@ -30,7 +34,7 @@ export interface IContextAwareModelOptions {
     readonly publishContextUsage: (usage: IContextUsage) => void
 }
 
-/** Adds just-in-time compaction and one safe overflow retry to a conversation model. */
+/** Adds bounded preflight compaction and one safe overflow retry to a model. */
 export function createContextAwareModel(
     options: IContextAwareModelOptions,
 ): IAgentModel {
@@ -38,30 +42,11 @@ export function createContextAwareModel(
         async *stream(originalRequest) {
             originalRequest.signal.throwIfAborted()
 
-            let request = options.projectRequest(originalRequest)
-            const contextWindowTokens = options.contextWindowTokens
-            const initialUsage = estimateRequestUsage(
-                request,
-                contextWindowTokens,
+            let request = await compactPreflightRequest(
+                options,
+                originalRequest,
+                options.projectRequest(originalRequest),
             )
-            options.publishContextUsage(initialUsage)
-
-            if (initialUsage.shouldCompact && contextWindowTokens !== undefined) {
-                const compactedRequest = await options.compactAndReproject(
-                    originalRequest,
-                    retainedMessageAllowanceTokens(
-                        request,
-                        contextWindowTokens,
-                    ),
-                )
-                if (compactedRequest) {
-                    request = compactedRequest
-                    options.publishContextUsage(estimateRequestUsage(
-                        request,
-                        contextWindowTokens,
-                    ))
-                }
-            }
 
             let retriedOverflow = false
             let exposedSemanticEvent = false
@@ -112,9 +97,9 @@ export function createContextAwareModel(
 
                 retriedOverflow = true
                 originalRequest.signal.throwIfAborted()
-                const retryRequest = await options.compactAndReproject(
+                const retryRequest = await compactOverflowRequest(
+                    options,
                     originalRequest,
-                    0,
                 )
                 if (!retryRequest) {
                     if (interceptedOverflow.kind === "emitted") {
@@ -125,46 +110,144 @@ export function createContextAwareModel(
                 }
 
                 request = retryRequest
-                options.publishContextUsage(estimateRequestUsage(
-                    request,
-                    contextWindowTokens,
-                ))
             }
         },
     }
 }
 
-/** Computes a whole-turn retained-message target within the compactor's 20k cap. */
+async function compactPreflightRequest(
+    options: IContextAwareModelOptions,
+    originalRequest: IAgentModelRequest,
+    initialRequest: IAgentModelRequest,
+): Promise<IAgentModelRequest> {
+    let request = initialRequest
+    for (let pass = 0; pass <= MAX_COMPACTION_PASSES; pass += 1) {
+        originalRequest.signal.throwIfAborted()
+        const usage = estimateRequestUsage(
+            request,
+            options.contextWindowTokens,
+            options.modelProfile,
+        )
+        options.publishContextUsage(usage)
+        if (!usage.shouldCompact || options.contextWindowTokens === undefined) {
+            return request
+        }
+        if (pass === MAX_COMPACTION_PASSES) throw requestBudgetError(usage)
+
+        const compactedRequest = await options.compactAndReproject(
+            originalRequest,
+            retainedMessageAllowanceTokens(
+                request,
+                options.contextWindowTokens,
+                options.modelProfile,
+            ),
+        )
+        if (!compactedRequest) throw requestBudgetError(usage)
+        request = compactedRequest
+    }
+    throw new Error("Unreachable context compaction state")
+}
+
+async function compactOverflowRequest(
+    options: IContextAwareModelOptions,
+    originalRequest: IAgentModelRequest,
+): Promise<IAgentModelRequest | undefined> {
+    let request = await options.compactAndReproject(originalRequest, 0)
+    if (!request) return undefined
+
+    for (let pass = 0; pass < MAX_COMPACTION_PASSES; pass += 1) {
+        originalRequest.signal.throwIfAborted()
+        const usage = estimateRequestUsage(
+            request,
+            options.contextWindowTokens,
+            options.modelProfile,
+        )
+        options.publishContextUsage(usage)
+        if (!usage.shouldCompact || options.contextWindowTokens === undefined) {
+            return request
+        }
+        request = await options.compactAndReproject(originalRequest, 0)
+        if (!request) return undefined
+    }
+    return undefined
+}
+
+function requestBudgetError(usage: IContextUsage): Error {
+    const threshold = usage.compactionThresholdTokens
+    return new Error(
+        "Model request remains above Buli's safe context budget after compaction"
+        + `${threshold === undefined
+            ? ""
+            : ` (${usage.estimatedInputTokens} estimated tokens; safe limit ${threshold})`}`
+        + "; no provider request was sent.",
+    )
+}
+
+/** Computes the retained-message target within the request and policy caps. */
 export function retainedMessageAllowanceTokens(
     request: IAgentModelRequest,
     contextWindowTokens: number,
+    modelProfile?: IModelProfile,
 ): number {
-    const latestUserIndex = request.messages.findLastIndex(
-        (message) => message.role === "user",
-    )
-    const latestTurnTokens = latestUserIndex === -1
-        ? 0
-        : estimateMessagesInputTokens(request.messages.slice(latestUserIndex))
+    const thresholdTokens = contextCompactionThresholdTokens(contextWindowTokens)
+    const contextInput = {
+        systemPrompt: request.systemPrompt,
+        ...(request.contextSummary === undefined
+            ? {}
+            : { contextSummary: request.contextSummary }),
+        messages: request.messages,
+        tools: request.tools,
+        ...(modelProfile === undefined ? {} : { modelProfile }),
+    }
+    const reportedInputTokens = reportedInputSafetyTokens(contextInput)
+    if (reportedInputTokens >= thresholdTokens) return 0
+
     const fixedRequestTokens = estimateContextInputTokens({
         systemPrompt: request.systemPrompt,
         messages: [],
         tools: request.tools,
     })
-    const additionalRetainedTokens = Math.max(
+    const summaryTokens = request.contextSummary === undefined
+        ? 0
+        : estimateContextInputTokens({
+            systemPrompt: request.systemPrompt,
+            contextSummary: request.contextSummary,
+            messages: [],
+            tools: request.tools,
+        }) - fixedRequestTokens
+    const summaryReserveTokens = Math.max(
+        CONTEXT_SUMMARY_RESERVE_TOKENS,
+        summaryTokens,
+    )
+    const retainedTokens = Math.max(
         0,
-        contextCompactionThresholdTokens(contextWindowTokens)
+        thresholdTokens
             - fixedRequestTokens
-            - CONTEXT_SUMMARY_RESERVE_TOKENS
-            - latestTurnTokens,
+            - summaryReserveTokens,
     )
-    return retainedContextTargetTokens(
-        latestTurnTokens + additionalRetainedTokens,
-    )
+    if (reportedInputTokens > 0) {
+        return retainedContextTargetTokens(retainedTokens)
+    }
+
+    const byteBoundedRetainedTokens = Math.floor(Math.max(
+        0,
+        thresholdTokens
+            - fixedRequestTokens * ESTIMATED_BYTES_PER_TOKEN
+            - Math.max(
+                CONTEXT_SUMMARY_RESERVE_TOKENS,
+                summaryTokens * ESTIMATED_BYTES_PER_TOKEN,
+            ),
+    ) / ESTIMATED_BYTES_PER_TOKEN)
+    return retainedContextTargetTokens(Math.min(
+        retainedTokens,
+        byteBoundedRetainedTokens,
+    ))
 }
 
 function estimateRequestUsage(
     request: IAgentModelRequest,
     contextWindowTokens: number | undefined,
+    modelProfile?: IModelProfile,
 ): IContextUsage {
     return estimateContextUsage({
         systemPrompt: request.systemPrompt,
@@ -173,6 +256,7 @@ function estimateRequestUsage(
             : { contextSummary: request.contextSummary }),
         messages: request.messages,
         tools: request.tools,
+        ...(modelProfile === undefined ? {} : { modelProfile }),
     }, contextWindowTokens)
 }
 

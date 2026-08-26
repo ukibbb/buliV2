@@ -1,13 +1,16 @@
+import { Buffer } from "node:buffer"
+
 import type {
     IAgentToolDescriptor,
+    IModelProfile,
     TAgentMessage,
 } from "@/agent"
 
 /** Context usage at or above this ratio is eligible for compaction. */
 export const CONTEXT_COMPACTION_THRESHOLD = 0.8
 
-/** Deliberately simple approximation used instead of a provider tokenizer. */
-export const ESTIMATED_CHARS_PER_TOKEN = 4
+/** Conservative UTF-8 approximation used instead of a provider tokenizer. */
+export const ESTIMATED_BYTES_PER_TOKEN = 2
 export const ESTIMATED_IMAGE_TOKENS = 2_000
 
 /** Provider-visible inputs used by the context estimate. */
@@ -16,6 +19,7 @@ export interface IContextInput {
     readonly contextSummary?: string
     readonly messages: readonly TAgentMessage[]
     readonly tools: readonly IAgentToolDescriptor[]
+    readonly modelProfile?: IModelProfile
 }
 
 /** Estimated request usage plus model-limit information when it is known. */
@@ -29,8 +33,8 @@ export interface IContextUsage {
 }
 
 /**
- * Serializes a provider-visible projection and treats every four characters as
- * one token. This is intentionally an approximation, not a model tokenizer.
+ * Serializes a provider-visible projection and treats every two UTF-8 bytes
+ * as one token. This is intentionally conservative, not a model tokenizer.
  */
 export function estimateContextInputTokens(input: IContextInput): number {
     return estimateSerializedTokens({
@@ -85,7 +89,11 @@ export function estimateContextUsage(
     input: IContextInput,
     contextWindowTokens?: number,
 ): IContextUsage {
-    const estimatedInputTokens = estimateContextInputTokens(input)
+    const reportedInputTokens = reportedInputSafetyTokens(input)
+    const estimatedInputTokens = Math.max(
+        estimateContextInputTokens(input),
+        reportedInputTokens,
+    )
     if (contextWindowTokens === undefined) {
         return { estimatedInputTokens, shouldCompact: false }
     }
@@ -93,14 +101,59 @@ export function estimateContextUsage(
     const compactionThresholdTokens = contextCompactionThresholdTokens(
         contextWindowTokens,
     )
+    const safetyInputTokens = reportedInputTokens > 0
+        ? estimatedInputTokens
+        : estimatedInputTokens * ESTIMATED_BYTES_PER_TOKEN
     return {
         estimatedInputTokens,
         contextWindowTokens,
         compactionThresholdTokens,
         remainingTokens: Math.max(0, contextWindowTokens - estimatedInputTokens),
         usageRatio: estimatedInputTokens / contextWindowTokens,
-        shouldCompact: estimatedInputTokens >= compactionThresholdTokens,
+        shouldCompact: safetyInputTokens >= compactionThresholdTokens,
     }
+}
+
+/** Adds a byte-level bound for the current fixed prefix to retained usage. */
+export function reportedInputSafetyTokens(input: IContextInput): number {
+    const reportedTokens = reportedInputTokenFloor(
+        input.messages,
+        input.modelProfile,
+    )
+    if (reportedTokens === 0) return 0
+    return reportedTokens + estimateContextInputTokens({
+        systemPrompt: input.systemPrompt,
+        ...(input.contextSummary === undefined
+            ? {}
+            : { contextSummary: input.contextSummary }),
+        messages: [],
+        tools: input.tools,
+    }) * ESTIMATED_BYTES_PER_TOKEN
+}
+
+/** Anchors at provider usage and adds a byte-level bound for everything appended. */
+export function reportedInputTokenFloor(
+    messages: readonly TAgentMessage[],
+    modelProfile?: IModelProfile,
+): number {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index]
+        if (
+            message?.role === "assistant"
+            && message.stopReason !== "error"
+            && message.stopReason !== "aborted"
+            && message.usage?.inputTokens !== undefined
+            && (modelProfile === undefined || (
+                message.model?.providerId === modelProfile.providerId
+                && message.model.modelId === modelProfile.modelId
+            ))
+        ) {
+            return message.usage.inputTokens
+                + estimateMessagesInputTokens(messages.slice(index))
+                    * ESTIMATED_BYTES_PER_TOKEN
+        }
+    }
+    return 0
 }
 
 function providerVisibleMessages(
@@ -154,7 +207,10 @@ function providerVisibleMessages(
 }
 
 function estimateSerializedTokens(value: unknown): number {
-    return Math.ceil(JSON.stringify(value).length / ESTIMATED_CHARS_PER_TOKEN)
+    return Math.ceil(
+        Buffer.byteLength(JSON.stringify(value), "utf8")
+            / ESTIMATED_BYTES_PER_TOKEN,
+    )
 }
 
 function assertPositiveTokenCount(value: number, name: string): void {

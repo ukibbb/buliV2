@@ -492,6 +492,7 @@ test("sends projected context summaries and compaction output limits", async () 
   const body = (await capturedRequest.json()) as Record<string, unknown>
   expect(JSON.stringify(body)).toContain("Earlier durable context")
   expect(body.max_output_tokens).toBe(321)
+  expect(body).not.toHaveProperty("parallel_tool_calls")
   expect(events.at(-1)).toMatchObject({
     type: "finish",
     usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
@@ -544,7 +545,10 @@ test("classifies only explicit OpenAI context-limit failures", async () => {
     },
   }), {
     status: 400,
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      "x-request-id": "request-invalid-schema",
+    },
   }))
 
   const contextEvents = await collectEvents(
@@ -566,6 +570,12 @@ test("classifies only explicit OpenAI context-limit failures", async () => {
   expect(genericError?.type).toBe("error")
   expect(genericError?.type === "error"
     && isModelContextOverflowError(genericError.error)).toBe(false)
+  expect(genericError?.type === "error"
+    && genericError.error instanceof Error
+    && genericError.error.message).toBe(
+      "OpenAI request failed (400): Invalid tool schema "
+      + "[request request-invalid-schema]",
+    )
 })
 
 test("rejects a discovered model after the authenticated account changes", async () => {

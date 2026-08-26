@@ -752,8 +752,8 @@ test("AgentSession compacts durable history and projects only summary plus tail"
   const checkpoint = await session.compact()
   expect(checkpoint).toMatchObject({
     reason: "manual",
-    compactedMessageCount: 4,
-    throughMessageId: original[3]!.id,
+    compactedMessageCount: 6,
+    throughMessageId: original[5]!.id,
     summary: "Earlier context",
   })
   expect(manager.getMessages("session-1")).toEqual(original)
@@ -764,7 +764,7 @@ test("AgentSession compacts durable history and projects only summary plus tail"
     (request) => !request.runId.startsWith("compaction-"),
   )
   expect(promptRequest?.contextSummary).toBe("Earlier context")
-  expect(promptRequest?.messages.slice(0, -1)).toEqual(original.slice(4))
+  expect(promptRequest?.messages.slice(0, -1)).toEqual(original.slice(6))
   expect(manager.getMessages("session-1").slice(0, 6)).toEqual([...original])
   expect(manager.getMessages("session-1").at(-1)).toMatchObject({
     role: "assistant",

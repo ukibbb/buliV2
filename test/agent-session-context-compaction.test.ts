@@ -9,7 +9,10 @@ import {
 } from "@/agent"
 import {
   AgentSession,
+  contextCompactionThresholdTokens,
+  estimateContextInputTokens,
   InMemorySessionManager,
+  retainedMessageAllowanceTokens,
   type ISessionManager,
 } from "@/sessions"
 
@@ -53,7 +56,7 @@ test("AgentSession dispatches below-threshold requests without compaction", asyn
 
 test("AgentSession compacts at preflight and dispatches the same durable prompt", async () => {
   const manager = managerWithSession()
-  seedTurn(manager)
+  seedLargeTurns(manager, 2)
   const summaryRequests: IAgentModelRequest[] = []
   const conversationRequests: IAgentModelRequest[] = []
   const model: IAgentModel = {
@@ -81,15 +84,20 @@ test("AgentSession compacts at preflight and dispatches the same durable prompt"
     })
   })
 
-  const prompt = "P".repeat(14_000)
+  const prompt = "Keep this prompt"
   const run = session.prompt(prompt)
   await run.settled
 
-  expect(summaryRequests).toHaveLength(1)
+  expect(summaryRequests.length).toBeGreaterThan(1)
+  expect(summaryRequests.every((request) => (
+    request.tools.length === 0
+    && request.messages.length === 1
+    && request.messages[0]?.role === "user"
+  ))).toBe(true)
   expect(conversationRequests).toHaveLength(1)
   expect(manager.getCompactionCheckpoint("session-1")).toMatchObject({
     reason: "automatic",
-    compactedMessageCount: 2,
+    compactedMessageCount: 4,
     summary: "Earlier summary",
   })
   const durablePrompt = manager.getMessages("session-1").find(
@@ -112,7 +120,112 @@ test("AgentSession compacts at preflight and dispatches the same durable prompt"
   await session.dispose()
 })
 
-test("AgentSession dispatches once when preflight compaction has no progress", async () => {
+test("AgentSession compacts a 238k request before dispatching to a 272k model", async () => {
+  const manager = managerWithSession()
+  manager.appendMessage({
+    id: "large-user",
+    sessionId: "session-1",
+    runId: "large-run",
+    role: "user",
+    source: "prompt",
+    content: "Earlier request",
+    createdAt: 2,
+  })
+  manager.appendMessage({
+    id: "large-assistant",
+    sessionId: "session-1",
+    runId: "large-run",
+    role: "assistant",
+    content: [{ type: "text", text: "Earlier answer" }],
+    stopReason: "stop",
+    model: MODEL_PROFILE,
+    usage: {
+      inputTokens: 238_000,
+      outputTokens: 200,
+      totalTokens: 238_200,
+    },
+    createdAt: 3,
+  })
+  const contextWindowTokens = 272_000
+  const prompt = "Keep this prompt"
+  const summaryRequests: IAgentModelRequest[] = []
+  const conversationRequests: IAgentModelRequest[] = []
+  const session = openSession(manager, {
+    async *stream(request) {
+      if (isCompactionRequest(request)) {
+        summaryRequests.push(cloneRequest(request))
+        yield {
+          type: "text-delta",
+          id: "summary",
+          delta: `Summary ${summaryRequests.length}`,
+        }
+        yield { type: "finish", reason: "stop" }
+        return
+      }
+      conversationRequests.push(cloneRequest(request))
+      yield { type: "finish", reason: "stop" }
+    },
+  }, [], contextWindowTokens)
+  const initialUsage = session.getSnapshot().contextUsage
+  expect(initialUsage?.estimatedInputTokens).toBeGreaterThan(238_000)
+  expect(initialUsage?.estimatedInputTokens).toBeLessThan(239_000)
+  expect(initialUsage?.shouldCompact).toBe(true)
+
+  const run = session.prompt(prompt)
+  await run.settled
+
+  expect(summaryRequests).toHaveLength(1)
+  expect(summaryRequests.every((request) => (
+    request.maxOutputTokens === 2_048
+    && request.tools.length === 0
+    && estimateContextInputTokens({
+      systemPrompt: request.systemPrompt,
+      ...(request.contextSummary === undefined
+        ? {}
+        : { contextSummary: request.contextSummary }),
+      messages: request.messages,
+      tools: request.tools,
+    }) <= 64_000
+  ))).toBe(true)
+  expect(conversationRequests).toHaveLength(1)
+  expect(estimateContextInputTokens({
+    systemPrompt: conversationRequests[0]!.systemPrompt,
+    ...(conversationRequests[0]!.contextSummary === undefined
+      ? {}
+      : { contextSummary: conversationRequests[0]!.contextSummary }),
+    messages: conversationRequests[0]!.messages,
+    tools: conversationRequests[0]!.tools,
+  })).toBeLessThan(contextCompactionThresholdTokens(contextWindowTokens))
+  expect(conversationRequests[0]?.messages).toEqual([
+    expect.objectContaining({ role: "user", content: prompt }),
+  ])
+  expect(manager.getCompactionCheckpoint("session-1")).toMatchObject({
+    compactedMessageCount: 2,
+    throughMessageId: "large-assistant",
+  })
+
+  await session.dispose()
+})
+
+test("retained message allowance accounts for an existing large summary", () => {
+  const request: IAgentModelRequest = {
+    sessionId: "session-1",
+    runId: "run-1",
+    systemPrompt: "System",
+    messages: [],
+    tools: [],
+    reasoningEffort: "medium",
+    signal: new AbortController().signal,
+  }
+
+  expect(retainedMessageAllowanceTokens(request, 4_096)).toBeGreaterThan(0)
+  expect(retainedMessageAllowanceTokens({
+    ...request,
+    contextSummary: "S".repeat(9_000),
+  }, 4_096)).toBe(0)
+})
+
+test("AgentSession blocks an oversized request when compaction has no progress", async () => {
   const manager = managerWithSession()
   let conversationAttempts = 0
   let summaryAttempts = 0
@@ -134,12 +247,16 @@ test("AgentSession dispatches once when preflight compaction has no progress", a
   const run = session.prompt(prompt)
   await run.settled
 
-  expect(conversationAttempts).toBe(1)
+  expect(conversationAttempts).toBe(0)
   expect(summaryAttempts).toBe(0)
-  expect(requests[0]?.messages.filter(
-    (message) => message.role === "user" && message.content === prompt,
-  )).toHaveLength(1)
+  expect(requests).toHaveLength(0)
   expect(manager.getCompactionCheckpoint("session-1")).toBeUndefined()
+  expect(manager.getMessages("session-1").findLast(
+    (message) => message.role === "assistant" && message.runId === run.runId,
+  )).toMatchObject({
+    stopReason: "error",
+    errorMessage: expect.stringContaining("no provider request was sent"),
+  })
 
   await session.dispose()
 })
@@ -170,7 +287,7 @@ test("AgentSession aborts preflight when the summary prompt cannot fit", async (
       modelAttempts += 1
       yield { type: "finish", reason: "stop" }
     },
-  })
+  }, [], 2_050)
 
   const run = session.prompt("P".repeat(3_000))
   await run.settled
@@ -191,7 +308,7 @@ test("AgentSession aborts preflight when the summary prompt cannot fit", async (
   await session.dispose()
 })
 
-test("AgentSession preflights a tool continuation and keeps its turn whole", async () => {
+test("AgentSession compacts oversized tool continuations before dispatch", async () => {
   const manager = managerWithSession()
   seedTurn(manager)
   const requests: IAgentModelRequest[] = []
@@ -235,29 +352,13 @@ test("AgentSession preflights a tool continuation and keeps its turn whole", asy
   expect(requests[0]?.contextSummary).toBeUndefined()
   expect(requests[1]?.contextSummary).toBe("Old turn")
   expect(requests[2]?.contextSummary).toBe("Old turn")
-  expect(requests[1]?.messages.map((message) => message.role)).toEqual([
-    "user",
-    "assistant",
-    "toolResult",
-  ])
-  expect(requests[2]?.messages.map((message) => message.role)).toEqual([
-    "user",
-    "assistant",
-    "toolResult",
-    "assistant",
-    "toolResult",
-  ])
-  expect(requests[1]?.messages[0]).toMatchObject({
-    runId: run.runId,
-    content: "Use the tool",
-  })
-  expect(requests[1]?.messages.filter((message) => message.role === "user"))
-    .toHaveLength(1)
+  expect(requests[1]?.messages).toEqual([])
+  expect(requests[2]?.messages).toEqual([])
   expect(requests[2]?.messages.some((message) => message.id === "old-user"))
     .toBe(false)
-  expect(summaries).toBe(1)
+  expect(summaries).toBeGreaterThanOrEqual(2)
   expect(manager.getCompactionCheckpoint("session-1")).toMatchObject({
-    compactedMessageCount: 2,
+    compactedMessageCount: 7,
     reason: "automatic",
   })
 
@@ -350,18 +451,18 @@ test("AgentSession can compact at preflight and advance again for overflow recov
       }
       yield { type: "finish", reason: "stop" }
     },
-  }, [], 10_000)
+  }, [], 16_000)
 
   const run = session.prompt("Keep this prompt")
   await run.settled
 
-  expect(summaryAttempts).toBe(2)
+  expect(summaryAttempts).toBe(3)
   expect(conversationAttempts).toBe(2)
-  expect(requests[0]?.contextSummary).toBe("Summary 1")
+  expect(requests[0]?.contextSummary).toBe("Summary 2")
   expect(requests[0]!.messages.length).toBeGreaterThan(1)
   expect(requests[1]).toMatchObject({
     runId: run.runId,
-    contextSummary: "Summary 2",
+    contextSummary: "Summary 3",
   })
   expect(requests[1]?.messages).toEqual([
     expect.objectContaining({
@@ -372,7 +473,7 @@ test("AgentSession can compact at preflight and advance again for overflow recov
   ])
   expect(manager.getCompactionCheckpoint("session-1")).toMatchObject({
     compactedMessageCount: 10,
-    summary: "Summary 2",
+    summary: "Summary 3",
   })
 
   await session.dispose()

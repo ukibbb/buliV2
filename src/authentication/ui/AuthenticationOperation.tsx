@@ -52,6 +52,7 @@ export function AuthenticationOperation(
                                 key={state.prompt.id}
                                 ref={promptInputRef}
                                 focused
+                                selectionOccupancy="boundary"
                                 placeholder={state.prompt.placeholder}
                                 textColor={theme.text}
                                 focusedTextColor={theme.text}

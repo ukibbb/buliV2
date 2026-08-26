@@ -374,9 +374,11 @@ export function PromptEditor(props: IPromptEditorProps) {
                 maxHeight: CHAT_MAX_ROW_COUNT,
             }}
         >
+            {/* Cell occupancy is Vim-style; editors need half-open selections. */}
             <textarea
                 ref={textAreaRef}
                 initialValue={props.value.text}
+                selectionOccupancy="boundary"
                 onSubmit={() => submitInput("auto")}
                 onKeyDown={handleKeyDown}
                 onPaste={handlePaste}

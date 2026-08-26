@@ -23,8 +23,8 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.16",
-    "@opentui/core": "^0.5.6",
-    "@opentui/react": "^0.5.6",
+    "@opentui/core": "^0.5.8",
+    "@opentui/react": "^0.5.8",
     "ai": "^7.0.31",
     "open": "10.1.2",
     "react": "^19.2.7",

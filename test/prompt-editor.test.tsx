@@ -175,6 +175,27 @@ test("submitting cancels a pending clipboard read", async () => {
   }
 })
 
+test("uses boundary occupancy for conventional keyboard selection", async () => {
+  const setup = await testRender(
+    <PromptHarness onSubmit={() => {}} />,
+    { width: 80, height: 10 },
+  )
+  try {
+    const textarea = findTextarea(setup.renderer.root)
+    await act(async () => {
+      await setup.mockInput.typeText("abcd")
+      await setup.renderOnce()
+      textarea.cursorOffset = 2
+      textarea.moveCursorRight({ select: true })
+    })
+
+    expect(textarea.selectionOccupancy).toBe("boundary")
+    expect(textarea.getSelectedText()).toBe("c")
+  } finally {
+    act(() => setup.renderer.destroy())
+  }
+})
+
 test("undo restores capability metadata with an extmark", async () => {
   const submitted: IUserInput[] = []
   const setup = await testRender(

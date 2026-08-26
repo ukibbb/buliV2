@@ -381,6 +381,37 @@ test("Escape restores steering and aborts while chat input is focused", async ()
   }
 })
 
+test("Ctrl+D toggles console without deleting focused chat text", async () => {
+  const fake = fakeApplication()
+  const setup = await testRender(
+    buliElement(fake.application, "default"),
+    { width: 80, height: 24 },
+  )
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+      await setup.mockInput.typeText("abcd")
+      setup.mockInput.pressArrow("left")
+      setup.mockInput.pressArrow("left")
+    })
+    const textarea = textareaRenderable(setup.renderer.root)
+    const wasConsoleVisible = setup.renderer.console.visible
+
+    await act(async () => {
+      setup.mockInput.pressKey("d", { ctrl: true })
+      await setup.renderOnce()
+    })
+
+    expect(setup.renderer.console.visible).toBe(!wasConsoleVisible)
+    expect(textarea.plainText).toBe("abcd")
+  } finally {
+    act(() => {
+      setup.renderer.destroy()
+    })
+  }
+})
+
 test("preserves the chat draft while authentication opens and closes", async () => {
   const fake = fakeApplication()
   const controller = new BuliUiController({ application: fake.application })

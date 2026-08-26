@@ -38,7 +38,12 @@ export function BuliTui(props: IBuliTuiProps) {
             return
         }
 
-        if (action === "console.toggle") renderer.console.toggle()
+        if (action === "console.toggle") {
+            // Stop the focused editor from also treating Ctrl+D as forward delete.
+            key.preventDefault()
+            key.stopPropagation()
+            renderer.console.toggle()
+        }
     })
 
     return (

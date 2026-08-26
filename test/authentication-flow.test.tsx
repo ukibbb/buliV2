@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import {
+  InputRenderable,
   parseKeypress,
   type Renderable,
   TextRenderable,
@@ -34,6 +35,18 @@ function linkTargets(root: Renderable): string[] {
       : []),
     ...root.getChildren().flatMap(linkTargets),
   ]
+}
+
+function inputRenderable(root: Renderable): InputRenderable {
+  if (root instanceof InputRenderable) return root
+  for (const child of root.getChildren()) {
+    try {
+      return inputRenderable(child)
+    } catch {
+      // Continue through the remaining render tree.
+    }
+  }
+  throw new Error("Expected an input renderable")
 }
 
 test("selects provider and method before showing progress and manual input", async () => {
@@ -141,6 +154,7 @@ test("selects provider and method before showing progress and manual input", asy
     frame = await setup.waitForFrame((value) =>
       value.includes("Paste the callback URL:")
     )
+    expect(inputRenderable(setup.renderer.root).selectionOccupancy).toBe("boundary")
     expect(frame).toContain("Complete authorization in your browser.")
     expect(frame).toContain("https://auth.example.test/authorize")
     expect(frame).toContain("Could not open the browser automatically")

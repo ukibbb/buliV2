@@ -1,10 +1,12 @@
 import { useRenderer, useSelectionHandler } from "@opentui/react"
-import { useRef, type ReactNode } from "react"
+import { useEffect, useRef, type ReactNode } from "react"
 
 import {
     type TClipboardWriter,
     writeTextToClipboard,
 } from "@/terminal/clipboard/copy-selection"
+
+const WORD_SELECTION_CLEAR_DELAY_MS = 500
 
 interface ISelectionClipboardBridgeProps {
     readonly clipboard: TClipboardWriter
@@ -18,14 +20,36 @@ export function SelectionClipboardBridge(
 ): ReactNode {
     const renderer = useRenderer()
     const pendingCopyRef = useRef<Promise<void>>(Promise.resolve())
+    const selectionClearTimerRef = useRef<
+        ReturnType<typeof setTimeout> | undefined
+    >(undefined)
+
+    useEffect(() => () => {
+        if (selectionClearTimerRef.current !== undefined) {
+            clearTimeout(selectionClearTimerRef.current)
+        }
+    }, [])
 
     useSelectionHandler((selection) => {
+        if (selectionClearTimerRef.current !== undefined) {
+            clearTimeout(selectionClearTimerRef.current)
+            selectionClearTimerRef.current = undefined
+        }
+
         const selectedText = selection.getSelectedText()
         if (!selectedText) return
 
-        // Capture and clear immediately, then serialize writes so the newest
-        // selection cannot be overwritten by an older, slower host operation.
-        renderer.clearSelection()
+        if (selection.behavior === "word") {
+            // Keep OpenTUI's third-click window alive after copying a word.
+            selectionClearTimerRef.current = setTimeout(() => {
+                selectionClearTimerRef.current = undefined
+                renderer.clearSelection()
+            }, WORD_SELECTION_CLEAR_DELAY_MS)
+        } else {
+            renderer.clearSelection()
+        }
+
+        // Serialize writes so a slower host operation cannot overwrite newer text.
         const copyTask = pendingCopyRef.current.then(async () => {
             const didCopy = await writeTextToClipboard({
                 clipboard: props.clipboard,

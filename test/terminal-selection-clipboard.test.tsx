@@ -123,36 +123,78 @@ test("reports a failed clipboard result without showing success", async () => {
   expect(reportedErrors).toEqual([clipboardError])
 })
 
-test("handles selection events and reports completed copies", async () => {
+test("copies a mouse selection and clears it after capture", async () => {
   const copiedTexts: string[] = []
   let completedCopyCount = 0
   const setup = await testRender(
-    <SelectionClipboardBridge
-      clipboard={{
-        writeText: async (text) => {
-          copiedTexts.push(text)
-          return successfulWriteResult()
-        },
-      }}
-      onCopyComplete={() => {
-        completedCopyCount += 1
-      }}
-    />,
+    <>
+      <SelectionClipboardBridge
+        clipboard={{
+          writeText: async (text) => {
+            copiedTexts.push(text)
+            return successfulWriteResult()
+          },
+        }}
+        onCopyComplete={() => {
+          completedCopyCount += 1
+        }}
+      />
+      <text selectable>selected terminal text</text>
+    </>,
     { width: 80, height: 8 },
   )
 
   try {
     await act(async () => {
-      setup.renderer.emit(
-        "selection",
-        selectionWithText("selected terminal text") as Selection,
-      )
+      await setup.renderOnce()
+      await setup.mockMouse.drag(0, 0, 21, 0)
       await Promise.resolve()
     })
     await setup.renderOnce()
 
     expect(copiedTexts).toEqual(["selected terminal text"])
     expect(completedCopyCount).toBe(1)
+    expect(setup.renderer.getSelection()).toBeNull()
+  } finally {
+    act(() => {
+      setup.renderer.destroy()
+    })
+  }
+})
+
+test("copies double- and triple-click selections without resetting click state", async () => {
+  const copiedTexts: string[] = []
+  let completedCopyCount = 0
+  const setup = await testRender(
+    <>
+      <SelectionClipboardBridge
+        clipboard={{
+          writeText: async (text) => {
+            copiedTexts.push(text)
+            return successfulWriteResult()
+          },
+        }}
+        onCopyComplete={() => {
+          completedCopyCount += 1
+        }}
+      />
+      <text selectable>alpha beta gamma</text>
+    </>,
+    { width: 80, height: 8 },
+  )
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+      await setup.mockMouse.click(6, 0)
+      await setup.mockMouse.click(6, 0)
+      await setup.mockMouse.click(6, 0)
+    })
+    await setup.waitFor(() => copiedTexts.length === 2)
+
+    expect(copiedTexts).toEqual(["beta", "alpha beta gamma"])
+    expect(completedCopyCount).toBe(2)
+    expect(setup.renderer.getSelection()).toBeNull()
   } finally {
     act(() => {
       setup.renderer.destroy()

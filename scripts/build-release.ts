@@ -16,8 +16,10 @@ import npmPackageMetadata from "../npm/package.json" with { type: "json" }
 const RIPGREP_VERSION = "14.1.1"
 const FD_VERSION = "10.3.0"
 const BUNDLE_VERSION = "2"
+
 const releaseTag = process.env.BULI_RELEASE_TAG
 const expectedReleaseTag = `v${packageMetadata.version}`
+
 if (npmPackageMetadata.version !== packageMetadata.version) {
     throw new Error(
         `npm package version ${JSON.stringify(npmPackageMetadata.version)} does not match `
@@ -30,6 +32,7 @@ if (releaseTag !== undefined && releaseTag !== expectedReleaseTag) {
         + `${JSON.stringify(packageMetadata.version)}; expected ${expectedReleaseTag}`,
     )
 }
+
 const TARGETS = {
     "darwin-arm64": {
         platform: "darwin",
@@ -69,6 +72,7 @@ type TReleaseTarget = keyof typeof TARGETS
 
 const requestedTarget = process.env.BULI_RELEASE_TARGET
     ?? `${process.platform}-${process.arch}`
+
 if (!(requestedTarget in TARGETS)) {
     throw new Error(
         `Unsupported release target ${JSON.stringify(requestedTarget)}; expected one of `

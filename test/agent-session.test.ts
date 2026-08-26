@@ -13,6 +13,7 @@ import {
   AgentSession,
   InMemorySessionManager,
   type ISessionManager,
+  type ISessionSnapshot,
 } from "@/sessions"
 
 test("AgentSession restores history, persists completion barriers, and publishes stable snapshots", async () => {
@@ -67,6 +68,137 @@ test("AgentSession restores history, persists completion barriers, and publishes
   expect(notifications).toBeGreaterThan(0)
 
   await session.dispose()
+})
+
+test("AgentSession structurally shares immutable history across streaming snapshots", async () => {
+  const manager = new InMemorySessionManager()
+  manager.createSession(sessionInfo("session-1", "test-agent", "Streaming"))
+  seedConversation(manager, 1)
+  const releaseFirstDelta = Promise.withResolvers<void>()
+  const releaseSecondDelta = Promise.withResolvers<void>()
+  const releaseFinish = Promise.withResolvers<void>()
+  type TPublication = {
+    snapshot: ISessionSnapshot
+    stateMessage: IAssistantMessage | undefined
+  }
+  const firstDeltaPublished = Promise.withResolvers<TPublication>()
+  const secondDeltaPublished = Promise.withResolvers<TPublication>()
+  const toolInput = { path: { directory: "src", file: "index.ts" } }
+  const model: IAgentModel = {
+    async *stream() {
+      yield {
+        type: "tool-call",
+        toolCallId: "read-call",
+        toolName: "read-file",
+        input: toolInput,
+      }
+      yield { type: "text-start", id: "answer" }
+      await releaseFirstDelta.promise
+      yield { type: "text-delta", id: "answer", delta: "First" }
+      await releaseSecondDelta.promise
+      yield { type: "text-delta", id: "answer", delta: " second" }
+      await releaseFinish.promise
+      yield { type: "finish", reason: "error" }
+    },
+  }
+  const session = new AgentSession({
+    agentId: "test-agent",
+    sessionId: "session-1",
+    manager,
+    systemPrompt: "System",
+    resolveRunConfiguration: () => ({ model, reasoningEffort: "medium" }),
+    tools: [],
+  })
+  session.subscribe(() => {
+    const snapshot = session.getSnapshot()
+    const text = streamingText(snapshot)
+    const publication = {
+      snapshot,
+      stateMessage: session.state.streamingMessage,
+    }
+    if (text === "First") firstDeltaPublished.resolve(publication)
+    if (text === "First second") secondDeltaPublished.resolve(publication)
+  })
+
+  const run = session.prompt("Continue")
+  await run.accepted
+  releaseFirstDelta.resolve()
+  const firstPublication = await firstDeltaPublished.promise
+  const first = firstPublication.snapshot
+  releaseSecondDelta.resolve()
+  const secondPublication = await secondDeltaPublished.promise
+  const second = secondPublication.snapshot
+
+  expect(second).not.toBe(first)
+  expect(second.streamingMessage).not.toBe(first.streamingMessage)
+  expect(first.streamingMessage).toBe(firstPublication.stateMessage)
+  expect(second.streamingMessage).toBe(secondPublication.stateMessage)
+  expect(second.messages).toBe(first.messages)
+  expect(second.contextUsage).toBe(first.contextUsage)
+  expect(second.messages).toHaveLength(3)
+  expect(streamingText(first)).toBe("First")
+  expect(streamingText(second)).toBe("First second")
+  expect(Object.isFrozen(second)).toBe(true)
+  expect(Object.isFrozen(second.messages)).toBe(true)
+  expect(Object.isFrozen(second.messages[0])).toBe(true)
+  expect(Object.isFrozen(second.messages[1])).toBe(true)
+  expect(Object.isFrozen(second.contextUsage)).toBe(true)
+  const completedAssistant = second.messages[1]
+  if (completedAssistant?.role !== "assistant") {
+    throw new Error("Expected completed assistant history")
+  }
+  expect(Object.isFrozen(completedAssistant.content)).toBe(true)
+  expect(Object.isFrozen(completedAssistant.content[0])).toBe(true)
+  expect(Object.isFrozen(second.streamingMessage)).toBe(true)
+  expect(Object.isFrozen(second.streamingMessage?.content)).toBe(true)
+  expect(second.streamingMessage?.content.every(Object.isFrozen)).toBe(true)
+  expect(() => (second.messages as unknown[]).push({})).toThrow()
+  const streamedText = second.streamingMessage?.content.find(
+    (item) => item.type === "text",
+  )
+  expect(() => {
+    if (streamedText?.type === "text") {
+      (streamedText as { text: string }).text = "Changed"
+    }
+  }).toThrow()
+
+  const toolCall = first.streamingMessage?.content.find(
+    (item) => item.type === "toolCall",
+  )
+  if (!toolCall) throw new Error("Expected a streaming tool call")
+  toolInput.path.file = "changed.ts"
+
+  expect(streamingText(first)).toBe("First")
+  expect(streamingText(second)).toBe("First second")
+  expect(toolCall.input).toEqual({
+    path: { directory: "src", file: "index.ts" },
+  })
+  expect(Object.isFrozen(toolCall)).toBe(true)
+  expect(Object.isFrozen(toolCall.input)).toBe(true)
+  expect(Object.isFrozen(toolCall.input.path)).toBe(true)
+  expect(() => {
+    (toolCall.input.path as { file: string }).file = "mutated.ts"
+  }).toThrow()
+
+  releaseFinish.resolve()
+  await run.settled
+  const settled = session.getSnapshot()
+  expect(streamingText(first)).toBe("First")
+  expect(streamingText(second)).toBe("First second")
+  expect(toolCall.input).toEqual({
+    path: { directory: "src", file: "index.ts" },
+  })
+  expect(settled.messages).not.toBe(second.messages)
+  expect(Object.isFrozen(settled.messages)).toBe(true)
+  expect(Object.isFrozen(settled.messages.at(-1))).toBe(true)
+
+  await session.dispose()
+
+  function streamingText(snapshot: ISessionSnapshot): string | undefined {
+    return snapshot.streamingMessage?.content.find(
+      (item) => item.type === "text",
+    )?.text
+  }
 })
 
 test("AgentSession publishes immutable approval request and resolution snapshots", async () => {

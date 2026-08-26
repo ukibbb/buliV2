@@ -28,6 +28,7 @@ import { createInterruptedToolResults } from "@/sessions/recovery"
 import type { ISessionManager } from "@/sessions/repository"
 import {
     freezeSessionSnapshot,
+    type ISessionSnapshotFreezeCache,
     type ISessionSnapshot,
 } from "@/sessions/snapshot"
 
@@ -67,6 +68,10 @@ export class AgentSession {
     private readonly tools: readonly IAgentTool[]
     private readonly now: () => number
     private readonly generateId: () => string
+    private readonly snapshotFreezeCache: ISessionSnapshotFreezeCache = {
+        source: undefined,
+        value: undefined,
+    }
     private snapshot: ISessionSnapshot
     private contextUsage: IContextUsage | undefined
     private currentContextWindowTokens: number | undefined
@@ -568,7 +573,7 @@ export class AgentSession {
             pendingToolCallIds: [...state.pendingToolCallIds],
             ...(state.lastRunReason ? { lastRunReason: state.lastRunReason } : {}),
             ...(state.errorMessage ? { errorMessage: state.errorMessage } : {}),
-        })
+        }, this.snapshotFreezeCache)
     }
 }
 

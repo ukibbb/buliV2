@@ -16,6 +16,15 @@ interface IAssistantMessageBuilderOptions {
   readonly modelProfile?: IModelProfile
 }
 
+const immutableAssistantSnapshots = new WeakSet<IAssistantMessage>()
+
+/** Identifies builder snapshots that are safe to retain without another clone. */
+export function isImmutableAssistantSnapshot(
+  message: IAssistantMessage,
+): boolean {
+  return immutableAssistantSnapshots.has(message)
+}
+
 /** Reduces one provider stream into one assistant message. */
 export class AssistantMessageBuilder {
   private readonly messageId: string
@@ -89,7 +98,7 @@ export class AssistantMessageBuilder {
   }
 
   snapshot(): IAssistantMessage {
-    return structuredClone({
+    const snapshot: IAssistantMessage = structuredClone({
       id: this.messageId,
       sessionId: this.options.sessionId,
       runId: this.options.runId,
@@ -98,11 +107,15 @@ export class AssistantMessageBuilder {
       stopReason: this.stopReason,
       ...(this.errorMessage ? { errorMessage: this.errorMessage } : {}),
       ...(this.options.modelProfile
-        ? { model: structuredClone(this.options.modelProfile) }
+        ? { model: this.options.modelProfile }
         : {}),
-      ...(this.usage ? { usage: structuredClone(this.usage) } : {}),
+      ...(this.usage ? { usage: this.usage } : {}),
       createdAt: this.createdAt,
     })
+    // Every published generation is detached from mutable builder storage.
+    deepFreeze(snapshot)
+    immutableAssistantSnapshots.add(snapshot)
+    return snapshot
   }
 
   private startText(id: string): void {
@@ -167,4 +180,10 @@ export class AssistantMessageBuilder {
 
 function errorMessage(value: unknown): string {
   return value instanceof Error ? value.message : String(value)
+}
+
+function deepFreeze(value: unknown): void {
+  if (value === null || typeof value !== "object") return
+  for (const child of Object.values(value)) deepFreeze(child)
+  Object.freeze(value)
 }

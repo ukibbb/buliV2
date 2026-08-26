@@ -1,4 +1,6 @@
 import type { IAgentEvent } from "@/agent/events"
+import { isImmutableAssistantSnapshot } from "@/agent/assistant-message-builder"
+import type { IAssistantMessage } from "@/agent/messages"
 import type { IAgentState } from "@/agent/state"
 
 /** Applies one agent event to immutable live state without performing side effects. */
@@ -13,17 +15,22 @@ export function reduceAgentState(
             if (event.message.role !== "assistant") return state
             return {
                 ...state,
-                streamingMessage: structuredClone(event.message),
+                streamingMessage: retainAssistantSnapshot(event.message),
             }
         case "message_update":
             return {
                 ...state,
-                streamingMessage: structuredClone(event.message),
+                streamingMessage: retainAssistantSnapshot(event.message),
             }
         case "message_end":
             return {
                 ...state,
-                messages: [...state.messages, structuredClone(event.message)],
+                messages: [
+                    ...state.messages,
+                    event.message.role === "assistant"
+                        ? retainAssistantSnapshot(event.message)
+                        : structuredClone(event.message),
+                ],
                 streamingMessage: event.message.role === "assistant"
                     ? undefined
                     : state.streamingMessage,
@@ -64,4 +71,12 @@ export function reduceAgentState(
         case "turn_start":
             return state
     }
+}
+
+function retainAssistantSnapshot(message: IAssistantMessage): IAssistantMessage {
+    // Builder snapshots are recursively frozen; external events retain the
+    // reducer's defensive-copy behavior.
+    return isImmutableAssistantSnapshot(message)
+        ? message
+        : structuredClone(message)
 }

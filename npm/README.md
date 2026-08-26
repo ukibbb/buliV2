@@ -14,5 +14,5 @@ Release candidates are published under the npm `next` dist-tag.
 For npm-managed installations, update through npm:
 
 ```bash
-npm install --global @ukibbb/buli@next
+npm install --global @ukibbb/buli@latest
 ```

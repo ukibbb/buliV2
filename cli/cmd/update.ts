@@ -123,7 +123,7 @@ export async function updateStandalone(
 ): Promise<void> {
   const fetchRelease = options.fetchRelease ?? fetch;
   const executablePath = resolve(options.executablePath ?? process.execPath);
-  const npmUpdateCommand = npmUpdateInstruction(executablePath, result.currentVersion);
+  const npmUpdateCommand = npmUpdateInstruction(executablePath);
   if (npmUpdateCommand) {
     throw new Error(
       "This Buli installation is managed by npm.\n"
@@ -218,16 +218,12 @@ export async function updateStandalone(
   }
 }
 
-export function npmUpdateInstruction(
-  executablePath: string,
-  currentVersion = packageMetadata.version,
-): string | undefined {
+export function npmUpdateInstruction(executablePath: string): string | undefined {
   const normalized = resolve(executablePath).replaceAll("\\", "/");
   if (!normalized.endsWith("/node_modules/@ukibbb/buli/vendor/bin/buli")) {
     return undefined;
   }
-  const distTag = currentVersion.includes("-") ? "next" : "latest";
-  return `npm install --global @ukibbb/buli@${distTag}`;
+  return "npm install --global @ukibbb/buli@latest";
 }
 
 async function replaceInstallation(

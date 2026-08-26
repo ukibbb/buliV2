@@ -68,13 +68,11 @@ test("rejects failed and malformed GitHub responses", async () => {
   )).rejects.toThrow("GitHub latest release is not stable");
 });
 
-test("directs npm installations to the matching dist-tag", async () => {
+test("directs npm installations to the latest stable dist-tag", async () => {
   const executablePath = "/tmp/node_modules/@ukibbb/buli/vendor/bin/buli";
-  expect(npmUpdateInstruction(executablePath, "0.1.0-rc.6"))
-    .toBe("npm install --global @ukibbb/buli@next");
-  expect(npmUpdateInstruction(executablePath, "0.1.0"))
+  expect(npmUpdateInstruction(executablePath))
     .toBe("npm install --global @ukibbb/buli@latest");
-  expect(npmUpdateInstruction("/tmp/bin/buli", "0.1.0-rc.6")).toBeUndefined();
+  expect(npmUpdateInstruction("/tmp/bin/buli")).toBeUndefined();
   await expect(updateStandalone({
     currentVersion: "0.1.0-rc.6",
     latestVersion: "0.1.0",
@@ -82,7 +80,7 @@ test("directs npm installations to the matching dist-tag", async () => {
     updateAvailable: true,
   }, {
     executablePath,
-  })).rejects.toThrow("Run: npm install --global @ukibbb/buli@next");
+  })).rejects.toThrow("Run: npm install --global @ukibbb/buli@latest");
 });
 
 test.skipIf(process.platform === "win32")(

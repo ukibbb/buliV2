@@ -1,11 +1,11 @@
-import type {
-    IAssistantMessage,
-    IUserMessage,
-    TAgentMessage,
-    TAgentRunEndReason,
-    TToolApprovalRequest,
+import {
+    isImmutableAssistantSnapshot,
+    type IAssistantMessage,
+    type IUserMessage,
+    type TAgentMessage,
+    type TAgentRunEndReason,
+    type TToolApprovalRequest,
 } from "@/agent"
-import { isImmutableAssistantSnapshot } from "@/agent/assistant-message-builder"
 import type { IContextUsage } from "@/sessions/compaction/context-budget"
 
 /** Immutable read model published by one live agent session. */

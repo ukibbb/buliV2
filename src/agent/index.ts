@@ -1,5 +1,6 @@
 /** Public agent feature API used by sessions, adapters and application composition. */
 export { Agent } from "@/agent/agent"
+export { isImmutableAssistantSnapshot } from "@/agent/assistant-message-builder"
 export { systemPrompt } from "@/agent/system-prompt"
 export type {
     IAgentEvent,

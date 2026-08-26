@@ -1,4 +1,4 @@
-import type { ReactNode } from "react"
+import { useMemo, type ReactNode } from "react"
 
 import type {
     IAssistantMessage,
@@ -6,6 +6,7 @@ import type {
     IToolResultMessage,
     TAgentMessage,
 } from "@/agent"
+import { renderRichMarkdownNode } from "@/sessions/ui/RichMarkdown"
 import { ToolActivityLine } from "@/sessions/ui/ToolActivity"
 import { syntax, theme } from "@/terminal/theme"
 
@@ -49,7 +50,7 @@ function AssistantCard(props: {
                         streaming={props.streaming}
                         conceal
                         concealCode={false}
-                        internalBlockMode="top-level"
+                        renderNode={renderRichMarkdownNode}
                         tableOptions={MARKDOWN_TABLE_OPTIONS}
                     />
                 }
@@ -96,51 +97,79 @@ function AssistantCard(props: {
 
 /** Renders persisted and streaming session messages for the terminal UI. */
 export function Transcript(props: ITranscriptProps): ReactNode {
+    const projection = useMemo(
+        () => projectToolActivities(props.messages, props.activeRunId),
+        [props.messages, props.activeRunId],
+    )
+    const runningToolCallIds = useMemo(
+        () => props.pendingToolCallIds === undefined
+            ? EMPTY_TOOL_CALL_IDS
+            : new Set(props.pendingToolCallIds),
+        [props.pendingToolCallIds],
+    )
+    // Structural sharing keeps durable tool/Markdown presentation intact on live text deltas.
+    const durableHistory = useMemo(
+        () => props.messages.map((message) => renderDurableMessage(
+            message,
+            projection,
+            runningToolCallIds,
+        )),
+        [props.messages, projection, runningToolCallIds],
+    )
+
     if (props.messages.length === 0 && !props.streamingMessage) {
         return <text fg={theme.textMuted} selectable={false}>
             Start conversation
         </text>
     }
 
-    const projection = projectToolActivities(props.messages, props.activeRunId)
-    const runningToolCallIds = new Set(props.pendingToolCallIds ?? [])
-    const renderedMessages: readonly TAgentMessage[] = props.streamingMessage
-        ? [...props.messages, props.streamingMessage]
-        : props.messages
+    const liveAssistant = props.streamingMessage
+        ? <AssistantCard
+            key={props.streamingMessage.id}
+            message={props.streamingMessage}
+            streaming
+            toolResults={EMPTY_TOOL_RESULTS}
+            activeToolCallIds={toolCallIds(props.streamingMessage)}
+            runningToolCallIds={runningToolCallIds}
+        />
+        : null
+    const renderedMessages = liveAssistant === null
+        ? durableHistory
+        : [...durableHistory, liveAssistant]
     return (
         <box width="100%" flexDirection="column">
-            {renderedMessages.map((message) => {
-                switch (message.role) {
-                    case "user":
-                        return <text bg={theme.green} key={message.id} margin={1}>{message.content.trim()}</text>
-                    case "assistant": {
-                        const streaming = message.id === props.streamingMessage?.id
-                        const toolResults = streaming
-                            ? EMPTY_TOOL_RESULTS
-                            : projection.resultsByAssistantMessageId.get(message.id)
-                                ?? EMPTY_TOOL_RESULTS
-                        const activeToolCallIds = streaming
-                            ? toolCallIds(message)
-                            : projection.activeAssistantMessageId === message.id
-                                ? projection.activeToolCallIds
-                                : EMPTY_TOOL_CALL_IDS
-                        return <AssistantCard
-                            key={message.id}
-                            message={message}
-                            streaming={streaming}
-                            toolResults={toolResults}
-                            activeToolCallIds={activeToolCallIds}
-                            runningToolCallIds={runningToolCallIds}
-                        />
-                    }
-                    case "toolResult":
-                        return projection.matchedToolResultMessageIds.has(message.id)
-                            ? null
-                            : <ToolActivityLine key={message.id} result={message} />
-                }
-            })}
+            {renderedMessages}
         </box>
     )
+}
+
+function renderDurableMessage(
+    message: TAgentMessage,
+    projection: IToolActivityProjection,
+    runningToolCallIds: ReadonlySet<string>,
+): ReactNode {
+    switch (message.role) {
+        case "user":
+            return <text bg={theme.green} key={message.id} margin={1}>
+                {message.content.trim()}
+            </text>
+        case "assistant":
+            return <AssistantCard
+                key={message.id}
+                message={message}
+                streaming={false}
+                toolResults={projection.resultsByAssistantMessageId.get(message.id)
+                    ?? EMPTY_TOOL_RESULTS}
+                activeToolCallIds={projection.activeAssistantMessageId === message.id
+                    ? projection.activeToolCallIds
+                    : EMPTY_TOOL_CALL_IDS}
+                runningToolCallIds={runningToolCallIds}
+            />
+        case "toolResult":
+            return projection.matchedToolResultMessageIds.has(message.id)
+                ? null
+                : <ToolActivityLine key={message.id} result={message} />
+    }
 }
 
 const EMPTY_TOOL_RESULTS: ReadonlyMap<string, IToolResultMessage> = new Map()

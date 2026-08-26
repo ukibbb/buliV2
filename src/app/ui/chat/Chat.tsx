@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { memo, useEffect } from "react"
 
 import { ChatStatus } from "@/app/ui/chat/ChatStatus"
 import { CommandMenu } from "@/app/ui/chat/CommandMenu"
@@ -28,7 +28,7 @@ interface IChatProps {
 }
 
 /** Connects prompt, status, and command-menu views to application UI state. */
-export function Chat(props: IChatProps) {
+function ChatView(props: IChatProps) {
     const controller = useBuliUiController()
     const ui = useBuliUiSnapshot()
     const application = useBuliApplicationSnapshot()
@@ -78,4 +78,33 @@ export function Chat(props: IChatProps) {
             <CommandMenu menu={menu} />
         </box>
     )
+}
+
+// Queue arrays are defensively cloned; stable message IDs still let text-only
+// streaming updates skip the unrelated prompt and status subtree.
+export const Chat = memo(ChatView, (previous, next) => (
+    previous.isRunning === next.isRunning
+    && previous.isCompacting === next.isCompacting
+    && previous.contextUsage === next.contextUsage
+    && previous.pendingToolApproval === next.pendingToolApproval
+    && previous.lastRunReason === next.lastRunReason
+    && previous.errorMessage === next.errorMessage
+    && sameMessageQueue(
+        previous.pendingSteeringMessages,
+        next.pendingSteeringMessages,
+    )
+    && sameMessageQueue(
+        previous.pendingFollowUpMessages,
+        next.pendingFollowUpMessages,
+    )
+))
+
+function sameMessageQueue(
+    previous: readonly IUserMessage[] | undefined,
+    next: readonly IUserMessage[] | undefined,
+): boolean {
+    if (previous === next) return true
+    if (previous === undefined || next === undefined) return false
+    return previous.length === next.length
+        && previous.every((message, index) => message.id === next[index]?.id)
 }

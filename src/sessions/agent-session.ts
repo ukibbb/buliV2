@@ -72,6 +72,8 @@ export class AgentSession {
         source: undefined,
         value: undefined,
     }
+    private pendingToolCallIdsSource: ReadonlySet<string> | undefined
+    private pendingToolCallIdsSnapshot: readonly string[] = []
     private snapshot: ISessionSnapshot
     private contextUsage: IContextUsage | undefined
     private currentContextWindowTokens: number | undefined
@@ -570,10 +572,23 @@ export class AgentSession {
                 ? {}
                 : { contextUsage: this.contextUsage }),
             ...(state.activeRunId ? { activeRunId: state.activeRunId } : {}),
-            pendingToolCallIds: [...state.pendingToolCallIds],
+            pendingToolCallIds: this.snapshotPendingToolCallIds(
+                state.pendingToolCallIds,
+            ),
             ...(state.lastRunReason ? { lastRunReason: state.lastRunReason } : {}),
             ...(state.errorMessage ? { errorMessage: state.errorMessage } : {}),
         }, this.snapshotFreezeCache)
+    }
+
+    private snapshotPendingToolCallIds(
+        source: ReadonlySet<string>,
+    ): readonly string[] {
+        if (source !== this.pendingToolCallIdsSource) {
+            // The reducer replaces this Set only when tool execution changes.
+            this.pendingToolCallIdsSource = source
+            this.pendingToolCallIdsSnapshot = [...source]
+        }
+        return this.pendingToolCallIdsSnapshot
     }
 }
 

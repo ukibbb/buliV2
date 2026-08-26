@@ -134,6 +134,7 @@ test("AgentSession structurally shares immutable history across streaming snapsh
   expect(first.streamingMessage).toBe(firstPublication.stateMessage)
   expect(second.streamingMessage).toBe(secondPublication.stateMessage)
   expect(second.messages).toBe(first.messages)
+  expect(second.pendingToolCallIds).toBe(first.pendingToolCallIds)
   expect(second.contextUsage).toBe(first.contextUsage)
   expect(second.messages).toHaveLength(3)
   expect(streamingText(first)).toBe("First")

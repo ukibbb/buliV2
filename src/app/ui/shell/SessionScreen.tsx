@@ -43,6 +43,7 @@ export function SessionScreen(props: ISessionScreenProps): ReactNode {
             {...(session.streamingMessage
               ? { streamingMessage: session.streamingMessage }
               : {})}
+            {...(session.activeRunId ? { activeRunId: session.activeRunId } : {})}
             pendingToolCallIds={session.pendingToolCallIds}
           />
         </scrollbox>

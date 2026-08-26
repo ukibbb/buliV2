@@ -70,6 +70,36 @@ test("renders direct, streaming, and tool messages", async () => {
                     input: { path: "missing.ts" },
                 },
                 {
+                    type: "toolCall",
+                    toolCallId: "call-patch-rejected",
+                    toolName: "apply_patch",
+                    input: { patchText: "*** Begin Patch", explanation: "Test rejection" },
+                },
+                {
+                    type: "toolCall",
+                    toolCallId: "call-command-manual",
+                    toolName: "bash",
+                    input: { command: "bun test" },
+                },
+                {
+                    type: "toolCall",
+                    toolCallId: "call-patch-committed",
+                    toolName: "apply_patch",
+                    input: { patchText: "*** Begin Patch", explanation: "Test abort" },
+                },
+                {
+                    type: "toolCall",
+                    toolCallId: "call-command-failed",
+                    toolName: "bash",
+                    input: { command: "exit 7" },
+                },
+                {
+                    type: "toolCall",
+                    toolCallId: "call-command-unknown",
+                    toolName: "bash",
+                    input: { command: "long-running-command" },
+                },
+                {
                     type: "text",
                     text: "Assistant answer",
                 },
@@ -196,7 +226,7 @@ test("renders direct, streaming, and tool messages", async () => {
     const setup = await testRender(<Transcript
         messages={messages}
         streamingMessage={streamingMessage}
-        pendingToolCallIds={["call-glob"]}
+        activeRunId="run-3"
     />, {
         width: 80,
         height: 20,
@@ -215,27 +245,25 @@ test("renders direct, streaming, and tool messages", async () => {
         const frame = setup.captureCharFrame()
         expect(frame).toContain("User prompt")
         expect(frame).toContain("Assistant answer")
-        expect(frame).toContain("[call] grep")
-        expect(frame).toContain("[done] grep")
-        expect(frame).toContain("[error] read_file")
+        expect(frame).not.toContain("[call]")
+        expect(frame).not.toContain("[done]")
+        expect(frame).toContain("Grep [AgentSession]")
+        expect(frame).toContain("read_file")
         expect(frame).toContain("File not found")
-        expect(frame).toContain("[rejected] apply_patch")
         expect(frame).toContain("User rejected the workspace patch")
-        expect(frame).toContain("[manual] bash")
         expect(frame).toContain("Run the copied command manually")
-        expect(frame).toContain("[committed-after-abort] apply_patch")
         expect(frame).toContain("Streaming answer")
-        expect(frame).toContain("[running] glob")
+        expect(frame).toContain("Glob [**/*.ts] pending...")
         expect(frame).toContain("TypeError: Invalid OpenAI authentication")
-        expect(frame).toContain("Released reasoning summary")
-        expect(frame).toContain("Streaming reasoning summary")
+        expect(frame).toContain("Thought: Released reasoning summary")
+        expect(frame).toContain("Thinking: Streaming reasoning summary")
         expect(frame).not.toContain("src/session/agent-session.ts:28")
         const completedLine = textRenderables(setup.renderer.root).find((renderable) =>
-            renderable.plainText.includes("[done] grep")
+            renderable.plainText.startsWith("Grep [AgentSession]")
         )
         expect(completedLine?.plainText).toContain("Routine completion detail")
         const committedLine = textRenderables(setup.renderer.root).find((renderable) =>
-            renderable.plainText.includes("[committed-after-abort]")
+            renderable.plainText.includes("Workspace changes were committed")
         )
         expect(committedLine?.plainText).toContain(
             "Workspace changes were committed despite cancellation",
@@ -243,15 +271,451 @@ test("renders direct, streaming, and tool messages", async () => {
         expect(committedLine?.plainText).toContain("Patch commit completed")
         expect(committedLine?.fg.equals(RGBA.fromHex(theme.red))).toBe(true)
         const failedLine = textRenderables(setup.renderer.root).find((renderable) =>
-            renderable.plainText.includes("[failed] bash")
+            renderable.plainText.includes("Command exited with code 7")
         )
         expect(failedLine?.plainText).toContain("Command exited with code 7")
         expect(failedLine?.fg.equals(RGBA.fromHex(theme.red))).toBe(true)
         const unknownLine = textRenderables(setup.renderer.root).find((renderable) =>
-            renderable.plainText.includes("[effects-unknown] bash")
+            renderable.plainText.includes("Inspect current state before retrying")
         )
         expect(unknownLine?.plainText).toContain("Inspect current state before retrying")
         expect(unknownLine?.fg.equals(RGBA.fromHex(theme.red))).toBe(true)
+    } finally {
+        act(() => {
+            setup.renderer.destroy()
+        })
+    }
+})
+
+test("renders specialized tool calls as one active logical line", async () => {
+    const message: IAssistantMessage = {
+        id: "active-tools",
+        sessionId: "default",
+        runId: "run-active",
+        role: "assistant",
+        createdAt: 1,
+        stopReason: "tool-use",
+        content: [
+            {
+                type: "toolCall",
+                toolCallId: "call-bash",
+                toolName: "bash",
+                input: { command: "bun test", purpose: "Verify the project" },
+            },
+            {
+                type: "toolCall",
+                toolCallId: "call-read",
+                toolName: "read",
+                input: { path: "src/app.ts", offset: 20 },
+            },
+            {
+                type: "toolCall",
+                toolCallId: "call-glob",
+                toolName: "glob",
+                input: { pattern: "**/*.ts", path: "src" },
+            },
+            {
+                type: "toolCall",
+                toolCallId: "call-grep",
+                toolName: "grep",
+                input: { pattern: "AgentSession", include: "*.ts" },
+            },
+        ],
+    }
+    const setup = await testRender(<Transcript
+        messages={[message]}
+        activeRunId="run-active"
+        pendingToolCallIds={["call-bash"]}
+    />, {
+        width: 100,
+        height: 10,
+    })
+
+    try {
+        await act(async () => {
+            await setup.renderOnce()
+        })
+
+        expect(textRenderables(setup.renderer.root).map((line) => line.plainText)).toEqual([
+            "Bash [bun test] running...",
+            "Read [src/app.ts] pending...",
+            "Glob [**/*.ts] pending...",
+            "Grep [AgentSession] pending...",
+        ])
+    } finally {
+        act(() => {
+            setup.renderer.destroy()
+        })
+    }
+})
+
+test("updates one tool activity line from active to completed", async () => {
+    let completeTool: (() => void) | undefined
+
+    function EvolvingToolTranscript(): React.ReactNode {
+        const [completed, setCompleted] = useState(false)
+        completeTool = () => setCompleted(true)
+        const messages: TAgentMessage[] = [
+            {
+                id: "assistant-tool",
+                sessionId: "default",
+                runId: "run-tool",
+                role: "assistant",
+                createdAt: 1,
+                stopReason: "tool-use",
+                content: [{
+                    type: "toolCall",
+                    toolCallId: "call-read",
+                    toolName: "read",
+                    input: { path: "src/app.ts" },
+                }],
+            },
+            ...(completed ? [{
+                id: "read-result",
+                sessionId: "default",
+                runId: "run-tool",
+                role: "toolResult" as const,
+                createdAt: 2,
+                toolCallId: "call-read",
+                toolName: "read",
+                content: "1: content",
+                isError: false,
+                outcome: "completed" as const,
+                summary: "line 1",
+            }] : []),
+        ]
+        return <Transcript
+            messages={messages}
+            {...(completed ? {} : { activeRunId: "run-tool" })}
+            pendingToolCallIds={completed ? [] : ["call-read"]}
+        />
+    }
+
+    const setup = await testRender(<EvolvingToolTranscript />, {
+        width: 80,
+        height: 5,
+    })
+
+    try {
+        await act(async () => {
+            await setup.renderOnce()
+        })
+        const lineBefore = textRenderables(setup.renderer.root)[0]
+        expect(lineBefore?.plainText).toBe("Read [src/app.ts] reading...")
+
+        act(() => {
+            completeTool?.()
+        })
+        await act(async () => {
+            await setup.renderOnce()
+        })
+
+        const linesAfter = textRenderables(setup.renderer.root)
+        expect(linesAfter).toHaveLength(1)
+        expect(linesAfter[0]).toBe(lineBefore)
+        expect(linesAfter[0]?.plainText).toBe("Read [src/app.ts] line 1 ✓")
+    } finally {
+        act(() => {
+            setup.renderer.destroy()
+        })
+    }
+})
+
+test("keeps one tool activity line across the streaming message boundary", async () => {
+    let persistAssistant: (() => void) | undefined
+
+    function StreamingToolTranscript(): React.ReactNode {
+        const [persisted, setPersisted] = useState(false)
+        persistAssistant = () => setPersisted(true)
+        const assistant: IAssistantMessage = {
+            id: "streaming-tool",
+            sessionId: "default",
+            runId: "run-streaming-tool",
+            role: "assistant",
+            createdAt: 1,
+            stopReason: persisted ? "tool-use" : "pending",
+            content: [{
+                type: "toolCall",
+                toolCallId: "call-glob",
+                toolName: "glob",
+                input: { pattern: "**/*.tsx" },
+            }],
+        }
+        return <Transcript
+            messages={persisted ? [assistant] : []}
+            {...(persisted ? {} : { streamingMessage: assistant })}
+            activeRunId="run-streaming-tool"
+        />
+    }
+
+    const setup = await testRender(<StreamingToolTranscript />, {
+        width: 80,
+        height: 5,
+    })
+
+    try {
+        await act(async () => {
+            await setup.renderOnce()
+        })
+        const lineBefore = textRenderables(setup.renderer.root)[0]
+        expect(lineBefore?.plainText).toBe("Glob [**/*.tsx] pending...")
+
+        act(() => {
+            persistAssistant?.()
+        })
+        await act(async () => {
+            await setup.renderOnce()
+        })
+
+        const linesAfter = textRenderables(setup.renderer.root)
+        expect(linesAfter).toHaveLength(1)
+        expect(linesAfter[0]).toBe(lineBefore)
+        expect(linesAfter[0]?.plainText).toBe("Glob [**/*.tsx] pending...")
+    } finally {
+        act(() => {
+            setup.renderer.destroy()
+        })
+    }
+})
+
+test("truncates tool targets without splitting Unicode code points", async () => {
+    const path = `${"a".repeat(92)}😀tail`
+    const message: IAssistantMessage = {
+        id: "unicode-tool",
+        sessionId: "default",
+        runId: "run-unicode",
+        role: "assistant",
+        createdAt: 1,
+        stopReason: "tool-use",
+        content: [{
+            type: "toolCall",
+            toolCallId: "call-read",
+            toolName: "read",
+            input: { path },
+        }],
+    }
+    const setup = await testRender(<Transcript
+        messages={[message]}
+        activeRunId="run-unicode"
+    />, {
+        width: 80,
+        height: 5,
+    })
+
+    try {
+        await act(async () => {
+            await setup.renderOnce()
+        })
+
+        const line = textRenderables(setup.renderer.root)[0]?.plainText
+        expect(line).toContain("😀...")
+        expect(line).not.toContain("�")
+    } finally {
+        act(() => {
+            setup.renderer.destroy()
+        })
+    }
+})
+
+test("pairs out-of-order results and preserves orphan results", async () => {
+    const assistant: IAssistantMessage = {
+        id: "tool-batch",
+        sessionId: "default",
+        runId: "run-tools",
+        role: "assistant",
+        createdAt: 1,
+        stopReason: "tool-use",
+        content: [
+            {
+                type: "toolCall",
+                toolCallId: "call-grep",
+                toolName: "grep",
+                input: { pattern: "needle" },
+            },
+            {
+                type: "toolCall",
+                toolCallId: "call-bash",
+                toolName: "bash",
+                input: { command: "bun test" },
+            },
+        ],
+    }
+    const messages: TAgentMessage[] = [
+        assistant,
+        {
+            id: "bash-result",
+            sessionId: "default",
+            runId: "run-tools",
+            role: "toolResult",
+            createdAt: 2,
+            toolCallId: "call-bash",
+            toolName: "bash",
+            content: "Command may have changed files",
+            isError: true,
+            outcome: "effects-unknown",
+            summary: "Inspect state before retrying",
+        },
+        {
+            id: "orphan-result",
+            sessionId: "default",
+            runId: "run-tools",
+            role: "toolResult",
+            createdAt: 3,
+            toolCallId: "orphan",
+            toolName: "read",
+            content: "Orphan result detail",
+            isError: true,
+        },
+        {
+            id: "grep-result",
+            sessionId: "default",
+            runId: "run-tools",
+            role: "toolResult",
+            createdAt: 4,
+            toolCallId: "call-grep",
+            toolName: "grep",
+            content: "src/example.ts:1:needle",
+            isError: false,
+            outcome: "completed",
+            summary: "1 match",
+        },
+    ]
+    const setup = await testRender(<Transcript messages={messages} />, {
+        width: 100,
+        height: 10,
+    })
+
+    try {
+        await act(async () => {
+            await setup.renderOnce()
+        })
+
+        const lines = textRenderables(setup.renderer.root)
+        expect(lines.map((line) => line.plainText)).toEqual([
+            "Grep [needle] 1 match ✓",
+            "Bash [bun test] Inspect state before retrying | Command may have changed files ×",
+            "Read Orphan result detail ×",
+        ])
+        expect(lines[1]?.fg.equals(RGBA.fromHex(theme.red))).toBe(true)
+        expect(lines[2]?.fg.equals(RGBA.fromHex(theme.red))).toBe(true)
+    } finally {
+        act(() => {
+            setup.renderer.destroy()
+        })
+    }
+})
+
+test("does not pair results to calls from a failed assistant turn", async () => {
+    const messages: TAgentMessage[] = [
+        {
+            id: "failed-tool-turn",
+            sessionId: "default",
+            runId: "run-failed-turn",
+            role: "assistant",
+            createdAt: 1,
+            stopReason: "error",
+            content: [{
+                type: "toolCall",
+                toolCallId: "call-read",
+                toolName: "read",
+                input: { path: "never-read.ts" },
+            }],
+        },
+        {
+            id: "invalid-result",
+            sessionId: "default",
+            runId: "run-failed-turn",
+            role: "toolResult",
+            createdAt: 2,
+            toolCallId: "call-read",
+            toolName: "read",
+            content: "Unexpected legacy result",
+            isError: true,
+        },
+    ]
+    const setup = await testRender(<Transcript messages={messages} />, {
+        width: 80,
+        height: 6,
+    })
+
+    try {
+        await act(async () => {
+            await setup.renderOnce()
+        })
+
+        expect(textRenderables(setup.renderer.root).map((line) => line.plainText)).toEqual([
+            "Read [never-read.ts] not run ×",
+            "Read Unexpected legacy result ×",
+        ])
+    } finally {
+        act(() => {
+            setup.renderer.destroy()
+        })
+    }
+})
+
+test("scopes an active reused tool call id to its current run", async () => {
+    const messages: TAgentMessage[] = [
+        {
+            id: "old-assistant",
+            sessionId: "default",
+            runId: "run-old",
+            role: "assistant",
+            createdAt: 1,
+            stopReason: "tool-use",
+            content: [{
+                type: "toolCall",
+                toolCallId: "shared-call",
+                toolName: "read",
+                input: { path: "old.ts" },
+            }],
+        },
+        {
+            id: "old-result",
+            sessionId: "default",
+            runId: "run-old",
+            role: "toolResult",
+            createdAt: 2,
+            toolCallId: "shared-call",
+            toolName: "read",
+            content: "old content",
+            isError: false,
+            outcome: "completed",
+            summary: "read old file",
+        },
+        {
+            id: "current-assistant",
+            sessionId: "default",
+            runId: "run-current",
+            role: "assistant",
+            createdAt: 3,
+            stopReason: "tool-use",
+            content: [{
+                type: "toolCall",
+                toolCallId: "shared-call",
+                toolName: "read",
+                input: { path: "current.ts" },
+            }],
+        },
+    ]
+    const setup = await testRender(<Transcript
+        messages={messages}
+        activeRunId="run-current"
+        pendingToolCallIds={["shared-call"]}
+    />, {
+        width: 80,
+        height: 8,
+    })
+
+    try {
+        await act(async () => {
+            await setup.renderOnce()
+        })
+
+        expect(textRenderables(setup.renderer.root).map((line) => line.plainText)).toEqual([
+            "Read [old.ts] read old file ✓",
+            "Read [current.ts] reading...",
+        ])
     } finally {
         act(() => {
             setup.renderer.destroy()
@@ -308,10 +772,10 @@ test("renders full reasoning summaries as plain text in content order", async ()
 
         const texts = textRenderables(setup.renderer.root)
         const completedReasoning = texts.find((renderable) =>
-            renderable.plainText === `Reasoning: ${summary}`
+            renderable.plainText === `Thought: ${summary}`
         )
         const streamingReasoning = texts.find((renderable) =>
-            renderable.plainText === "Reasoning: Live released summary"
+            renderable.plainText === "Thinking: Live released summary"
         )
         expect(completedReasoning).toBeDefined()
         expect(completedReasoning?.fg.equals(RGBA.fromHex(theme.textMuted))).toBe(true)
@@ -325,8 +789,8 @@ test("renders full reasoning summaries as plain text in content order", async ()
 
         const frame = setup.captureCharFrame()
         expect(frame).toContain("**literal Markdown syntax**")
-        expect(frame.indexOf("Before summary")).toBeLessThan(frame.indexOf("Reasoning:"))
-        expect(frame.indexOf("Reasoning:")).toBeLessThan(frame.indexOf("After summary"))
+        expect(frame.indexOf("Before summary")).toBeLessThan(frame.indexOf("Thought:"))
+        expect(frame.indexOf("Thought:")).toBeLessThan(frame.indexOf("After summary"))
     } finally {
         act(() => {
             setup.renderer.destroy()
@@ -367,10 +831,10 @@ test("shows work for empty streaming reasoning and hides empty completed reasoni
         })
 
         const reasoning = textRenderables(setup.renderer.root).filter((renderable) =>
-            renderable.plainText.startsWith("Reasoning")
+            renderable.plainText.startsWith("Thinking")
         )
         expect(reasoning).toHaveLength(1)
-        expect(reasoning[0]?.plainText).toBe("Reasoning...")
+        expect(reasoning[0]?.plainText).toBe("Thinking...")
         expect(reasoning[0]?.fg.equals(RGBA.fromHex(theme.amber))).toBe(true)
     } finally {
         act(() => {

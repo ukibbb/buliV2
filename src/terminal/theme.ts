@@ -7,6 +7,8 @@ export const glyphs = {
     snakeHead: "●",
     snakeEmptyTrack: "·",
     apple: "◆",
+    success: "✓",
+    failure: "×",
 } as const
 
 export type GlyphName = keyof typeof glyphs

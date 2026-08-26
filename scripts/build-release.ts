@@ -260,7 +260,19 @@ async function buildThirdPartyLicenses(
     ripgrepRoot: string,
     fdRoot: string,
 ): Promise<string> {
-    const [ripgrepSections, fdSections] = await Promise.all([
+    const treeSitterRoot = join(
+        workspaceRoot,
+        "src",
+        "terminal",
+        "assets",
+        "tree-sitter",
+    )
+    const [
+        ripgrepSections,
+        fdSections,
+        pythonLicense,
+        bashLicense,
+    ] = await Promise.all([
         Promise.all([
             licenseSection(ripgrepRoot, "COPYING"),
             licenseSection(ripgrepRoot, "LICENSE-MIT"),
@@ -270,7 +282,10 @@ async function buildThirdPartyLicenses(
             licenseSection(fdRoot, "LICENSE-APACHE"),
             licenseSection(fdRoot, "LICENSE-MIT"),
         ]),
+        licenseSection(treeSitterRoot, "LICENSE.tree-sitter-python"),
+        licenseSection(treeSitterRoot, "LICENSE.tree-sitter-bash"),
     ])
+    // Parser binaries are embedded, so their notices must ship beside Buli.
     return [
         `ripgrep ${RIPGREP_VERSION}`,
         "Source: https://github.com/BurntSushi/ripgrep",
@@ -281,6 +296,16 @@ async function buildThirdPartyLicenses(
         "Source: https://github.com/sharkdp/fd",
         "",
         ...fdSections,
+        "",
+        "tree-sitter-python 0.23.6",
+        "Source: https://github.com/tree-sitter/tree-sitter-python",
+        "",
+        pythonLicense,
+        "",
+        "tree-sitter-bash 0.25.0",
+        "Source: https://github.com/tree-sitter/tree-sitter-bash",
+        "",
+        bashLicense,
     ].join("\n")
 }
 

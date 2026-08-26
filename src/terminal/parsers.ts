@@ -3,25 +3,27 @@ import {
     type FiletypeParserOptions,
 } from "@opentui/core"
 
+// Static file imports are required to embed parser assets in Bun executables.
+import bashHighlights from "./assets/tree-sitter/bash-highlights.scm" with { type: "file" }
+import bashWasm from "./assets/tree-sitter/tree-sitter-bash.wasm" with { type: "file" }
+import pythonHighlights from "./assets/tree-sitter/python-highlights.scm" with { type: "file" }
+import pythonWasm from "./assets/tree-sitter/tree-sitter-python.wasm" with { type: "file" }
+
 export const terminalParserOptions = [
     {
         filetype: "python",
         aliases: ["py", "pyi"],
-        wasm: "https://github.com/tree-sitter/tree-sitter-python/releases/download/v0.23.6/tree-sitter-python.wasm",
+        wasm: pythonWasm,
         queries: {
-            highlights: [
-                "https://raw.githubusercontent.com/tree-sitter/tree-sitter-python/v0.23.6/queries/highlights.scm",
-            ],
+            highlights: [pythonHighlights],
         },
     },
     {
         filetype: "bash",
-        aliases: ["sh", "zsh", "ksh"],
-        wasm: "https://github.com/tree-sitter/tree-sitter-bash/releases/download/v0.25.0/tree-sitter-bash.wasm",
+        aliases: ["sh", "zsh", "ksh", "shell"],
+        wasm: bashWasm,
         queries: {
-            highlights: [
-                "https://raw.githubusercontent.com/tree-sitter/tree-sitter-bash/v0.25.0/queries/highlights.scm",
-            ],
+            highlights: [bashHighlights],
         },
     },
 ] satisfies FiletypeParserOptions[]

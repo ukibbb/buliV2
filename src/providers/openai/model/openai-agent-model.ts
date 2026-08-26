@@ -28,6 +28,7 @@ import {
 } from "@/agent"
 import {
     OPENAI_CODEX_BASE_URL,
+    OPENAI_CODEX_RESPONSES_URL,
     OPENAI_OAUTH_DUMMY_API_KEY,
 } from "@/providers/openai/constants"
 
@@ -49,6 +50,7 @@ export interface IOpenAiAgentModelOptions {
     readonly auth: IOpenAiModelTransport
     readonly modelId?: string
     readonly expectedAccountId?: string
+    readonly serviceTier?: "priority"
 }
 
 // ?? please explain me this types line by line how it works
@@ -75,11 +77,13 @@ export class OpenAiAgentModel implements IAgentModel {
     private readonly auth: IOpenAiModelTransport
     private readonly modelId: string
     private readonly expectedAccountId: string | undefined
+    private readonly serviceTier: "priority" | undefined
 
     constructor(options: IOpenAiAgentModelOptions) {
         this.auth = options.auth
         this.modelId = options.modelId ?? DEFAULT_OPENAI_MODEL_ID
         this.expectedAccountId = options.expectedAccountId
+        this.serviceTier = options.serviceTier
     }
 
     async *stream(
@@ -105,11 +109,14 @@ export class OpenAiAgentModel implements IAgentModel {
             && this.auth.authenticatedFetchForAccount
             ? this.auth.authenticatedFetchForAccount(requestAccountId)
             : this.auth.authenticatedFetch
+        const modelFetch = this.serviceTier === undefined
+            ? authenticatedFetch
+            : withServiceTier(authenticatedFetch, this.serviceTier)
 
         const provider = createOpenAI({
             baseURL: OPENAI_CODEX_BASE_URL,
             apiKey: OPENAI_OAUTH_DUMMY_API_KEY,
-            fetch: authenticatedFetch,
+            fetch: modelFetch,
         })
         const result = streamText({
             model: provider.responses(this.modelId),
@@ -153,6 +160,37 @@ export class OpenAiAgentModel implements IAgentModel {
             throw normalizeOpenAiModelError(error)
         }
     }
+}
+
+/** Applies account-authorized tiers after the SDK's static model allowlist. */
+function withServiceTier(
+    fetcher: typeof fetch,
+    serviceTier: "priority",
+): typeof fetch {
+    const run = async (
+        input: RequestInfo | URL,
+        init?: RequestInit,
+    ): Promise<Response> => {
+        const request = new Request(input, init)
+        if (
+            request.url !== OPENAI_CODEX_RESPONSES_URL
+            || request.method !== "POST"
+        ) {
+            return fetcher(input, init)
+        }
+
+        const body: unknown = await request.json()
+        if (!isRecord(body)) {
+            throw new Error("OpenAI Responses request body must be a JSON object")
+        }
+        const headers = new Headers(request.headers)
+        headers.delete("content-length")
+        return fetcher(new Request(request, {
+            headers,
+            body: JSON.stringify({ ...body, service_tier: serviceTier }),
+        }))
+    }
+    return Object.assign(run, { preconnect: fetcher.preconnect })
 }
 
 function toAiTools(

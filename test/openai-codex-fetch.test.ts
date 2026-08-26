@@ -114,7 +114,11 @@ test("sends an exact Codex request with OAuth headers and buffered body", async 
     })
     const sourceController = new AbortController()
     const overrideController = new AbortController()
-    const payload = JSON.stringify({ model: "gpt-5.6-sol", stream: true })
+    const payload = JSON.stringify({
+        model: "gpt-5.6-sol",
+        service_tier: "priority",
+        stream: true,
+    })
     const input = new Request(OPENAI_CODEX_RESPONSES_URL, {
         method: "POST",
         headers: {

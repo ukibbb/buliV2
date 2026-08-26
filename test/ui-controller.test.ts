@@ -593,6 +593,45 @@ test("opens model picker at the current model and activates a selection", async 
   expect(spy.created).toEqual([])
 })
 
+test("shows a Fast model variant beside its base model", async () => {
+  const snapshot: IBuliApplicationSnapshot = {
+    ...APPLICATION_SNAPSHOT,
+    models: [
+      {
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        reasoningEfforts: ["medium", "high"],
+      },
+      {
+        id: "gpt-5.6-luna::fast",
+        name: "GPT-5.6 Luna Fast",
+        reasoningEfforts: ["medium", "high"],
+      },
+    ],
+    selection: {
+      modelId: "gpt-5.6-luna",
+      reasoningEffort: "medium",
+    },
+  }
+  const spy = applicationSpy({ getSnapshot: () => snapshot })
+  const controller = new BuliUiController({ application: spy.application })
+
+  await controller.submitInput("/model")
+
+  expect(controller.getSnapshot().menu).toMatchObject({
+    mode: "picker",
+    commandName: "model",
+    selectedIndex: 0,
+    items: [
+      { id: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
+      { id: "gpt-5.6-luna::fast", label: "GPT-5.6 Luna Fast" },
+    ],
+  })
+  controller.moveMenuSelection(1)
+  await controller.activateSelectedMenuItem()
+  expect(spy.selectedModels).toEqual(["gpt-5.6-luna::fast"])
+})
+
 test("keeps the model picker usable when catalog refresh fails", async () => {
   const spy = applicationSpy({
     refreshModels: async () => {

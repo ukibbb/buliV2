@@ -90,6 +90,7 @@ test("uses Codex availability and enriches matching IDs from models.dev", async 
   expect(models).toEqual([
     {
       id: "account-only",
+      modelId: "account-only",
       accountId: "account-id",
       name: "Account Only",
       reasoningEfforts: ["high"],
@@ -97,6 +98,7 @@ test("uses Codex availability and enriches matching IDs from models.dev", async 
     },
     {
       id: "gpt-rich",
+      modelId: "gpt-rich",
       accountId: "account-id",
       name: "GPT Rich Published",
       reasoningEfforts: ["low", "medium"],
@@ -105,6 +107,7 @@ test("uses Codex availability and enriches matching IDs from models.dev", async 
     },
     {
       id: "gpt-enriched",
+      modelId: "gpt-enriched",
       accountId: "account-id",
       name: "GPT Enriched",
       reasoningEfforts: ["low", "high", "max"],
@@ -138,6 +141,7 @@ test("keeps Codex models when models.dev enrichment fails", async () => {
 
   await expect(catalog.load()).resolves.toEqual([{
     id: "codex-only",
+    modelId: "codex-only",
     accountId: "account-id",
     name: "Codex Only",
     reasoningEfforts: ["medium"],
@@ -257,11 +261,138 @@ test("does not let an optional models.dev timeout reject a Codex catalog", async
 
   await expect(catalog.load()).resolves.toEqual([{
     id: "codex-model",
+    modelId: "codex-model",
     accountId: "account-id",
     name: "codex-model",
     reasoningEfforts: ["none"],
     defaultReasoningEffort: "none",
   }])
+})
+
+test("publishes account-authorized Fast variants beside their base models", async () => {
+  const catalog = createOpenAiModelCatalog({
+    auth: catalogAuth(async () => Response.json({
+      models: [
+        {
+          slug: "current-fast",
+          display_name: "Current Fast Model",
+          priority: 1,
+          supported_reasoning_levels: ["medium"],
+          service_tiers: [
+            { id: "flex", name: "Flex" },
+            { id: " PRIORITY ", name: "Fast" },
+          ],
+          additional_speed_tiers: ["fast"],
+        },
+        {
+          slug: "legacy-fast",
+          display_name: "Legacy Model",
+          priority: 2,
+          supported_reasoning_levels: ["low"],
+          additional_speed_tiers: [null, " FAST "],
+        },
+        {
+          slug: "public-mode-only",
+          priority: 3,
+          supported_reasoning_levels: ["none"],
+        },
+        {
+          slug: "hidden-fast",
+          visibility: "hidden",
+          supported_reasoning_levels: ["medium"],
+          service_tiers: [{ id: "priority" }],
+        },
+      ],
+    })),
+    fetch: fetchImplementation(async () => Response.json({
+      openai: {
+        models: {
+          "public-mode-only": {
+            id: "public-mode-only",
+            name: "Public Mode Only",
+            experimental: {
+              modes: {
+                fast: { provider: { body: { service_tier: "priority" } } },
+              },
+            },
+          },
+        },
+      },
+    })),
+  })
+
+  const models = await catalog.load()
+
+  expect(models.map((model) => model.id)).toEqual([
+    "current-fast",
+    "current-fast::fast",
+    "legacy-fast",
+    "legacy-fast::fast",
+    "public-mode-only",
+  ])
+  expect(models[1]).toEqual({
+    id: "current-fast::fast",
+    modelId: "current-fast",
+    accountId: "account-id",
+    name: "Current Fast Model Fast",
+    serviceTier: "priority",
+    reasoningEfforts: ["medium"],
+    defaultReasoningEffort: "medium",
+  })
+  expect(models[3]).toEqual({
+    id: "legacy-fast::fast",
+    modelId: "legacy-fast",
+    accountId: "account-id",
+    name: "Legacy Model Fast",
+    serviceTier: "priority",
+    reasoningEfforts: ["low"],
+    defaultReasoningEffort: "low",
+  })
+  expect(models[4]).not.toHaveProperty("serviceTier")
+  expect(models.some((model) => model.id === "hidden-fast")).toBe(false)
+  expect(Object.isFrozen(models[1])).toBe(true)
+  expect(models[0]?.reasoningEfforts).toBe(models[1]?.reasoningEfforts)
+})
+
+test("does not synthesize unsupported, default-only, or colliding Fast entries", async () => {
+  const catalog = createOpenAiModelCatalog({
+    auth: catalogAuth(async () => Response.json({
+      models: [
+        {
+          slug: "unsupported-tiers",
+          priority: 1,
+          service_tiers: [{ id: "flex" }, { id: "ultrafast" }],
+        },
+        {
+          slug: "default-only",
+          priority: 2,
+          default_service_tier: "priority",
+        },
+        {
+          slug: "collision",
+          priority: 3,
+          service_tiers: [{ id: "priority" }],
+        },
+        {
+          slug: "collision::fast",
+          priority: 4,
+        },
+      ],
+    })),
+    fetch: fetchImplementation(async () => Response.json({
+      openai: { models: {} },
+    })),
+  })
+
+  const models = await catalog.load()
+
+  expect(models.map((model) => model.id)).toEqual([
+    "unsupported-tiers",
+    "default-only",
+    "collision",
+    "collision::fast",
+  ])
+  expect(models.every((model) => model.serviceTier === undefined)).toBe(true)
 })
 
 test("rejects and cancels a catalog declared above the response limit", async () => {

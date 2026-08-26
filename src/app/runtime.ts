@@ -38,6 +38,7 @@ export interface IBuliModelRuntimeConfig extends IBuliModelDisplayInfo {
     readonly model: IAgentModel
     readonly modelProfile?: IModelProfile
     readonly providerAccountId?: string
+    readonly fallbackSelectionId?: string
     readonly defaultReasoningEffort: TReasoningEffort
 }
 
@@ -431,7 +432,14 @@ export class BuliApplicationRuntime implements IBuliApplication {
             await loadModels(refreshSignal),
         )
         refreshSignal.throwIfAborted()
-        const selection = reconcileSelection(registrations, this.selection)
+        const previousRegistration = this.models.find(
+            (model) => model.id === this.selection.modelId,
+        )
+        const selection = reconcileSelection(
+            registrations,
+            this.selection,
+            previousRegistration?.fallbackSelectionId,
+        )
         const snapshot = this.createSnapshot(registrations, selection)
         refreshSignal.throwIfAborted()
         if (this.disposed) throw new Error("Buli runtime is disposed")
@@ -579,10 +587,21 @@ function copyModelRegistrations(
     }
 
     const ids = new Set<string>()
-    return registrations.map((registration) => {
+    const copied = registrations.map((registration) => {
         if (!registration.id.trim()) throw new Error("Model ID cannot be empty")
         if (!registration.name.trim()) {
             throw new Error(`Model name cannot be empty: ${registration.id}`)
+        }
+        if (
+            registration.fallbackSelectionId !== undefined
+            && !registration.fallbackSelectionId.trim()
+        ) {
+            throw new Error(
+                `Model fallback selection ID cannot be empty: ${registration.id}`,
+            )
+        }
+        if (registration.fallbackSelectionId === registration.id) {
+            throw new Error(`Model fallback cannot reference itself: ${registration.id}`)
         }
         if (ids.has(registration.id)) {
             throw new Error(`Duplicate model: ${registration.id}`)
@@ -610,14 +629,28 @@ function copyModelRegistrations(
                 : { modelProfile: structuredClone(registration.modelProfile) }),
         }
     })
+    for (const registration of copied) {
+        if (
+            registration.fallbackSelectionId !== undefined
+            && !ids.has(registration.fallbackSelectionId)
+        ) {
+            throw new Error(
+                `Unknown model fallback: ${registration.fallbackSelectionId}`,
+            )
+        }
+    }
+    return copied
 }
 
 function reconcileSelection(
     registrations: readonly IBuliModelRuntimeConfig[],
     selection: IBuliModelSelection,
+    fallbackSelectionId?: string,
 ): IBuliModelSelection {
     const registration = registrations.find(
         (model) => model.id === selection.modelId,
+    ) ?? registrations.find(
+        (model) => model.id === fallbackSelectionId,
     ) ?? registrations[0]
     if (!registration) throw new Error("At least one model must be registered")
 

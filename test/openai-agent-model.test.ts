@@ -15,7 +15,10 @@ import type {
   TAuthCredential,
 } from "@/authentication/credentials"
 import { OpenAiAuth } from "@/providers/openai/auth/openai-auth"
-import { OpenAiAgentModel } from "@/providers/openai/model/openai-agent-model"
+import {
+  OpenAiAgentModel,
+  type IOpenAiAgentModelOptions,
+} from "@/providers/openai/model/openai-agent-model"
 import { OPENAI_CODEX_RESPONSES_URL } from "@/providers/openai/constants"
 import { AgentSession } from "@/sessions/agent-session"
 import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
@@ -493,10 +496,29 @@ test("sends projected context summaries and compaction output limits", async () 
   expect(JSON.stringify(body)).toContain("Earlier durable context")
   expect(body.max_output_tokens).toBe(321)
   expect(body).not.toHaveProperty("parallel_tool_calls")
+  expect(body).not.toHaveProperty("service_tier")
   expect(events.at(-1)).toMatchObject({
     type: "finish",
     usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
   })
+})
+
+test("sends the priority service tier for a Fast model registration", async () => {
+  let capturedRequest: Request | undefined
+  const model = createModel(async (...args) => {
+    capturedRequest = new Request(...args)
+    return streamResponse()
+  }, {
+    modelId: "gpt-5.4-nano-catalog",
+    serviceTier: "priority",
+  })
+
+  await collectEvents(model, [userMessage("Fast request")], [])
+
+  if (!capturedRequest) throw new Error("Expected one provider request")
+  const body = (await capturedRequest.json()) as Record<string, unknown>
+  expect(body.model).toBe("gpt-5.4-nano-catalog")
+  expect(body.service_tier).toBe("priority")
 })
 
 test("normalizes cache and reasoning usage without double-counting totals", async () => {
@@ -895,6 +917,7 @@ function eventStream(chunks: readonly Record<string, unknown>[]): Response {
 
 function createModel(
   run: (...args: Parameters<typeof globalThis.fetch>) => Promise<Response>,
+  options: Omit<IOpenAiAgentModelOptions, "auth"> = {},
 ): OpenAiAgentModel {
   const auth = new OpenAiAuth({
     store: authStore({
@@ -907,7 +930,7 @@ function createModel(
     fetch: fetchImplementation(run),
     now: () => 100,
   })
-  return new OpenAiAgentModel({ auth })
+  return new OpenAiAgentModel({ auth, ...options })
 }
 
 async function collectEvents(

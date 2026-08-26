@@ -464,6 +464,110 @@ test("application runtime replaces models atomically and reconciles selection", 
   await runtime.dispose()
 })
 
+test("model refresh falls back from a removed Fast variant to its base", async () => {
+  const wireProfile = {
+    providerId: "openai",
+    modelId: "gpt-5.6-luna",
+    contextWindowTokens: 272_000,
+  }
+  const runtime = new BuliApplicationRuntime({
+    workspaceRoot: WORKSPACE_ROOT,
+    manager: new InMemorySessionManager(),
+    agents: TEST_AGENTS,
+    defaultAgentId: TEST_AGENT_ID,
+    models: [
+      {
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        model,
+        modelProfile: wireProfile,
+        reasoningEfforts: ["medium", "high"],
+        defaultReasoningEffort: "medium",
+      },
+      {
+        id: "gpt-5.6-luna::fast",
+        name: "GPT-5.6 Luna Fast",
+        model,
+        modelProfile: wireProfile,
+        fallbackSelectionId: "gpt-5.6-luna",
+        reasoningEfforts: ["medium", "high"],
+        defaultReasoningEffort: "medium",
+      },
+    ],
+    selection: {
+      modelId: "gpt-5.6-luna::fast",
+      reasoningEffort: "high",
+    },
+    loadModels: async () => [
+      {
+        id: "another-model",
+        name: "Another model",
+        model,
+        reasoningEfforts: ["low"],
+        defaultReasoningEffort: "low",
+      },
+      {
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        model,
+        modelProfile: wireProfile,
+        reasoningEfforts: ["medium", "high"],
+        defaultReasoningEffort: "medium",
+      },
+    ],
+  })
+
+  expect(runtime.getSnapshot().models[1]).not.toHaveProperty(
+    "fallbackSelectionId",
+  )
+  await runtime.refreshModels()
+
+  expect(runtime.getSnapshot().selection).toEqual({
+    modelId: "gpt-5.6-luna",
+    reasoningEffort: "high",
+  })
+  await runtime.dispose()
+})
+
+test("application runtime validates model fallback registrations", () => {
+  const createRuntime = (fallbackSelectionId: string) => () => (
+    new BuliApplicationRuntime({
+      workspaceRoot: WORKSPACE_ROOT,
+      manager: new InMemorySessionManager(),
+      agents: TEST_AGENTS,
+      defaultAgentId: TEST_AGENT_ID,
+      models: [
+        {
+          id: "base",
+          name: "Base",
+          model,
+          reasoningEfforts: ["medium"],
+          defaultReasoningEffort: "medium",
+        },
+        {
+          id: "fast",
+          name: "Fast",
+          model,
+          fallbackSelectionId,
+          reasoningEfforts: ["medium"],
+          defaultReasoningEffort: "medium",
+        },
+      ],
+      selection: { modelId: "base", reasoningEffort: "medium" },
+    })
+  )
+
+  expect(createRuntime(" ")).toThrow(
+    "Model fallback selection ID cannot be empty: fast",
+  )
+  expect(createRuntime("fast")).toThrow(
+    "Model fallback cannot reference itself: fast",
+  )
+  expect(createRuntime("missing")).toThrow(
+    "Unknown model fallback: missing",
+  )
+})
+
 test("model selection adopts the target default when efforts do not overlap", async () => {
   const runtime = new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,

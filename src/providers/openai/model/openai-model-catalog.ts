@@ -17,11 +17,18 @@ const REASONING_EFFORTS: readonly TReasoningEffort[] = [
 ]
 const MAX_CATALOG_BYTES = 20 * 1024 * 1024
 const MAX_CATALOG_MODELS = 2_000
+const FAST_SELECTION_SUFFIX = "::fast"
+const FAST_NAME_SUFFIX = " Fast"
+const MAX_DISPLAY_NAME_CHARACTERS = 120
 
 export interface IOpenAiCatalogModel {
+    /** Unique runtime selection ID. */
     readonly id: string
+    /** Base model ID sent to OpenAI. */
+    readonly modelId: string
     readonly accountId: string
     readonly name: string
+    readonly serviceTier?: "priority"
     readonly reasoningEfforts: readonly TReasoningEffort[]
     readonly defaultReasoningEffort: TReasoningEffort
     readonly contextWindowTokens?: number
@@ -62,6 +69,7 @@ interface IAccountModel {
     readonly reasoningEfforts?: readonly TReasoningEffort[]
     readonly defaultReasoningEffort?: TReasoningEffort
     readonly contextWindowTokens?: number
+    readonly fastServiceTier?: "priority"
     readonly priority: number
     readonly sourceIndex: number
 }
@@ -319,6 +327,7 @@ function parseAccountModel(
         : Number.MAX_SAFE_INTEGER
     const name = displayName(value.display_name)
     const contextWindowTokens = positiveInteger(value.context_window)
+    const fastServiceTier = accountFastServiceTier(value)
     return {
         id,
         priority,
@@ -331,6 +340,7 @@ function parseAccountModel(
         ...(contextWindowTokens === undefined
             ? {}
             : { contextWindowTokens }),
+        ...(fastServiceTier === undefined ? {} : { fastServiceTier }),
     }
 }
 
@@ -366,10 +376,11 @@ function mergeCatalog(
     metadata: ReadonlyMap<string, IModelsDevMetadata>,
     accountId: string,
 ): IOpenAiCatalogModel[] {
-    const priorities = new Map(
-        accountModels.map((model) => [model.id, model.priority] as const),
+    const baseModelIds = new Set(accountModels.map((model) => model.id))
+    const sortedModels = [...accountModels].sort((left, right) =>
+        left.priority - right.priority || left.id.localeCompare(right.id)
     )
-    return accountModels.flatMap((account): IOpenAiCatalogModel[] => {
+    return sortedModels.flatMap((account): IOpenAiCatalogModel[] => {
         const published = metadata.get(account.id)
         const reasoningEfforts = mergedReasoningEfforts(account, published)
         if (!reasoningEfforts || reasoningEfforts.length === 0) return []
@@ -386,21 +397,56 @@ function mergeCatalog(
         const name = accountName && accountName !== account.id
             ? accountName
             : published?.name ?? accountName ?? account.id
-        return [Object.freeze({
+        const frozenReasoningEfforts = Object.freeze([...reasoningEfforts])
+        const base: IOpenAiCatalogModel = Object.freeze({
             id: account.id,
+            modelId: account.id,
             accountId,
             name,
-            reasoningEfforts: Object.freeze([...reasoningEfforts]),
+            reasoningEfforts: frozenReasoningEfforts,
             defaultReasoningEffort,
             ...(account.contextWindowTokens === undefined
                 ? {}
                 : { contextWindowTokens: account.contextWindowTokens }),
-        })]
-    }).sort((left, right) => {
-        return (priorities.get(left.id) ?? Number.MAX_SAFE_INTEGER)
-            - (priorities.get(right.id) ?? Number.MAX_SAFE_INTEGER)
-            || left.id.localeCompare(right.id)
+        })
+        const fastId = `${account.id}${FAST_SELECTION_SUFFIX}`
+        if (
+            account.fastServiceTier === undefined
+            || baseModelIds.has(fastId)
+        ) {
+            return [base]
+        }
+        const fast: IOpenAiCatalogModel = Object.freeze({
+            ...base,
+            id: fastId,
+            name: fastDisplayName(name),
+            serviceTier: account.fastServiceTier,
+        })
+        return [base, fast]
     })
+}
+
+function accountFastServiceTier(
+    model: Record<string, unknown>,
+): "priority" | undefined {
+    if (
+        Array.isArray(model.service_tiers)
+        && model.service_tiers.some((candidate) =>
+            isRecord(candidate)
+            && normalizedString(candidate.id)?.toLowerCase() === "priority"
+        )
+    ) {
+        return "priority"
+    }
+    if (
+        Array.isArray(model.additional_speed_tiers)
+        && model.additional_speed_tiers.some((candidate) =>
+            normalizedString(candidate)?.toLowerCase() === "fast"
+        )
+    ) {
+        return "priority"
+    }
+    return undefined
 }
 
 function mergedReasoningEfforts(
@@ -488,7 +534,17 @@ function displayName(value: unknown): string | undefined {
         .replace(/\s+/g, " ")
         .trim()
     if (!normalized) return undefined
-    return [...normalized].slice(0, 120).join("")
+    return [...normalized].slice(0, MAX_DISPLAY_NAME_CHARACTERS).join("")
+}
+
+function fastDisplayName(baseName: string): string {
+    const baseCharacters = MAX_DISPLAY_NAME_CHARACTERS
+        - [...FAST_NAME_SUFFIX].length
+    const truncatedBase = [...baseName]
+        .slice(0, baseCharacters)
+        .join("")
+        .trimEnd()
+    return `${truncatedBase}${FAST_NAME_SUFFIX}`
 }
 
 function normalizedString(value: unknown): string | undefined {

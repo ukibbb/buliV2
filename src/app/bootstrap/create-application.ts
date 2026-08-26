@@ -157,12 +157,15 @@ export async function createBuliApplication(
                         name: entry.name,
                         model: new OpenAiAgentModel({
                             auth: auth.openAi,
-                            modelId: entry.id,
+                            modelId: entry.modelId,
                             expectedAccountId: entry.accountId,
+                            ...(entry.serviceTier === undefined
+                                ? {}
+                                : { serviceTier: entry.serviceTier }),
                         }),
                         modelProfile: {
                             providerId: OPENAI_PROVIDER_ID,
-                            modelId: entry.id,
+                            modelId: entry.modelId,
                             ...(entry.contextWindowTokens === undefined
                                 ? {}
                                 : {
@@ -171,6 +174,9 @@ export async function createBuliApplication(
                                 }),
                         },
                         providerAccountId: entry.accountId,
+                        ...(entry.serviceTier === undefined
+                            ? {}
+                            : { fallbackSelectionId: entry.modelId }),
                         reasoningEfforts: entry.reasoningEfforts,
                         defaultReasoningEffort:
                             entry.defaultReasoningEffort,

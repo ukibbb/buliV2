@@ -3,12 +3,12 @@ import type { ReactNode } from "react"
 import type {
     IToolCallContent,
     IToolResultMessage,
-    TToolExecutionOutcome,
 } from "@/agent"
 import { glyphs, theme } from "@/terminal/theme"
 
-const TOOL_LINE_MAX_CHARACTERS = 160
+const TOOL_DETAIL_MAX_CHARACTERS = 160
 const TOOL_NAME_MAX_CHARACTERS = 40
+const TOOL_PARAMETER_VALUE_MAX_CHARACTERS = 96
 const TOOL_TARGET_MAX_CHARACTERS = 96
 // Persisted sessions can still contain calls to the removed handoff tool.
 const LEGACY_PATCH_HANDOFF_TOOL_NAME = "request_patch_handoff"
@@ -25,9 +25,9 @@ export function ToolActivityLine(props: IToolActivityLineProps): ReactNode {
     const toolName = props.call?.toolName ?? props.result?.toolName
     if (!toolName || toolName === LEGACY_PATCH_HANDOFF_TOOL_NAME) return null
 
-    const presentation = props.call
+    const presentation: IToolPresentation = props.call
         ? toolPresentation(props.call)
-        : { name: displayToolName(toolName), target: undefined, activeStatus: "running..." }
+        : { name: displayToolName(toolName) }
     const state = activityState(props.result, props.phase)
     const name = compactText(
         singleLineTarget(presentation.name),
@@ -36,24 +36,13 @@ export function ToolActivityLine(props: IToolActivityLineProps): ReactNode {
     const target = presentation.target === undefined
         ? undefined
         : compactText(singleLineTarget(presentation.target), TOOL_TARGET_MAX_CHARACTERS)
-    const targetText = target === undefined ? "" : ` [${target}]`
-    const status = state.live
-        ? props.phase === "running" ? presentation.activeStatus : "pending..."
-        : state.status
-    const markerText = state.marker === undefined ? "" : ` ${state.marker}`
-    const statusText = status === undefined ? "" : ` ${status}`
-    const availableDetailCharacters = Math.max(
-        0,
-        TOOL_LINE_MAX_CHARACTERS
-            - characterLength(name)
-            - characterLength(targetText)
-            - characterLength(statusText)
-            - characterLength(markerText)
-            - 1,
-    )
-    const detail = state.detail === undefined || availableDetailCharacters === 0
+    const resultDetail = state.detail === undefined
         ? undefined
-        : compactText(singleLineDetail(state.detail), availableDetailCharacters)
+        : compactText(singleLineDetail(state.detail), TOOL_DETAIL_MAX_CHARACTERS)
+    const detailParts = [presentation.parameters, resultDetail].filter(
+        (value): value is string => value !== undefined && value.length > 0,
+    )
+    const detail = detailParts.length === 0 ? undefined : detailParts.join(" | ")
 
     return <text
         fg={state.critical ? theme.red : state.live ? theme.amber : theme.textMuted}
@@ -71,7 +60,6 @@ export function ToolActivityLine(props: IToolActivityLineProps): ReactNode {
         {detail === undefined ? null : <span
             fg={state.critical ? theme.red : theme.textMuted}
         >{` ${detail}`}</span>}
-        {status === undefined ? null : <span fg={state.accent}>{` ${status}`}</span>}
         {state.marker === undefined
             ? null
             : <span fg={state.accent}>{` ${state.marker}`}</span>}
@@ -81,26 +69,36 @@ export function ToolActivityLine(props: IToolActivityLineProps): ReactNode {
 interface IToolPresentation {
     readonly name: string
     readonly target?: string
-    readonly activeStatus: string
+    readonly parameters?: string
 }
 
 function toolPresentation(call: IToolCallContent): IToolPresentation {
     switch (call.toolName) {
         case "bash":
-            return knownToolPresentation("Bash", call, "command", "running...")
+            return knownToolPresentation("Bash", call, "command", ["cwd", "timeout"])
         case "read":
-            return knownToolPresentation("Read", call, "path", "reading...")
+            return knownToolPresentation("Read", call, "path", ["offset", "limit"])
         case "glob":
-            return knownToolPresentation("Glob", call, "pattern", "searching...")
+            return knownToolPresentation("Glob", call, "pattern", [
+                "path",
+                "hidden",
+                "limit",
+            ])
         case "grep":
-            return knownToolPresentation("Grep", call, "pattern", "searching...")
+            return knownToolPresentation("Grep", call, "pattern", [
+                "path",
+                "include",
+                "literal",
+                "caseSensitive",
+                "context",
+                "limit",
+            ])
         case "apply_patch":
-            return knownToolPresentation("Apply patch", call, "explanation", "applying...")
+            return knownToolPresentation("Apply patch", call, "explanation", [])
         default:
             return {
                 name: displayToolName(call.toolName),
                 target: JSON.stringify(call.input),
-                activeStatus: "running...",
             }
     }
 }
@@ -109,14 +107,35 @@ function knownToolPresentation(
     name: string,
     call: IToolCallContent,
     targetKey: string,
-    activeStatus: string,
+    parameterKeys: readonly string[],
 ): IToolPresentation {
     const target = call.input[targetKey]
+    const parameters = toolParameters(call.input, parameterKeys)
     return {
         name,
         target: typeof target === "string" ? target : JSON.stringify(call.input),
-        activeStatus,
+        ...(parameters === undefined ? {} : { parameters }),
     }
+}
+
+function toolParameters(
+    input: Readonly<Record<string, unknown>>,
+    keys: readonly string[],
+): string | undefined {
+    const parameters = keys.flatMap((key) => {
+        const value = input[key]
+        if (value === undefined) return []
+        const serialized = typeof value === "string"
+            ? value
+            : JSON.stringify(value) ?? String(value)
+        return [
+            `${key}=${compactText(
+                singleLineTarget(serialized),
+                TOOL_PARAMETER_VALUE_MAX_CHARACTERS,
+            )}`,
+        ]
+    })
+    return parameters.length === 0 ? undefined : parameters.join(" ")
 }
 
 function displayToolName(toolName: string): string {
@@ -135,7 +154,6 @@ interface IToolActivityState {
     readonly critical: boolean
     readonly accent: string
     readonly detail?: string
-    readonly status?: string
     readonly marker?: string
 }
 
@@ -150,7 +168,6 @@ function activityState(
                 live: false,
                 critical: true,
                 accent: theme.red,
-                status: "not run",
                 marker: glyphs.failure,
             }
     }
@@ -175,7 +192,7 @@ function activityState(
             live: false,
             critical: false,
             accent: outcome === "manual" ? theme.amber : theme.textMuted,
-            detail: detail ?? outcomeStatus(outcome),
+            ...(detail === undefined ? {} : { detail }),
         }
     }
     return {
@@ -195,10 +212,6 @@ function resultDetail(result: IToolResultMessage): string | undefined {
     return details.length > 0 ? details.join(" | ") : undefined
 }
 
-function outcomeStatus(outcome: Extract<TToolExecutionOutcome, "rejected" | "manual">): string {
-    return outcome === "rejected" ? "rejected" : "manual"
-}
-
 function singleLineTarget(value: string): string {
     return value
         .replaceAll("\r", "\\r")
@@ -215,8 +228,4 @@ function compactText(value: string, maximumCharacters: number): string {
     if (characters.length <= maximumCharacters) return value
     if (maximumCharacters <= 3) return ".".repeat(Math.max(0, maximumCharacters))
     return `${characters.slice(0, maximumCharacters - 3).join("")}...`
-}
-
-function characterLength(value: string): number {
-    return [...value].length
 }

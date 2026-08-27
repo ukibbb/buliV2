@@ -270,7 +270,7 @@ test("renders direct, streaming, and tool messages", async () => {
         expect(frame).toContain("User rejected the workspace patch")
         expect(frame).toContain("Run the copied command manually")
         expect(frame).toContain("Streaming answer")
-        expect(frame).toContain("Glob [**/*.ts] pending...")
+        expect(frame).toContain("Glob [**/*.ts]")
         expect(frame).toContain("TypeError: Invalid OpenAI authentication")
         expect(frame).toContain("Thought: Released reasoning summary")
         expect(frame).toContain("Thinking: Streaming reasoning summary")
@@ -304,7 +304,7 @@ test("renders direct, streaming, and tool messages", async () => {
     }
 })
 
-test("renders specialized tool calls as one active logical line", async () => {
+test("renders technical tool parameters without text statuses", async () => {
     const message: IAssistantMessage = {
         id: "active-tools",
         sessionId: "default",
@@ -317,25 +317,38 @@ test("renders specialized tool calls as one active logical line", async () => {
                 type: "toolCall",
                 toolCallId: "call-bash",
                 toolName: "bash",
-                input: { command: "bun test", purpose: "Verify the project" },
+                input: {
+                    command: "bun test",
+                    purpose: "Verify the project",
+                    cwd: "src",
+                    timeout: 30,
+                },
             },
             {
                 type: "toolCall",
                 toolCallId: "call-read",
                 toolName: "read",
-                input: { path: "src/app.ts", offset: 20 },
+                input: { path: "src/app.ts", offset: 20, limit: 40 },
             },
             {
                 type: "toolCall",
                 toolCallId: "call-glob",
                 toolName: "glob",
-                input: { pattern: "**/*.ts", path: "src" },
+                input: { pattern: "**/*.ts", path: "src", hidden: true, limit: 25 },
             },
             {
                 type: "toolCall",
                 toolCallId: "call-grep",
                 toolName: "grep",
-                input: { pattern: "AgentSession", include: "*.ts" },
+                input: {
+                    pattern: "AgentSession",
+                    path: "src",
+                    include: "*.ts",
+                    literal: true,
+                    caseSensitive: false,
+                    context: 2,
+                    limit: 25,
+                },
             },
         ],
     }
@@ -353,12 +366,14 @@ test("renders specialized tool calls as one active logical line", async () => {
             await setup.renderOnce()
         })
 
-        expect(textRenderables(setup.renderer.root).map((line) => line.plainText)).toEqual([
-            "Bash [bun test] running...",
-            "Read [src/app.ts] pending...",
-            "Glob [**/*.ts] pending...",
-            "Grep [AgentSession] pending...",
+        const lines = textRenderables(setup.renderer.root)
+        expect(lines.map((line) => line.plainText)).toEqual([
+            "Bash [bun test] cwd=src timeout=30",
+            "Read [src/app.ts] offset=20 limit=40",
+            "Glob [**/*.ts] path=src hidden=true limit=25",
+            "Grep [AgentSession] path=src include=*.ts literal=true caseSensitive=false context=2 limit=25",
         ])
+        expect(lines.every((line) => line.fg.equals(RGBA.fromHex(theme.amber)))).toBe(true)
     } finally {
         act(() => {
             setup.renderer.destroy()
@@ -418,7 +433,7 @@ test("updates one tool activity line from active to completed", async () => {
             await setup.renderOnce()
         })
         const lineBefore = textRenderables(setup.renderer.root)[0]
-        expect(lineBefore?.plainText).toBe("Read [src/app.ts] reading...")
+        expect(lineBefore?.plainText).toBe("Read [src/app.ts]")
 
         act(() => {
             completeTool?.()
@@ -475,7 +490,7 @@ test("keeps one tool activity line across the streaming message boundary", async
             await setup.renderOnce()
         })
         const lineBefore = textRenderables(setup.renderer.root)[0]
-        expect(lineBefore?.plainText).toBe("Glob [**/*.tsx] pending...")
+        expect(lineBefore?.plainText).toBe("Glob [**/*.tsx]")
 
         act(() => {
             persistAssistant?.()
@@ -487,7 +502,7 @@ test("keeps one tool activity line across the streaming message boundary", async
         const linesAfter = textRenderables(setup.renderer.root)
         expect(linesAfter).toHaveLength(1)
         expect(linesAfter[0]).toBe(lineBefore)
-        expect(linesAfter[0]?.plainText).toBe("Glob [**/*.tsx] pending...")
+        expect(linesAfter[0]?.plainText).toBe("Glob [**/*.tsx]")
     } finally {
         act(() => {
             setup.renderer.destroy()
@@ -661,7 +676,7 @@ test("does not pair results to calls from a failed assistant turn", async () => 
         })
 
         expect(textRenderables(setup.renderer.root).map((line) => line.plainText)).toEqual([
-            "Read [never-read.ts] not run ×",
+            "Read [never-read.ts] ×",
             "Read Unexpected legacy result ×",
         ])
     } finally {
@@ -731,7 +746,7 @@ test("scopes an active reused tool call id to its current run", async () => {
 
         expect(textRenderables(setup.renderer.root).map((line) => line.plainText)).toEqual([
             "Read [old.ts] read old file ✓",
-            "Read [current.ts] reading...",
+            "Read [current.ts]",
         ])
     } finally {
         act(() => {

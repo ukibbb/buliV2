@@ -1,17 +1,17 @@
 import {
     Agent,
-    type IAgentEvent,
-    type IAgentModelRequest,
-    type IAgentRunConfiguration,
-    type IAgentRunHandle,
-    type IAgentState,
-    type IAgentTool,
-    type IModelProfile,
-    type IUserInput,
-    type TAgentMessage,
-    type TAgentRunConfigurationResolver,
-    type TToolApprovalDecision,
-    type TUserInput,
+    type AgentEvent,
+    type AgentMessage,
+    type AgentModelRequest,
+    type AgentRunConfiguration,
+    type AgentRunConfigurationResolver,
+    type AgentRunHandle,
+    type AgentState,
+    type AgentTool,
+    type ModelProfile,
+    type ToolApprovalDecision,
+    type UserInput,
+    type UserInputContent,
 } from "@/agent"
 import { generateRandomId } from "@/common/ids"
 import type { ICompactionCheckpoint } from "@/sessions/compaction/checkpoint"
@@ -40,16 +40,16 @@ interface IAgentSessionOptions {
     readonly sessionId: string
     readonly manager: ISessionManager
     readonly systemPrompt: string
-    readonly resolveRunConfiguration: TAgentRunConfigurationResolver
-    readonly tools: readonly IAgentTool[]
+    readonly resolveRunConfiguration: AgentRunConfigurationResolver
+    readonly tools: readonly AgentTool[]
     readonly now?: () => number
     readonly generateId?: () => string
     readonly disposeTimeoutMs?: number
 }
 
 interface IQueuedSessionMessages {
-    readonly steering: readonly TUserInput[]
-    readonly followUp: readonly TUserInput[]
+    readonly steering: readonly UserInput[]
+    readonly followUp: readonly UserInput[]
 }
 
 type TSessionListener = () => void
@@ -63,9 +63,9 @@ export class AgentSession {
     private readonly listeners = new Set<TSessionListener>()
     private readonly unsubscribeAgent: () => void
     private readonly disposeTimeoutMs: number
-    private readonly resolveRunConfiguration: TAgentRunConfigurationResolver
+    private readonly resolveRunConfiguration: AgentRunConfigurationResolver
     private readonly systemPrompt: string
-    private readonly tools: readonly IAgentTool[]
+    private readonly tools: readonly AgentTool[]
     private readonly now: () => number
     private readonly generateId: () => string
     private readonly snapshotFreezeCache: ISessionSnapshotFreezeCache = {
@@ -77,7 +77,7 @@ export class AgentSession {
     private snapshot: ISessionSnapshot
     private contextUsage: IContextUsage | undefined
     private currentContextWindowTokens: number | undefined
-    private currentModelProfile: IModelProfile | undefined
+    private currentModelProfile: ModelProfile | undefined
     private contextUsageRefreshPending = false
     private disposed = false
     private disposeTask: Promise<void> | undefined
@@ -149,7 +149,7 @@ export class AgentSession {
         })
     }
 
-    get state(): IAgentState {
+    get state(): AgentState {
         return this.agent.state
     }
 
@@ -183,7 +183,7 @@ export class AgentSession {
         this.updateContextUsageFromDurableHistory()
     }
 
-    prompt(input: TUserInput): IAgentRunHandle {
+    prompt(input: UserInput): AgentRunHandle {
         if (this.disposed) throw new Error("AgentSession is disposed")
         if (this.compactionTask) {
             throw new Error("Cannot submit a prompt while compacting the session")
@@ -197,7 +197,7 @@ export class AgentSession {
         return this.agent.prompt(input)
     }
 
-    steer(input: TUserInput): void {
+    steer(input: UserInput): void {
         if (this.disposed) throw new Error("AgentSession is disposed")
         if (this.compactionTask) {
             throw new Error("Cannot steer while compacting the session")
@@ -212,7 +212,7 @@ export class AgentSession {
         this.publishSnapshot()
     }
 
-    followUp(input: TUserInput): void {
+    followUp(input: UserInput): void {
         if (this.disposed) throw new Error("AgentSession is disposed")
         if (this.compactionTask) {
             throw new Error("Cannot queue a follow-up while compacting the session")
@@ -241,7 +241,7 @@ export class AgentSession {
 
     resolveToolApproval(
         approvalId: string,
-        decision: TToolApprovalDecision,
+        decision: ToolApprovalDecision,
     ): void {
         if (this.disposed) throw new Error("AgentSession is disposed")
         this.agent.resolveToolApproval(approvalId, decision)
@@ -311,7 +311,7 @@ export class AgentSession {
         }
     }
 
-    private resolveConversationRunConfiguration(): IAgentRunConfiguration {
+    private resolveConversationRunConfiguration(): AgentRunConfiguration {
         const runConfiguration = this.resolveRunConfiguration()
         const contextWindowTokens =
             runConfiguration.modelProfile?.contextWindowTokens
@@ -338,9 +338,9 @@ export class AgentSession {
     }
 
     private async compactAndReproject(
-        originalRequest: IAgentModelRequest,
+        originalRequest: AgentModelRequest,
         requestBudgetTokens: number,
-    ): Promise<IAgentModelRequest | undefined> {
+    ): Promise<AgentModelRequest | undefined> {
         const previousCount = this.manager.getCompactionCheckpoint(this.id)
             ?.compactedMessageCount ?? 0
         const checkpoint = await (this.compactionTask ?? this.startCompaction(
@@ -359,9 +359,9 @@ export class AgentSession {
     }
 
     private reprojectRequest(
-        originalRequest: IAgentModelRequest,
+        originalRequest: AgentModelRequest,
         checkpoint = this.manager.getCompactionCheckpoint(this.id),
-    ): IAgentModelRequest {
+    ): AgentModelRequest {
         const projection = projectAgentContext(
             this.manager.getMessages(this.id),
             checkpoint,
@@ -468,7 +468,7 @@ export class AgentSession {
     }
 
     private initializeContextUsage(
-        messages: readonly TAgentMessage[],
+        messages: readonly AgentMessage[],
     ): void {
         try {
             const runConfiguration = this.resolveRunConfiguration()
@@ -487,7 +487,7 @@ export class AgentSession {
     }
 
     private estimateProjectedContext(
-        messages: readonly TAgentMessage[],
+        messages: readonly AgentMessage[],
     ): IContextUsage {
         const projection = projectAgentContext(
             messages,
@@ -506,14 +506,14 @@ export class AgentSession {
         }, this.currentContextWindowTokens)
     }
 
-    private setCurrentModelProfile(modelProfile: IModelProfile | undefined): void {
+    private setCurrentModelProfile(modelProfile: ModelProfile | undefined): void {
         this.currentModelProfile = modelProfile === undefined
             ? undefined
             : structuredClone(modelProfile)
         this.currentContextWindowTokens = modelProfile?.contextWindowTokens
     }
 
-    private handleAgentEvent(event: IAgentEvent): void {
+    private handleAgentEvent(event: AgentEvent): void {
         if (event.type === "agent_settled" && event.reason === "internal-error") {
             try {
                 this.agent.restoreMessages(this.loadDurableHistory())
@@ -532,7 +532,7 @@ export class AgentSession {
         this.publishSnapshot()
     }
 
-    private loadDurableHistory(): readonly TAgentMessage[] {
+    private loadDurableHistory(): readonly AgentMessage[] {
         const messages = this.manager.getMessages(this.id)
         const recoveries = createInterruptedToolResults(messages)
         for (const recovery of recoveries) {
@@ -594,9 +594,9 @@ export class AgentSession {
 
 function userMessageInput(message: {
     readonly content: string
-    readonly references?: IUserInput["references"]
-    readonly attachments?: IUserInput["attachments"]
-}): TUserInput {
+    readonly references?: UserInputContent["references"]
+    readonly attachments?: UserInputContent["attachments"]
+}): UserInput {
     if (!message.references?.length && !message.attachments?.length) {
         return message.content
     }

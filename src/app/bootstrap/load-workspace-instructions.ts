@@ -7,7 +7,7 @@ import {
 } from "node:fs/promises"
 import { isAbsolute, join, relative, sep } from "node:path"
 
-import type { IWorkspaceInstructions } from "@/agent"
+import type { WorkspaceInstructions } from "@/agent"
 
 export const WORKSPACE_INSTRUCTIONS_MAX_BYTES = 64 * 1024
 
@@ -21,7 +21,7 @@ const WORKSPACE_INSTRUCTION_FILES = [
 export async function loadWorkspaceInstructions(
     workspaceRoot: string,
     signal: AbortSignal,
-): Promise<IWorkspaceInstructions | undefined> {
+): Promise<WorkspaceInstructions | undefined> {
     signal.throwIfAborted()
     const root = await realpath(workspaceRoot)
     signal.throwIfAborted()

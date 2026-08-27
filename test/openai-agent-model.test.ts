@@ -3,10 +3,12 @@ import { realpathSync } from "node:fs"
 
 import {
     isModelContextOverflowError,
-    type IAgentModelEvent,
-    type IAgentToolDescriptor,
-    type IUserMessage,
-    type TAgentMessage,
+    runAgentLoop,
+    type AgentMessage,
+    type AgentModelEvent,
+    type AgentTool,
+    type AgentToolDescriptor,
+    type UserMessage,
 } from "@/agent"
 import { systemPrompt } from "@/agent/system-prompt"
 import type {
@@ -56,7 +58,7 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
     auth,
     modelId: "gpt-5.6-sol",
   })
-  const messages: TAgentMessage[] = [
+  const messages: AgentMessage[] = [
     {
       id: "previous-user",
       sessionId: "session-1",
@@ -475,7 +477,7 @@ test("sends projected context summaries and compaction output limits", async () 
     capturedRequest = new Request(...args)
     return streamResponse()
   })
-  const events: IAgentModelEvent[] = []
+  const events: AgentModelEvent[] = []
 
   for await (const event of model.stream({
     sessionId: "session-1",
@@ -545,6 +547,40 @@ test("normalizes cache and reasoning usage without double-counting totals", asyn
       cacheWriteTokens: 10,
       reasoningTokens: 15,
     },
+  })
+})
+
+test("uses the unified finish reason instead of the raw provider reason", async () => {
+  const model = createModel(async () => eventStream([
+    {
+      type: "response.created",
+      response: {
+        id: "response-incomplete",
+        created_at: 1,
+        model: "gpt-5.6-sol",
+        service_tier: null,
+      },
+    },
+    {
+      type: "response.incomplete",
+      response: {
+        incomplete_details: { reason: "max_output_tokens" },
+        usage: {
+          input_tokens: 1,
+          input_tokens_details: null,
+          output_tokens: 1,
+          output_tokens_details: null,
+        },
+        service_tier: null,
+      },
+    },
+  ]))
+
+  const events = await collectEvents(model, [userMessage("Long response")], [])
+
+  expect(events.at(-1)).toMatchObject({
+    type: "finish",
+    reason: "length",
   })
 })
 
@@ -705,6 +741,52 @@ test("emits every tool call from one provider response for the host loop", async
     reason: "tool-calls",
     usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
   })
+})
+
+test("does not execute an OpenAI tool call from an output-limited response", async () => {
+  let requests = 0
+  let executions = 0
+  const model = createModel(async () => {
+    requests += 1
+    return requests === 1
+      ? incompleteToolCallResponse("dangerous_action", { value: "partial" })
+      : streamResponse()
+  })
+  const tool: AgentTool = {
+    name: "dangerous_action",
+    description: "Perform a local side effect",
+    inputSchema: { type: "object" },
+    execute: async () => {
+      executions += 1
+      return "executed"
+    },
+  }
+
+  const result = await runAgentLoop(
+    userMessage("Perform the action"),
+    {
+      systemPrompt: "System",
+      messages: [],
+      tools: [tool],
+    },
+    {
+      sessionId: "session-1",
+      runId: "run-1",
+      model,
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+      emit: () => undefined,
+    },
+  )
+
+  expect(executions).toBe(0)
+  expect(requests).toBe(2)
+  expect(result.messages.find((message) => message.role === "toolResult"))
+    .toMatchObject({
+      toolName: "dangerous_action",
+      isError: true,
+      content: expect.stringContaining("output token limit"),
+    })
 })
 
 test("forwards cancellation to the OpenAI request", async () => {
@@ -905,6 +987,59 @@ function multiToolCallResponse(
   ])
 }
 
+function incompleteToolCallResponse(
+  toolName: string,
+  input: Record<string, unknown>,
+): Response {
+  return eventStream([
+    {
+      type: "response.created",
+      response: {
+        id: "response-incomplete-tool",
+        created_at: 1,
+        model: "gpt-5.6-sol",
+        service_tier: null,
+      },
+    },
+    {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: {
+        type: "function_call",
+        id: "function-call-incomplete",
+        call_id: "call-incomplete",
+        name: toolName,
+        arguments: "",
+      },
+    },
+    {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: {
+        type: "function_call",
+        id: "function-call-incomplete",
+        call_id: "call-incomplete",
+        name: toolName,
+        arguments: JSON.stringify(input),
+        status: "completed",
+      },
+    },
+    {
+      type: "response.incomplete",
+      response: {
+        incomplete_details: { reason: "max_output_tokens" },
+        usage: {
+          input_tokens: 1,
+          input_tokens_details: null,
+          output_tokens: 1,
+          output_tokens_details: null,
+        },
+        service_tier: null,
+      },
+    },
+  ])
+}
+
 function eventStream(chunks: readonly Record<string, unknown>[]): Response {
   const body = chunks
     .map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`)
@@ -935,11 +1070,11 @@ function createModel(
 
 async function collectEvents(
   model: OpenAiAgentModel,
-  messages: readonly TAgentMessage[],
-  tools: readonly IAgentToolDescriptor[],
+  messages: readonly AgentMessage[],
+  tools: readonly AgentToolDescriptor[],
   reportProviderAccountId?: (accountId: string) => void,
-): Promise<IAgentModelEvent[]> {
-  const events: IAgentModelEvent[] = []
+): Promise<AgentModelEvent[]> {
+  const events: AgentModelEvent[] = []
   for await (const event of model.stream({
     sessionId: "session-1",
     runId: "run-1",
@@ -957,7 +1092,7 @@ async function collectEvents(
   return events
 }
 
-function userMessage(content: string): IUserMessage {
+function userMessage(content: string): UserMessage {
   return {
     id: "user-message",
     sessionId: "session-1",
@@ -979,7 +1114,7 @@ function testSessionInfo() {
   }
 }
 
-function toolDescriptor(name: string): IAgentToolDescriptor {
+function toolDescriptor(name: string): AgentToolDescriptor {
   return {
     name,
     description: `Run ${name}`,

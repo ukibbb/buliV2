@@ -1,8 +1,8 @@
 import type { ReactNode } from "react"
 
 import type {
-    IToolCallContent,
-    IToolResultMessage,
+    ToolCallContent,
+    ToolResultMessage,
 } from "@/agent"
 import { glyphs, theme } from "@/terminal/theme"
 
@@ -14,8 +14,8 @@ const TOOL_TARGET_MAX_CHARACTERS = 96
 const LEGACY_PATCH_HANDOFF_TOOL_NAME = "request_patch_handoff"
 
 interface IToolActivityLineProps {
-    readonly call?: IToolCallContent
-    readonly result?: IToolResultMessage
+    readonly call?: ToolCallContent
+    readonly result?: ToolResultMessage
     readonly phase?: "pending" | "running"
 }
 
@@ -72,7 +72,7 @@ interface IToolPresentation {
     readonly parameters?: string
 }
 
-function toolPresentation(call: IToolCallContent): IToolPresentation {
+function toolPresentation(call: ToolCallContent): IToolPresentation {
     switch (call.toolName) {
         case "bash":
             return knownToolPresentation("Bash", call, "command", ["cwd", "timeout"])
@@ -105,7 +105,7 @@ function toolPresentation(call: IToolCallContent): IToolPresentation {
 
 function knownToolPresentation(
     name: string,
-    call: IToolCallContent,
+    call: ToolCallContent,
     targetKey: string,
     parameterKeys: readonly string[],
 ): IToolPresentation {
@@ -158,7 +158,7 @@ interface IToolActivityState {
 }
 
 function activityState(
-    result: IToolResultMessage | undefined,
+    result: ToolResultMessage | undefined,
     phase: IToolActivityLineProps["phase"],
 ): IToolActivityState {
     if (!result) {
@@ -204,7 +204,7 @@ function activityState(
     }
 }
 
-function resultDetail(result: IToolResultMessage): string | undefined {
+function resultDetail(result: ToolResultMessage): string | undefined {
     const details = [
         result.summary,
         result.isError ? result.content : undefined,

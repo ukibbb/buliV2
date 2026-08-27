@@ -1,5 +1,6 @@
-import type { IAgentTool } from "@/agent"
+import type { AgentTool } from "@/agent"
 import { prepareWorkspacePatch } from "@/tools/patch/patch-engine"
+import { Type } from "typebox"
 
 const INPUT_KEYS = new Set(["patchText", "explanation"])
 
@@ -21,29 +22,28 @@ const APPLY_PATCH_DESCRIPTION = [
     "Use workspace-relative paths. Group one small, coherent, already-explained change in each patch. Calling this tool proposes the change; only the user's explicit modal approval applies it.",
 ].join("\n")
 
+const APPLY_PATCH_INPUT_SCHEMA = Type.Object({
+    patchText: Type.String({
+        minLength: 1,
+        pattern: "\\S",
+        description: "Complete Codex patch envelope to plan and propose",
+    }),
+    explanation: Type.String({
+        minLength: 1,
+        pattern: "\\S",
+        description: "Concise reason for the proposed workspace change",
+    }),
+}, { additionalProperties: false })
+
 /** Creates the approval-gated tool for applying exact workspace patches. */
-export function createApplyPatchTool(workspaceRoot: string): IAgentTool {
+export function createApplyPatchTool(
+    workspaceRoot: string,
+): AgentTool<typeof APPLY_PATCH_INPUT_SCHEMA> {
     return {
         name: "apply_patch",
         approvalKind: "patch",
         description: APPLY_PATCH_DESCRIPTION,
-        inputSchema: {
-            type: "object",
-            properties: {
-                patchText: {
-                    type: "string",
-                    minLength: 1,
-                    description: "Complete Codex patch envelope to plan and propose",
-                },
-                explanation: {
-                    type: "string",
-                    minLength: 1,
-                    description: "Concise reason for the proposed workspace change",
-                },
-            },
-            required: ["patchText", "explanation"],
-            additionalProperties: false,
-        },
+        inputSchema: APPLY_PATCH_INPUT_SCHEMA,
         execute: async (input, context) => {
             assertOnlyInputKeys(input)
             const patchText = requireNonEmptyString(input, "patchText")

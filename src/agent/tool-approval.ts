@@ -1,20 +1,20 @@
 /** User decision that resolves one pending local tool action. */
-export type TToolApprovalDecision = "approve" | "reject" | "copy"
+export type ToolApprovalDecision = "approve" | "reject" | "copy"
 
-interface IToolApprovalDraftBase {
+interface ToolApprovalDraftBase {
     readonly title: string
     readonly explanation: string
 }
 
 /** Approval payload shown before mutating workspace files. */
-export interface IPatchToolApprovalDraft extends IToolApprovalDraftBase {
+export interface PatchToolApprovalDraft extends ToolApprovalDraftBase {
     readonly kind: "patch"
     readonly diff: string
     readonly paths: readonly string[]
 }
 
 /** Approval payload shown before executing an arbitrary command. */
-export interface ICommandToolApprovalDraft extends IToolApprovalDraftBase {
+export interface CommandToolApprovalDraft extends ToolApprovalDraftBase {
     readonly kind: "command"
     readonly command: string
     readonly cwd: string
@@ -24,38 +24,38 @@ export interface ICommandToolApprovalDraft extends IToolApprovalDraftBase {
     readonly timeoutSeconds: number
 }
 
-export type TToolApprovalDraft =
-    | IPatchToolApprovalDraft
-    | ICommandToolApprovalDraft
+export type ToolApprovalDraft =
+    | PatchToolApprovalDraft
+    | CommandToolApprovalDraft
 
-interface IToolApprovalRequestBase {
+interface ToolApprovalRequestBase {
     readonly id: string
     readonly sessionId: string
     readonly runId: string
     readonly toolCallId: string
 }
 
-export interface IPatchToolApprovalRequest
-    extends IToolApprovalRequestBase, IPatchToolApprovalDraft {}
+export interface PatchToolApprovalRequest
+    extends ToolApprovalRequestBase, PatchToolApprovalDraft {}
 
-export interface ICommandToolApprovalRequest
-    extends IToolApprovalRequestBase, ICommandToolApprovalDraft {}
+export interface CommandToolApprovalRequest
+    extends ToolApprovalRequestBase, CommandToolApprovalDraft {}
 
 /** Ephemeral request currently awaiting a user decision. */
-export type TToolApprovalRequest =
-    | IPatchToolApprovalRequest
-    | ICommandToolApprovalRequest
+export type ToolApprovalRequest =
+    | PatchToolApprovalRequest
+    | CommandToolApprovalRequest
 
 /** Creates the immutable approval request published to agent observers. */
 export function createToolApprovalRequest(
-    draft: TToolApprovalDraft,
+    draft: ToolApprovalDraft,
     id: string,
     sessionId: string,
     runId: string,
     toolCallId: string,
-): TToolApprovalRequest {
+): ToolApprovalRequest {
     const identity = { id, sessionId, runId, toolCallId }
-    let request: TToolApprovalRequest
+    let request: ToolApprovalRequest
     if (draft.kind === "patch") {
         request = {
             ...identity,
@@ -87,8 +87,8 @@ export function createToolApprovalRequest(
 
 /** Rejects decisions that are unknown or invalid for the requested tool action. */
 export function assertToolApprovalDecision(
-    request: TToolApprovalRequest,
-    decision: TToolApprovalDecision,
+    request: ToolApprovalRequest,
+    decision: ToolApprovalDecision,
 ): void {
     if (
         decision !== "approve"

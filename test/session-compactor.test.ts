@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test"
 
 import type {
-  IAgentModel,
-  IAgentModelRequest,
-  TAgentMessage,
+  AgentMessage,
+  AgentModel,
+  AgentModelRequest,
 } from "@/agent"
 import {
   compactSessionMessages,
@@ -16,7 +16,7 @@ import {
 } from "@/sessions"
 
 test("findCompactionCutoff retains a user-led suffix and complete tool batches", () => {
-  const messages: readonly TAgentMessage[] = [
+  const messages: readonly AgentMessage[] = [
     user("user-1", "Inspect the file"),
     assistant("assistant-tools", [{
       type: "toolCall",
@@ -72,7 +72,7 @@ test("findCompactionCutoff adapts retained turns to the request budget", () => {
 })
 
 test("findCompactionCutoff caps retained context at 20k tokens", () => {
-  const messages: readonly TAgentMessage[] = [
+  const messages: readonly AgentMessage[] = [
     user("large-user", "U".repeat(80_000)),
     assistant("large-assistant", [{ type: "text", text: "Large answer" }]),
     user("latest-user", "Latest question", 3),
@@ -97,8 +97,8 @@ test("compactSessionMessages updates a previous summary using only the new prefi
     throughMessageId: messages[1]!.id,
     summary: "Earlier summary",
   }
-  const requests: IAgentModelRequest[] = []
-  const model: IAgentModel = {
+  const requests: AgentModelRequest[] = []
+  const model: AgentModel = {
     async *stream(request) {
       requests.push(request)
       yield { type: "text-start", id: "summary" }
@@ -165,7 +165,7 @@ test("compactSessionMessages updates a previous summary using only the new prefi
 test("compactSessionMessages sanitizes images and bounded tool output", async () => {
   const imageData = "SECRET_IMAGE_DATA".repeat(1_000)
   const toolOutputTail = "SECRET_TOOL_OUTPUT_TAIL"
-  const messages: readonly TAgentMessage[] = [
+  const messages: readonly AgentMessage[] = [
     {
       ...user("image-user", "Inspect the image"),
       attachments: [{
@@ -198,7 +198,7 @@ test("compactSessionMessages sanitizes images and bounded tool output", async ()
     },
     user("retained-user", "Continue", 4),
   ]
-  const requests: IAgentModelRequest[] = []
+  const requests: AgentModelRequest[] = []
   const checkpoint = await compactSessionMessages({
     sessionId: "session-1",
     messages,
@@ -246,7 +246,7 @@ test("compactSessionMessages sanitizes images and bounded tool output", async ()
 
 test("compactSessionMessages rejects summary input that cannot fit its model", async () => {
   let modelCalled = false
-  const model: IAgentModel = {
+  const model: AgentModel = {
     async *stream() {
       modelCalled = true
       yield { type: "finish", reason: "stop" }
@@ -277,7 +277,7 @@ test("compactSessionMessages rejects summary input that cannot fit its model", a
 })
 
 test("compactSessionMessages rejects a truncated summary", async () => {
-  const model: IAgentModel = {
+  const model: AgentModel = {
     async *stream() {
       yield { type: "text-delta", id: "summary", delta: "Partial summary" }
       yield { type: "finish", reason: "max_output_tokens" }
@@ -301,7 +301,7 @@ test("compactSessionMessages rejects a truncated summary", async () => {
 test("compactSessionMessages performs a final abort check", async () => {
   const controller = new AbortController()
   const lateAbort = new Error("Late compaction abort")
-  const model: IAgentModel = {
+  const model: AgentModel = {
     async *stream() {
       yield { type: "text-delta", id: "summary", delta: "Summary" }
       yield { type: "finish", reason: "stop" }
@@ -342,7 +342,7 @@ test("projectAgentContext returns summary plus tail and rejects a stale anchor",
     throughMessageId: "missing",
   })).toThrow("Compaction checkpoint does not match session session-1")
 
-  const toolMessages: readonly TAgentMessage[] = [
+  const toolMessages: readonly AgentMessage[] = [
     user("tool-user", "Read"),
     assistant("tool-assistant", [{
       type: "toolCall",
@@ -369,7 +369,7 @@ test("projectAgentContext returns summary plus tail and rejects a stale anchor",
   })).toThrow("Compaction checkpoint does not match session session-1")
 })
 
-function conversation(count: number): TAgentMessage[] {
+function conversation(count: number): AgentMessage[] {
   return Array.from({ length: count }, (_, index) => (
     index % 2 === 0
       ? user(`user-${index}`, `Question ${index}`, index + 1)
@@ -385,7 +385,7 @@ function user(
   id: string,
   content: string,
   createdAt = 1,
-): Extract<TAgentMessage, { role: "user" }> {
+): Extract<AgentMessage, { role: "user" }> {
   return {
     id,
     sessionId: "session-1",
@@ -399,9 +399,9 @@ function user(
 
 function assistant(
   id: string,
-  content: Extract<TAgentMessage, { role: "assistant" }>["content"],
+  content: Extract<AgentMessage, { role: "assistant" }>["content"],
   createdAt = 2,
-): TAgentMessage {
+): AgentMessage {
   return {
     id,
     sessionId: "session-1",

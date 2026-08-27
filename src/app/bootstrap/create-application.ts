@@ -1,7 +1,7 @@
 import { realpath } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
 
-import { systemPrompt, type IAgentModel, type IAgentTool } from "@/agent"
+import { systemPrompt, type AgentModel, type AgentTool } from "@/agent"
 import type { IAuthenticationService } from "@/authentication"
 import { createAuthentication } from "@/app/bootstrap/create-authentication"
 import { loadWorkspaceInstructions } from "@/app/bootstrap/load-workspace-instructions"
@@ -28,7 +28,7 @@ import { createFdPathSearcher, createWorkspaceTools } from "@/tools"
 
 const BULI_AGENT_ID = "buli"
 
-function defaultWorkspaceTools(workspaceRoot: string): readonly IAgentTool[] {
+function defaultWorkspaceTools(workspaceRoot: string): readonly AgentTool[] {
     if (process.env.BULI_DEVELOPMENT === "1") {
         return createWorkspaceTools(workspaceRoot)
     }
@@ -71,8 +71,8 @@ export interface IBuliApplicationOptions {
     readonly signal: AbortSignal
     readonly workspaceRoot?: string
     readonly manager?: ISessionManager
-    readonly model?: IAgentModel
-    readonly tools?: readonly IAgentTool[]
+    readonly model?: AgentModel
+    readonly tools?: readonly AgentTool[]
 }
 
 /** Composes provider, tools, persistence, sessions, and the UI boundary. */
@@ -102,7 +102,7 @@ export async function createBuliApplication(
         manager = options.manager ?? new JsonlSessionManager({
             filePath: defaultSessionFilePath(workspaceRoot),
         })
-        const model: IAgentModel = options.model ?? new OpenAiAgentModel({
+        const model: AgentModel = options.model ?? new OpenAiAgentModel({
             auth: auth.openAi,
         })
         const modelCatalog = createOpenAiModelCatalog({ auth: auth.openAi })
@@ -132,7 +132,7 @@ export async function createBuliApplication(
             modelId: DEFAULT_OPENAI_MODEL_ID,
             reasoningEffort: "medium",
         }
-        const tools: readonly IAgentTool[] = options.tools
+        const tools: readonly AgentTool[] = options.tools
             ?? [
                 ...defaultWorkspaceTools(workspaceRoot),
                 ...(options.model === undefined

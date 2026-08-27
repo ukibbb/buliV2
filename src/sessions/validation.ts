@@ -2,9 +2,9 @@ import { Buffer } from "node:buffer"
 import { isAbsolute } from "node:path"
 
 import type {
-    IAssistantMessage,
-    TAgentMessage,
-    TToolExecutionOutcome,
+    AgentMessage,
+    AssistantMessage,
+    ToolExecutionOutcome,
 } from "@/agent"
 import {
     isValidUserImage,
@@ -85,7 +85,7 @@ export function assertSessionInfo(
 /** Asserts that a value is a complete provider-neutral session message. */
 export function assertDurableSessionMessage(
     value: unknown,
-): asserts value is TAgentMessage {
+): asserts value is AgentMessage {
     if (!isMessageBase(value)) throw new Error("Invalid session message")
 
     switch (value.role) {
@@ -277,7 +277,7 @@ function decodeBase64Image(data: string): Uint8Array {
 
 function assertAssistantMessage(
     message: Record<string, unknown>,
-): asserts message is Record<string, unknown> & IAssistantMessage {
+): asserts message is Record<string, unknown> & AssistantMessage {
     if (
         !Array.isArray(message.content)
         || typeof message.stopReason !== "string"
@@ -379,7 +379,7 @@ function isNonNegativeInteger(value: unknown, allowZero: boolean): boolean {
         && (allowZero ? value >= 0 : value > 0)
 }
 
-function isToolExecutionOutcome(value: unknown): value is TToolExecutionOutcome {
+function isToolExecutionOutcome(value: unknown): value is ToolExecutionOutcome {
     return value === "completed"
         || value === "rejected"
         || value === "manual"
@@ -388,7 +388,7 @@ function isToolExecutionOutcome(value: unknown): value is TToolExecutionOutcome 
         || value === "effects-unknown"
 }
 
-function isErrorOutcome(outcome: TToolExecutionOutcome): boolean {
+function isErrorOutcome(outcome: ToolExecutionOutcome): boolean {
     return outcome === "failed"
         || outcome === "committed-after-abort"
         || outcome === "effects-unknown"

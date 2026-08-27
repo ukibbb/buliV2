@@ -8,10 +8,10 @@ import type {
   IBuliQueuedMessages,
 } from "@/app/contracts"
 import type {
-  TReasoningEffort,
-  IUserInput,
-  TToolApprovalDecision,
-  TToolApprovalRequest,
+  ReasoningEffort,
+  ToolApprovalDecision,
+  ToolApprovalRequest,
+  UserInputContent,
 } from "@/agent"
 import { BuliUiController } from "@/app/ui/ui-controller"
 import type { ISessionInfo, ISessionSnapshot } from "@/sessions"
@@ -41,7 +41,7 @@ interface IApplicationSpyOptions {
   readonly runningSessionId?: string
   readonly compactingSessionId?: string
   readonly selectModel?: (modelId: string) => void
-  readonly selectReasoningEffort?: (effort: TReasoningEffort) => void
+  readonly selectReasoningEffort?: (effort: ReasoningEffort) => void
   readonly accepted?: Promise<void>
   readonly settled?: Promise<void>
   readonly submitPrompt?: (prompt: IBuliPromptInput) => IBuliPromptSubmission
@@ -52,7 +52,7 @@ interface IApplicationSpyOptions {
   readonly refreshModels?: IBuliApplication["refreshModels"]
   readonly searchPaths?: NonNullable<IBuliApplication["searchPaths"]>
   readonly getSnapshot?: IBuliApplication["getSnapshot"]
-  readonly pendingToolApprovals?: Readonly<Record<string, TToolApprovalRequest>>
+  readonly pendingToolApprovals?: Readonly<Record<string, ToolApprovalRequest>>
   readonly resolveToolApproval?: IBuliApplication["resolveToolApproval"]
 }
 
@@ -62,7 +62,7 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
   const opened: string[] = []
   const created: Array<{ agentId: string; title: string }> = []
   const selectedModels: string[] = []
-  const selectedReasoningEfforts: TReasoningEffort[] = []
+  const selectedReasoningEfforts: ReasoningEffort[] = []
   const modelRefreshes: number[] = []
   const steering: Array<{ sessionId: string; text: string }> = []
   const followUps: Array<{ sessionId: string; text: string }> = []
@@ -71,7 +71,7 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
   const resolvedApprovals: Array<{
     sessionId: string
     approvalId: string
-    decision: TToolApprovalDecision
+    decision: ToolApprovalDecision
   }> = []
   let createdCount = 0
   let runCount = 0
@@ -998,7 +998,7 @@ test("dismissMenu removes an open menu before approval details are shown", () =>
   expect(controller.getSnapshot().menu).toBeNull()
 })
 
-function imageDraft(data: string): IUserInput {
+function imageDraft(data: string): UserInputContent {
   return {
     text: "[Image 1]",
     attachments: [{
@@ -1023,7 +1023,7 @@ function sessionInfo(id: string, title: string, updatedAt: number): ISessionInfo
 
 function sessionSource(
   isRunning: boolean,
-  pendingToolApproval?: TToolApprovalRequest,
+  pendingToolApproval?: ToolApprovalRequest,
   isCompacting = false,
 ) {
   const snapshot: ISessionSnapshot = {
@@ -1044,7 +1044,7 @@ function sessionSource(
 function commandApproval(
   sessionId: string,
   id: string,
-): TToolApprovalRequest {
+): ToolApprovalRequest {
   return {
     kind: "command",
     id,

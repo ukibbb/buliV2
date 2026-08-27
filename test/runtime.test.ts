@@ -5,11 +5,11 @@ import {
   type IBuliAgentRuntimeConfig,
 } from "@/app/runtime"
 import type {
-  IAgentModel,
-  IAgentModelEvent,
-  IAgentModelRequest,
+  AgentModel,
+  AgentModelEvent,
+  AgentModelRequest,
 } from "@/agent/model"
-import type { IAgentTool } from "@/agent/tool"
+import type { AgentTool } from "@/agent/tool"
 import {
   InMemorySessionManager,
   type ISessionManager,
@@ -18,7 +18,7 @@ import {
 const WORKSPACE_ROOT = "/workspace"
 const TEST_AGENT_ID = "test-agent"
 
-const model: IAgentModel = {
+const model: AgentModel = {
   async *stream() {},
 }
 
@@ -30,7 +30,7 @@ const TEST_AGENTS: readonly IBuliAgentRuntimeConfig[] = [{
 }]
 
 function runtimeWith(
-  modelOverride: IAgentModel = model,
+  modelOverride: AgentModel = model,
   agents: readonly IBuliAgentRuntimeConfig[] = TEST_AGENTS,
   manager: ISessionManager = new InMemorySessionManager(),
 ): BuliApplicationRuntime {
@@ -67,7 +67,7 @@ function createSession(
 }
 
 test("application runtime submits prompts into its session view", async () => {
-  const events: IAgentModelEvent[] = [
+  const events: AgentModelEvent[] = [
     { type: "text-start", id: "answer" },
     { type: "text-delta", id: "answer", delta: "Hello from Buli" },
     { type: "text-end", id: "answer" },
@@ -109,7 +109,7 @@ test("application runtime submits prompts into its session view", async () => {
 test("application runtime queues and clears steering and follow-up", async () => {
   const firstStarted = Promise.withResolvers<void>()
   const releaseFirst = Promise.withResolvers<void>()
-  const requests: IAgentModelRequest[] = []
+  const requests: AgentModelRequest[] = []
   const runtime = runtimeWith({
     async *stream(request) {
       requests.push({
@@ -255,8 +255,8 @@ test("application runtime auto-opens persisted history when submitting", async (
 })
 
 test("application runtime resolves fixed prompt and tools from an agent", async () => {
-  const requests: IAgentModelRequest[] = []
-  const reviewTool: IAgentTool = {
+  const requests: AgentModelRequest[] = []
+  const reviewTool: AgentTool = {
     name: "review",
     description: "Review code",
     inputSchema: {},
@@ -398,7 +398,7 @@ test("application runtime applies global selection to the next prompt", async ()
 })
 
 test("application runtime replaces models atomically and reconciles selection", async () => {
-  const loadedModel: IAgentModel = {
+  const loadedModel: AgentModel = {
     async *stream() {
       yield { type: "finish", reason: "stop" }
     },
@@ -697,7 +697,7 @@ test("model refresh keeps an active run on its captured adapter", async () => {
   const firstStarted = Promise.withResolvers<void>()
   const releaseFirst = Promise.withResolvers<void>()
   const runs: string[] = []
-  const initialModel: IAgentModel = {
+  const initialModel: AgentModel = {
     async *stream() {
       runs.push("initial")
       firstStarted.resolve()
@@ -705,7 +705,7 @@ test("model refresh keeps an active run on its captured adapter", async () => {
       yield { type: "finish", reason: "stop" }
     },
   }
-  const loadedModel: IAgentModel = {
+  const loadedModel: AgentModel = {
     async *stream() {
       runs.push("loaded")
       yield { type: "finish", reason: "stop" }
@@ -1030,7 +1030,7 @@ test("runtime resolves approval only in the addressed session and dispose releas
   const secondApprovalStarted = Promise.withResolvers<void>()
   const decisions: string[] = []
   let approvalCount = 0
-  const tool: IAgentTool = {
+  const tool: AgentTool = {
     name: "run_command",
     approvalKind: "command",
     description: "Run a command",

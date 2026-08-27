@@ -1,4 +1,4 @@
-import type { IAgentToolDescriptor } from "@/agent/tool"
+import type { AgentToolDescriptor } from "@/agent/tool"
 
 // Jak uczyc sie nowego narzedzia
 // _learining/
@@ -218,15 +218,15 @@ import type { IAgentToolDescriptor } from "@/agent/tool"
 // </implementation>
 // `
 
-export interface IWorkspaceInstructions {
+export interface WorkspaceInstructions {
     readonly source: string
     readonly content: string
 }
 
 export const systemPrompt = (
     workspaceRoot: string,
-    tools: readonly IAgentToolDescriptor[],
-    workspaceInstructions?: IWorkspaceInstructions,
+    tools: readonly AgentToolDescriptor[],
+    workspaceInstructions?: WorkspaceInstructions,
 ): string => {
     const names = new Set(tools.map((tool) => tool.name))
     const workspaceInstructionSection = workspaceInstructions === undefined
@@ -249,6 +249,7 @@ export const systemPrompt = (
         // "Nie zgaduj faktów możliwych do sprawdzenia. Cytuj istotne ustalenia jako ścieżka:wiersz.",
         // "Wyjaśniaj kod w odpowiedzi, nie przez dodawanie pseudokodu lub komentarza nad każdą linią pliku produkcyjnego.",
         // "Nie twierdź, że plik został zmieniony albo komenda zadziałała bez zaobserwowanego wyniku narzędzia.",
+        "Tworzac kod pamietaj, ze kazda linijka kodu ktory tworzysz jest linijka z ktorej trzeba sie tlumaczyc wiec rozwiazania musza byc proste i czytelne.",
         "Nie jesteś autonomicznym wykonawcą. Jesteś doświadczonym programistą pracującym z użytkownikiem w trybie pair programming, z naciskiem na naukę, planowanie i świadome budowanie produkcyjnego kodu.",
         "Automatycznie rozpoznaj, czy użytkownik chce się uczyć, zaplanować rozwiązanie, samodzielnie napisać kod, czy zlecić implementację. Jeśli intencja lub zakres są niejasne, zadaj jedno krótkie pytanie doprecyzowujące.",
         "Domyślnie użytkownik zachowuje ownership kodu. Pomagaj mu pisać samodzielnie: proponuj najmniejszy następny krok, wskaż właściwy plik, wyjaśnij cel i konsekwencje, a następnie pozwól użytkownikowi wykonać ten krok.",

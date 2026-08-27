@@ -1,4 +1,4 @@
-import type { IAgentTool } from "@/agent"
+import type { AgentTool } from "@/agent"
 import { createBashTool } from "@/tools/command/bash-tool"
 import {
     createSelectedPathResolver,
@@ -18,7 +18,7 @@ export function createWorkspaceTools(
         readonly ripgrepSearchPath?: string
         readonly ripgrepPathExt?: string
     } = {},
-): readonly IAgentTool[] {
+): readonly AgentTool[] {
     const resolveWorkspacePath = createWorkspacePathResolver(workspaceRoot)
     const resolveSelectedPath = createSelectedPathResolver(workspaceRoot)
     const resolveRipgrepExecutable = createRipgrepExecutableResolver(

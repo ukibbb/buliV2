@@ -12,7 +12,7 @@ import {
 import { testRender } from "@opentui/react/test-utils"
 import { act, useState } from "react"
 
-import type { IAssistantMessage, TAgentMessage } from "@/agent"
+import type { AgentMessage, AssistantMessage } from "@/agent"
 import { Transcript } from "@/sessions/ui"
 import { syntax, theme } from "@/terminal/theme"
 
@@ -52,7 +52,7 @@ function tableRenderables(root: Renderable): TextTableRenderable[] {
 }
 
 test("renders direct, streaming, and tool messages", async () => {
-    const messages: TAgentMessage[] = [
+    const messages: AgentMessage[] = [
         {
             id: "user-message",
             sessionId: "default",
@@ -222,7 +222,7 @@ test("renders direct, streaming, and tool messages", async () => {
             errorMessage: "TypeError: Invalid OpenAI authentication",
         },
     ]
-    const streamingMessage: IAssistantMessage = {
+    const streamingMessage: AssistantMessage = {
         id: "streaming-assistant-message",
         sessionId: "default",
         runId: "run-3",
@@ -305,7 +305,7 @@ test("renders direct, streaming, and tool messages", async () => {
 })
 
 test("renders technical tool parameters without text statuses", async () => {
-    const message: IAssistantMessage = {
+    const message: AssistantMessage = {
         id: "active-tools",
         sessionId: "default",
         runId: "run-active",
@@ -387,7 +387,7 @@ test("updates one tool activity line from active to completed", async () => {
     function EvolvingToolTranscript(): React.ReactNode {
         const [completed, setCompleted] = useState(false)
         completeTool = () => setCompleted(true)
-        const messages: TAgentMessage[] = [
+        const messages: AgentMessage[] = [
             {
                 id: "assistant-tool",
                 sessionId: "default",
@@ -459,7 +459,7 @@ test("keeps one tool activity line across the streaming message boundary", async
     function StreamingToolTranscript(): React.ReactNode {
         const [persisted, setPersisted] = useState(false)
         persistAssistant = () => setPersisted(true)
-        const assistant: IAssistantMessage = {
+        const assistant: AssistantMessage = {
             id: "streaming-tool",
             sessionId: "default",
             runId: "run-streaming-tool",
@@ -512,7 +512,7 @@ test("keeps one tool activity line across the streaming message boundary", async
 
 test("truncates tool targets without splitting Unicode code points", async () => {
     const path = `${"a".repeat(92)}😀tail`
-    const message: IAssistantMessage = {
+    const message: AssistantMessage = {
         id: "unicode-tool",
         sessionId: "default",
         runId: "run-unicode",
@@ -550,7 +550,7 @@ test("truncates tool targets without splitting Unicode code points", async () =>
 })
 
 test("pairs out-of-order results and preserves orphan results", async () => {
-    const assistant: IAssistantMessage = {
+    const assistant: AssistantMessage = {
         id: "tool-batch",
         sessionId: "default",
         runId: "run-tools",
@@ -572,7 +572,7 @@ test("pairs out-of-order results and preserves orphan results", async () => {
             },
         ],
     }
-    const messages: TAgentMessage[] = [
+    const messages: AgentMessage[] = [
         assistant,
         {
             id: "bash-result",
@@ -638,7 +638,7 @@ test("pairs out-of-order results and preserves orphan results", async () => {
 })
 
 test("does not pair results to calls from a failed assistant turn", async () => {
-    const messages: TAgentMessage[] = [
+    const messages: AgentMessage[] = [
         {
             id: "failed-tool-turn",
             sessionId: "default",
@@ -687,7 +687,7 @@ test("does not pair results to calls from a failed assistant turn", async () => 
 })
 
 test("scopes an active reused tool call id to its current run", async () => {
-    const messages: TAgentMessage[] = [
+    const messages: AgentMessage[] = [
         {
             id: "old-assistant",
             sessionId: "default",
@@ -761,7 +761,7 @@ test("renders full reasoning summaries as plain text in content order", async ()
         "**literal Markdown syntax**",
         "Final summary line remains available without truncation.",
     ].join("\n")
-    const completedMessage: IAssistantMessage = {
+    const completedMessage: AssistantMessage = {
         id: "completed-reasoning",
         sessionId: "default",
         runId: "run-completed-reasoning",
@@ -774,7 +774,7 @@ test("renders full reasoning summaries as plain text in content order", async ()
             { type: "text", text: "After summary" },
         ],
     }
-    const streamingMessage: IAssistantMessage = {
+    const streamingMessage: AssistantMessage = {
         id: "streaming-reasoning",
         sessionId: "default",
         runId: "run-streaming-reasoning",
@@ -831,7 +831,7 @@ test("renders full reasoning summaries as plain text in content order", async ()
 })
 
 test("shows work for empty streaming reasoning and hides empty completed reasoning", async () => {
-    const completedMessage: IAssistantMessage = {
+    const completedMessage: AssistantMessage = {
         id: "empty-completed-reasoning",
         sessionId: "default",
         runId: "run-empty-completed-reasoning",
@@ -840,7 +840,7 @@ test("shows work for empty streaming reasoning and hides empty completed reasoni
         stopReason: "stop",
         content: [{ type: "reasoning", text: "" }],
     }
-    const streamingMessage: IAssistantMessage = {
+    const streamingMessage: AssistantMessage = {
         id: "empty-streaming-reasoning",
         sessionId: "default",
         runId: "run-empty-streaming-reasoning",
@@ -881,7 +881,7 @@ test("keeps completed headings stable while streaming markdown grows", async () 
     function StreamingTranscript(): React.ReactNode {
         const [text, setText] = useState("# Stable heading\n\nPartial paragraph")
         updateText = setText
-        const streamingMessage: IAssistantMessage = {
+        const streamingMessage: AssistantMessage = {
             id: "streaming-markdown",
             sessionId: "default",
             runId: "run-streaming-markdown",
@@ -1004,7 +1004,7 @@ test("updates streaming code without replacing its renderable", async () => {
 
 test("keeps completed history renderables stable across streaming text updates", async () => {
     let updateText: ((text: string) => void) | undefined
-    const messages: TAgentMessage[] = [
+    const messages: AgentMessage[] = [
         {
             id: "durable-assistant",
             sessionId: "default",
@@ -1104,7 +1104,7 @@ test("keeps completed history renderables stable across streaming text updates",
 })
 
 test("styles rich Markdown and renders code without line numbers", async () => {
-    const message: IAssistantMessage = {
+    const message: AssistantMessage = {
         id: "styled-markdown",
         sessionId: "default",
         runId: "run-styled-markdown",
@@ -1214,7 +1214,7 @@ test("styles rich Markdown and renders code without line numbers", async () => {
 })
 
 test("keeps unnumbered code readable in a narrow transcript", async () => {
-    const message: IAssistantMessage = {
+    const message: AssistantMessage = {
         id: "narrow-code",
         sessionId: "default",
         runId: "run-narrow-code",

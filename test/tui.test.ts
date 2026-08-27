@@ -26,12 +26,12 @@ import type { IAuthenticationService } from "@/authentication/contracts"
 import { BuliApplicationRuntime } from "@/app/runtime"
 import { BuliRuntimeProvider } from "@/app/ui/context/application-context"
 import type {
-  IAgentModel,
-  ICommandToolApprovalRequest,
-  IPatchToolApprovalRequest,
-  TToolApprovalDecision,
-  TToolApprovalRequest,
-  IUserMessage,
+  AgentModel,
+  CommandToolApprovalRequest,
+  PatchToolApprovalRequest,
+  ToolApprovalDecision,
+  ToolApprovalRequest,
+  UserMessage,
 } from "@/agent"
 import type { ISessionSnapshot } from "@/sessions"
 import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
@@ -144,7 +144,7 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
   const resolvedApprovals: Array<{
     sessionId: string
     approvalId: string
-    decision: TToolApprovalDecision
+    decision: ToolApprovalDecision
   }> = []
   const aborted: string[] = []
   const sessionListeners = new Set<() => void>()
@@ -228,7 +228,7 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
   }
 }
 
-function patchApproval(): IPatchToolApprovalRequest {
+function patchApproval(): PatchToolApprovalRequest {
   return {
     kind: "patch",
     id: "patch-approval",
@@ -253,7 +253,7 @@ function patchApproval(): IPatchToolApprovalRequest {
   }
 }
 
-function commandApproval(): ICommandToolApprovalRequest {
+function commandApproval(): CommandToolApprovalRequest {
   return {
     kind: "command",
     id: "command-approval",
@@ -273,7 +273,7 @@ function commandApproval(): ICommandToolApprovalRequest {
 }
 
 function approvalSessionSnapshot(
-  pendingToolApproval: TToolApprovalRequest,
+  pendingToolApproval: ToolApprovalRequest,
 ): ISessionSnapshot {
   return {
     messages: [],
@@ -1047,7 +1047,7 @@ test("keeps exact raw metadata beside every rendered file diff", async () => {
     "",
   ].join("\n")
   const emptyDeletion = "--- a/src/empty.ts\n+++ /dev/null"
-  const approval: IPatchToolApprovalRequest = {
+  const approval: PatchToolApprovalRequest = {
     ...patchApproval(),
     paths: ["src/no-newline.ts", "src/empty.ts"],
     diff: noNewlineDiff + emptyDeletion,
@@ -1182,7 +1182,7 @@ test("keeps approval reviewable with many queued messages on a short terminal", 
 })
 
 test("reviews a tall patch from the top without changing its action", async () => {
-  const approval: IPatchToolApprovalRequest = {
+  const approval: PatchToolApprovalRequest = {
     ...patchApproval(),
     diff: [
       "--- a/src/long.ts",
@@ -1313,7 +1313,7 @@ test("reviews a tall patch from the top without changing its action", async () =
 
 test("focuses approval and ignores printable keys and chat submission", async () => {
   const approval = commandApproval()
-  const transcriptMessage: IUserMessage = {
+  const transcriptMessage: UserMessage = {
     id: "transcript-message",
     sessionId: "default",
     runId: "run-1",
@@ -1547,7 +1547,7 @@ for (const approvalCase of [
 
 test("resets command selection to Copy when the approval ID changes", async () => {
   const firstApproval = commandApproval()
-  const secondApproval: ICommandToolApprovalRequest = {
+  const secondApproval: CommandToolApprovalRequest = {
     ...commandApproval(),
     id: "command-approval-2",
     toolCallId: "command-call-2",
@@ -1711,7 +1711,7 @@ test("shows slash commands and executes the selected new command", async () => {
 })
 
 test("selects a model from the picker and updates the status row", async () => {
-  const model: IAgentModel = { async *stream() {} }
+  const model: AgentModel = { async *stream() {} }
   const runtime = new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,
     manager: new InMemorySessionManager(),
@@ -1790,7 +1790,7 @@ test("selects a model from the picker and updates the status row", async () => {
 })
 
 test("renders a submitted prompt and streamed response", async () => {
-  const model: IAgentModel = {
+  const model: AgentModel = {
     async *stream() {
       yield { type: "text-start", id: "answer" }
       yield { type: "text-delta", id: "answer", delta: "Rendered response" }

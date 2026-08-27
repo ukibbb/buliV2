@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test"
 
 import type {
-  IAssistantMessage,
-  IToolResultMessage,
-  IUserMessage,
-  TAgentMessage,
+  AgentMessage,
+  AssistantMessage,
+  ToolResultMessage,
+  UserMessage,
 } from "@/agent"
 import { InMemorySessionManager, type ISessionInfo } from "@/sessions"
 
@@ -130,7 +130,7 @@ test("requires session metadata and rejects invalid durable messages", () => {
   expect(() => manager.appendMessage({
     ...toolResultMessage("Result"),
     isError: "false",
-  } as unknown as TAgentMessage)).toThrow("Invalid tool result message")
+  } as unknown as AgentMessage)).toThrow("Invalid tool result message")
 })
 
 test("accepts legacy and structured tool results and validates optional fields", () => {
@@ -147,7 +147,7 @@ test("accepts legacy and structured tool results and validates optional fields",
     "committed-after-abort",
     "effects-unknown",
   ] as const
-  const structured = outcomes.map((outcome, index): IToolResultMessage => ({
+  const structured = outcomes.map((outcome, index): ToolResultMessage => ({
     ...toolResultMessage(`Structured ${outcome}`),
     id: `structured-${index}`,
     isError: outcome === "failed"
@@ -163,24 +163,24 @@ test("accepts legacy and structured tool results and validates optional fields",
     ...toolResultMessage("Invalid outcome"),
     id: "invalid-outcome",
     outcome: "unknown",
-  } as unknown as TAgentMessage)).toThrow("Invalid tool result message")
+  } as unknown as AgentMessage)).toThrow("Invalid tool result message")
   expect(() => manager.appendMessage({
     ...toolResultMessage("Invalid summary"),
     id: "invalid-summary",
     summary: 42,
-  } as unknown as TAgentMessage)).toThrow("Invalid tool result message")
+  } as unknown as AgentMessage)).toThrow("Invalid tool result message")
   expect(() => manager.appendMessage({
     ...toolResultMessage("Contradictory failed result"),
     id: "contradictory-failed",
     outcome: "failed",
     isError: false,
-  } as unknown as TAgentMessage)).toThrow("Invalid tool result message")
+  } as unknown as AgentMessage)).toThrow("Invalid tool result message")
   expect(() => manager.appendMessage({
     ...toolResultMessage("Contradictory completed result"),
     id: "contradictory-completed",
     outcome: "completed",
     isError: true,
-  } as unknown as TAgentMessage)).toThrow("Invalid tool result message")
+  } as unknown as AgentMessage)).toThrow("Invalid tool result message")
 })
 
 test("rejects sparse, cyclic, and non-JSON values nested in tool input", () => {
@@ -274,7 +274,7 @@ function userMessage(
   sessionId = "session-1",
   id = "message-1",
   createdAt = 1,
-): IUserMessage {
+): UserMessage {
   return {
     id,
     sessionId,
@@ -287,8 +287,8 @@ function userMessage(
 }
 
 function completedAssistant(
-  content: IAssistantMessage["content"],
-): IAssistantMessage {
+  content: AssistantMessage["content"],
+): AssistantMessage {
   return {
     id: "assistant-1",
     sessionId: "session-1",
@@ -300,7 +300,7 @@ function completedAssistant(
   }
 }
 
-function toolResultMessage(content: string): IToolResultMessage {
+function toolResultMessage(content: string): ToolResultMessage {
   return {
     id: "tool-result-1",
     sessionId: "session-1",

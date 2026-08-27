@@ -1,9 +1,9 @@
 import { Buffer } from "node:buffer"
 
 import type {
-    IAgentRunConfiguration,
-    IModelUsage,
-    TAgentMessage,
+    AgentMessage,
+    AgentRunConfiguration,
+    ModelUsage,
 } from "@/agent"
 import {
     assertCheckpointAnchor,
@@ -29,9 +29,9 @@ const COMPACTION_PROMPT_SUFFIX = "\n\nUpdate the conversation summary using this
 /** Supplies durable history and model dependencies for one compaction pass. */
 export interface ICompactSessionMessagesOptions {
     readonly sessionId: string
-    readonly messages: readonly TAgentMessage[]
+    readonly messages: readonly AgentMessage[]
     readonly previousCheckpoint?: ICompactionCheckpoint
-    readonly runConfiguration: IAgentRunConfiguration
+    readonly runConfiguration: AgentRunConfiguration
     /** Token allowance for retained messages; omission uses the 20k policy cap. */
     readonly requestBudgetTokens?: number
     readonly reason: ICompactionCheckpoint["reason"]
@@ -73,7 +73,7 @@ export async function compactSessionMessages(
         remainingHistory = "[No provider-visible content in this history segment.]"
     }
     let normalizedSummary = previous?.summary
-    let usage: IModelUsage | undefined
+    let usage: ModelUsage | undefined
     let chunkIndex = 0
     while (remainingHistory.length > 0) {
         options.signal.throwIfAborted()
@@ -129,7 +129,7 @@ export function retainedContextTargetTokens(
 
 /** Selects a complete suffix, splitting a long turn only at safe message boundaries. */
 export function findCompactionCutoff(
-    messages: readonly TAgentMessage[],
+    messages: readonly AgentMessage[],
     requestBudgetTokens = MAX_RETAINED_CONTEXT_TOKENS,
 ): number | undefined {
     const retainedTargetTokens = retainedContextTargetTokens(requestBudgetTokens)
@@ -229,7 +229,7 @@ interface ICompactionChunk {
 
 interface ICompactionSummaryResult {
     readonly summary: string
-    readonly usage?: IModelUsage
+    readonly usage?: ModelUsage
 }
 
 async function summarizeCompactionChunk(
@@ -246,7 +246,7 @@ async function summarizeCompactionChunk(
         contextSummary,
         options.runConfiguration.modelProfile?.contextWindowTokens,
     )
-    const summaryPrompt: TAgentMessage = {
+    const summaryPrompt: AgentMessage = {
         id: `${checkpointId}-prompt-${chunkIndex}`,
         sessionId: options.sessionId,
         runId,
@@ -268,7 +268,7 @@ async function summarizeCompactionChunk(
     })
 
     let summary = ""
-    let usage: IModelUsage | undefined
+    let usage: ModelUsage | undefined
     let finished = false
     let finishReason: string | undefined
     for await (const event of stream) {
@@ -419,7 +419,7 @@ function splitUtf8Prefix(value: string, maximumBytes: number): ICompactionChunk 
     }
 }
 
-function serializeCompactionMessages(messages: readonly TAgentMessage[]): string {
+function serializeCompactionMessages(messages: readonly AgentMessage[]): string {
     const sections: string[] = []
     for (const message of messages) {
         switch (message.role) {
@@ -500,9 +500,9 @@ function safeJson(value: unknown): string {
 }
 
 function mergeUsage(
-    previous: IModelUsage | undefined,
-    current: IModelUsage | undefined,
-): IModelUsage | undefined {
+    previous: ModelUsage | undefined,
+    current: ModelUsage | undefined,
+): ModelUsage | undefined {
     if (!previous) return current === undefined ? undefined : structuredClone(current)
     if (!current) return previous
     return {
@@ -527,11 +527,11 @@ function mergeUsage(
     }
 }
 
-function optionalUsage<K extends keyof IModelUsage>(
+function optionalUsage<K extends keyof ModelUsage>(
     key: K,
     previous: number | undefined,
     current: number | undefined,
-): Pick<IModelUsage, K> | Record<string, never> {
+): Pick<ModelUsage, K> | Record<string, never> {
     if (previous === undefined && current === undefined) return {}
-    return { [key]: (previous ?? 0) + (current ?? 0) } as Pick<IModelUsage, K>
+    return { [key]: (previous ?? 0) + (current ?? 0) } as Pick<ModelUsage, K>
 }

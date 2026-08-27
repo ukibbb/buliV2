@@ -1,4 +1,4 @@
-import type { TAgentMessage } from "@/agent"
+import type { AgentMessage } from "@/agent"
 import type { ICompactionCheckpoint } from "@/sessions/compaction/checkpoint"
 
 /** Lightweight session metadata used by navigation and persistence indexes. */
@@ -15,8 +15,8 @@ export interface ISessionManager {
     readonly createSession: (info: ISessionInfo) => void
     readonly getSessionInfo: (sessionId: string) => ISessionInfo | undefined
     readonly listSessions: () => readonly ISessionInfo[]
-    readonly getMessages: (sessionId: string) => readonly TAgentMessage[]
-    readonly appendMessage: (message: TAgentMessage) => void
+    readonly getMessages: (sessionId: string) => readonly AgentMessage[]
+    readonly appendMessage: (message: AgentMessage) => void
     readonly getCompactionCheckpoint: (
         sessionId: string,
     ) => ICompactionCheckpoint | undefined

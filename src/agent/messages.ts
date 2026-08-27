@@ -1,5 +1,5 @@
-import type { IModelProfile, IModelUsage } from "@/agent/model-values"
-import type { TToolExecutionOutcome } from "@/agent/tool"
+import type { ModelProfile, ModelUsage } from "@/agent/model-values"
+import type { ToolExecutionOutcome } from "@/agent/tool"
 
 export const USER_PATH_REFERENCES_PER_MESSAGE_MAX = 50
 export const USER_PATH_REFERENCES_PER_SESSION_MAX = 500
@@ -7,7 +7,7 @@ export const USER_IMAGE_ATTACHMENTS_MAX = 4
 export const USER_IMAGE_MAX_BYTES = 5 * 1024 * 1024
 export const USER_IMAGE_TOTAL_MAX_BYTES = 10 * 1024 * 1024
 
-interface IMessageBase {
+interface MessageBase {
     readonly id: string
     readonly sessionId: string
     readonly runId: string
@@ -15,92 +15,92 @@ interface IMessageBase {
 }
 
 /** Identifies how user input entered an agent run. */
-export type TUserMessageSource = "prompt" | "steer" | "followUp"
+export type UserMessageSource = "prompt" | "steer" | "followUp"
 
-export interface IUserSourceText {
+export interface UserSourceText {
     readonly value: string
     readonly start: number
     readonly end: number
 }
 
 /** Grants read/glob access to one explicitly selected path capability. */
-export interface IUserPathReference {
+export interface UserPathReference {
     readonly type: "path"
     readonly kind: "file" | "directory"
     readonly path: string
-    readonly source: IUserSourceText
+    readonly source: UserSourceText
 }
 
 /** Provider-neutral image bytes attached directly to one user turn. */
-export interface IUserImageAttachment {
+export interface UserImageAttachment {
     readonly type: "image"
     readonly mimeType: string
     readonly data: string
     readonly filename: string
-    readonly source: IUserSourceText
+    readonly source: UserSourceText
 }
 
-export interface IUserInput {
+export interface UserInputContent {
     readonly text: string
-    readonly references?: readonly IUserPathReference[]
-    readonly attachments?: readonly IUserImageAttachment[]
+    readonly references?: readonly UserPathReference[]
+    readonly attachments?: readonly UserImageAttachment[]
 }
 
-export type TUserInput = string | IUserInput
+export type UserInput = string | UserInputContent
 
-export interface IUserMessage extends IMessageBase {
+export interface UserMessage extends MessageBase {
     readonly role: "user"
     readonly content: string
-    readonly source: TUserMessageSource
-    readonly references?: readonly IUserPathReference[]
-    readonly attachments?: readonly IUserImageAttachment[]
+    readonly source: UserMessageSource
+    readonly references?: readonly UserPathReference[]
+    readonly attachments?: readonly UserImageAttachment[]
 }
 
-export interface ITextContent {
+export interface TextContent {
     readonly type: "text"
     readonly text: string
 }
 
-export interface IReasoningContent {
+export interface ReasoningContent {
     readonly type: "reasoning"
     readonly text: string
 }
 
-export interface IToolCallContent {
+export interface ToolCallContent {
     readonly type: "toolCall"
     readonly toolCallId: string
     readonly toolName: string
     readonly input: Record<string, unknown>
 }
 
-export type TAssistantContent =
-    | ITextContent
-    | IReasoningContent
-    | IToolCallContent
+export type AssistantContent =
+    | TextContent
+    | ReasoningContent
+    | ToolCallContent
 
 /** Durable provider-neutral assistant response consumed by sessions and UI. */
-export interface IAssistantMessage extends IMessageBase {
+export interface AssistantMessage extends MessageBase {
     readonly role: "assistant"
-    readonly content: readonly TAssistantContent[]
+    readonly content: readonly AssistantContent[]
     readonly stopReason: string
     readonly errorMessage?: string
-    readonly model?: IModelProfile
-    readonly usage?: IModelUsage
+    readonly model?: ModelProfile
+    readonly usage?: ModelUsage
 }
 
 /** Durable result paired with one tool call from an assistant message. */
-export interface IToolResultMessage extends IMessageBase {
+export interface ToolResultMessage extends MessageBase {
     readonly role: "toolResult"
     readonly toolCallId: string
     readonly toolName: string
     readonly content: string
     readonly isError: boolean
-    readonly outcome?: TToolExecutionOutcome
+    readonly outcome?: ToolExecutionOutcome
     readonly summary?: string
 }
 
 /** Complete provider-neutral message history owned by an agent. */
-export type TAgentMessage =
-    | IUserMessage
-    | IAssistantMessage
-    | IToolResultMessage
+export type AgentMessage =
+    | UserMessage
+    | AssistantMessage
+    | ToolResultMessage

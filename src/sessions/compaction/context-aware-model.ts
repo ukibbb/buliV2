@@ -1,8 +1,8 @@
 import {
-    type IAgentModel,
-    type IAgentModelEvent,
-    type IAgentModelRequest,
-    type IModelProfile,
+    type AgentModel,
+    type AgentModelEvent,
+    type AgentModelRequest,
+    type ModelProfile,
     isModelContextOverflowError,
 } from "@/agent"
 import {
@@ -21,23 +21,23 @@ export const CONTEXT_SUMMARY_RESERVE_TOKENS = 2_048
 const MAX_COMPACTION_PASSES = 64
 
 export interface IContextAwareModelOptions {
-    readonly model: IAgentModel
-    readonly modelProfile?: IModelProfile
+    readonly model: AgentModel
+    readonly modelProfile?: ModelProfile
     readonly contextWindowTokens: number | undefined
     readonly projectRequest: (
-        originalRequest: IAgentModelRequest,
-    ) => IAgentModelRequest
+        originalRequest: AgentModelRequest,
+    ) => AgentModelRequest
     readonly compactAndReproject: (
-        originalRequest: IAgentModelRequest,
+        originalRequest: AgentModelRequest,
         requestBudgetTokens: number,
-    ) => Promise<IAgentModelRequest | undefined>
+    ) => Promise<AgentModelRequest | undefined>
     readonly publishContextUsage: (usage: IContextUsage) => void
 }
 
 /** Adds bounded preflight compaction and one safe overflow retry to a model. */
 export function createContextAwareModel(
     options: IContextAwareModelOptions,
-): IAgentModel {
+): AgentModel {
     return {
         async *stream(originalRequest) {
             originalRequest.signal.throwIfAborted()
@@ -54,7 +54,7 @@ export function createContextAwareModel(
             for (;;) {
                 request.signal.throwIfAborted()
                 let interceptedOverflow:
-                    | { readonly kind: "emitted"; readonly event: IAgentModelEvent }
+                    | { readonly kind: "emitted"; readonly event: AgentModelEvent }
                     | { readonly kind: "thrown"; readonly error: unknown }
                     | undefined
 
@@ -117,9 +117,9 @@ export function createContextAwareModel(
 
 async function compactPreflightRequest(
     options: IContextAwareModelOptions,
-    originalRequest: IAgentModelRequest,
-    initialRequest: IAgentModelRequest,
-): Promise<IAgentModelRequest> {
+    originalRequest: AgentModelRequest,
+    initialRequest: AgentModelRequest,
+): Promise<AgentModelRequest> {
     let request = initialRequest
     for (let pass = 0; pass <= MAX_COMPACTION_PASSES; pass += 1) {
         originalRequest.signal.throwIfAborted()
@@ -150,8 +150,8 @@ async function compactPreflightRequest(
 
 async function compactOverflowRequest(
     options: IContextAwareModelOptions,
-    originalRequest: IAgentModelRequest,
-): Promise<IAgentModelRequest | undefined> {
+    originalRequest: AgentModelRequest,
+): Promise<AgentModelRequest | undefined> {
     let request = await options.compactAndReproject(originalRequest, 0)
     if (!request) return undefined
 
@@ -185,9 +185,9 @@ function requestBudgetError(usage: IContextUsage): Error {
 
 /** Computes the retained-message target within the request and policy caps. */
 export function retainedMessageAllowanceTokens(
-    request: IAgentModelRequest,
+    request: AgentModelRequest,
     contextWindowTokens: number,
-    modelProfile?: IModelProfile,
+    modelProfile?: ModelProfile,
 ): number {
     const thresholdTokens = contextCompactionThresholdTokens(contextWindowTokens)
     const contextInput = {
@@ -245,9 +245,9 @@ export function retainedMessageAllowanceTokens(
 }
 
 function estimateRequestUsage(
-    request: IAgentModelRequest,
+    request: AgentModelRequest,
     contextWindowTokens: number | undefined,
-    modelProfile?: IModelProfile,
+    modelProfile?: ModelProfile,
 ): IContextUsage {
     return estimateContextUsage({
         systemPrompt: request.systemPrompt,
@@ -260,7 +260,7 @@ function estimateRequestUsage(
     }, contextWindowTokens)
 }
 
-function isSemanticModelEvent(event: IAgentModelEvent): boolean {
+function isSemanticModelEvent(event: AgentModelEvent): boolean {
     return event.type === "text-start"
         || event.type === "text-delta"
         || event.type === "text-end"

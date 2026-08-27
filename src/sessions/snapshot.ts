@@ -1,26 +1,26 @@
 import {
     isImmutableAssistantSnapshot,
-    type IAssistantMessage,
-    type IUserMessage,
-    type TAgentMessage,
-    type TAgentRunEndReason,
-    type TToolApprovalRequest,
+    type AgentMessage,
+    type AgentRunEndReason,
+    type AssistantMessage,
+    type ToolApprovalRequest,
+    type UserMessage,
 } from "@/agent"
 import type { IContextUsage } from "@/sessions/compaction/context-budget"
 
 /** Immutable read model published by one live agent session. */
 export interface ISessionSnapshot {
-    readonly messages: readonly TAgentMessage[]
-    readonly pendingSteeringMessages: readonly IUserMessage[]
-    readonly pendingFollowUpMessages: readonly IUserMessage[]
-    readonly streamingMessage?: IAssistantMessage
-    readonly pendingToolApproval?: TToolApprovalRequest
+    readonly messages: readonly AgentMessage[]
+    readonly pendingSteeringMessages: readonly UserMessage[]
+    readonly pendingFollowUpMessages: readonly UserMessage[]
+    readonly streamingMessage?: AssistantMessage
+    readonly pendingToolApproval?: ToolApprovalRequest
     readonly isRunning: boolean
     readonly isCompacting: boolean
     readonly contextUsage?: IContextUsage
     readonly activeRunId?: string
     readonly pendingToolCallIds: readonly string[]
-    readonly lastRunReason?: TAgentRunEndReason
+    readonly lastRunReason?: AgentRunEndReason
     readonly errorMessage?: string
 }
 
@@ -107,10 +107,10 @@ export function freezeSessionSnapshot(
 }
 
 function freezeAssistantBranch(
-    value: IAssistantMessage,
-    previousSource: IAssistantMessage | undefined,
-    previousValue: IAssistantMessage | undefined,
-): IAssistantMessage {
+    value: AssistantMessage,
+    previousSource: AssistantMessage | undefined,
+    previousValue: AssistantMessage | undefined,
+): AssistantMessage {
     if (value === previousSource && previousValue !== undefined) {
         return previousValue
     }

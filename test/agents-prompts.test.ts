@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test"
 
 import { systemPrompt } from "@/agent/system-prompt"
-import type { IAgentToolDescriptor } from "@/agent/tool"
+import type { AgentToolDescriptor } from "@/agent/tool"
 
-const descriptor = (name: string): IAgentToolDescriptor => ({
+const descriptor = (name: string): AgentToolDescriptor => ({
   name,
   description: `${name} description`,
   inputSchema: { type: "object" },

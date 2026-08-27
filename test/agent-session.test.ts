@@ -1,13 +1,13 @@
 import { expect, test } from "bun:test"
 
 import type {
-  IAgentModel,
-  IAgentModelRequest,
-  IAgentTool,
-  IAssistantMessage,
-  IToolResultMessage,
-  IUserMessage,
-  TToolApprovalDecision,
+  AgentModel,
+  AgentModelRequest,
+  AgentTool,
+  AssistantMessage,
+  ToolApprovalDecision,
+  ToolResultMessage,
+  UserMessage,
 } from "@/agent"
 import {
   AgentSession,
@@ -21,7 +21,7 @@ test("AgentSession restores history, persists completion barriers, and publishes
   manager.createSession(sessionInfo("session-1", "test-agent", "Restored"))
   manager.appendMessage(userMessage("Restored"))
   const persistedBeforeModel: number[] = []
-  const model: IAgentModel = {
+  const model: AgentModel = {
     async *stream() {
       persistedBeforeModel.push(manager.getMessages("session-1").length)
       yield { type: "text-start", id: "answer" }
@@ -79,12 +79,12 @@ test("AgentSession structurally shares immutable history across streaming snapsh
   const releaseFinish = Promise.withResolvers<void>()
   type TPublication = {
     snapshot: ISessionSnapshot
-    stateMessage: IAssistantMessage | undefined
+    stateMessage: AssistantMessage | undefined
   }
   const firstDeltaPublished = Promise.withResolvers<TPublication>()
   const secondDeltaPublished = Promise.withResolvers<TPublication>()
   const toolInput = { path: { directory: "src", file: "index.ts" } }
-  const model: IAgentModel = {
+  const model: AgentModel = {
     async *stream() {
       yield {
         type: "tool-call",
@@ -206,8 +206,8 @@ test("AgentSession publishes immutable approval request and resolution snapshots
   const manager = new InMemorySessionManager()
   manager.createSession(sessionInfo("session-1", "test-agent", "Approval"))
   const approvalStarted = Promise.withResolvers<void>()
-  const decisions: TToolApprovalDecision[] = []
-  const tool: IAgentTool = {
+  const decisions: ToolApprovalDecision[] = []
+  const tool: AgentTool = {
     name: "apply_patch",
     approvalKind: "patch",
     description: "Apply a patch",
@@ -302,9 +302,9 @@ test("AgentSession persists steering and follow-up before each model request", a
   manager.createSession(sessionInfo("session-1", "test-agent", "Steering"))
   const firstStarted = Promise.withResolvers<void>()
   const releaseFirst = Promise.withResolvers<void>()
-  const requests: IAgentModelRequest[] = []
+  const requests: AgentModelRequest[] = []
   const persistedBeforeRequest: number[] = []
-  const model: IAgentModel = {
+  const model: AgentModel = {
     async *stream(request) {
       requests.push({
         ...request,
@@ -644,7 +644,7 @@ test("AgentSession recovers a toolCallId reused by a later run", async () => {
     "call-shared",
     2,
   )
-  const firstResult: IToolResultMessage = {
+  const firstResult: ToolResultMessage = {
     id: "tool-result-run-1",
     sessionId: "session-1",
     runId: "run-1",
@@ -837,8 +837,8 @@ test("AgentSession compacts durable history and projects only summary plus tail"
   manager.createSession(sessionInfo("session-1", "test-agent", "Compaction"))
   seedConversation(manager, 3, "x".repeat(50_000))
   const original = manager.getMessages("session-1")
-  const requests: IAgentModelRequest[] = []
-  const model: IAgentModel = {
+  const requests: AgentModelRequest[] = []
+  const model: AgentModel = {
     async *stream(request) {
       requests.push(request)
       if (request.runId.startsWith("compaction-")) {
@@ -917,7 +917,7 @@ test("AgentSession does not compact after settlement from reported usage", async
   manager.createSession(sessionInfo("session-1", "test-agent", "Automatic"))
   seedConversation(manager, 3)
   let compactionRequests = 0
-  const model: IAgentModel = {
+  const model: AgentModel = {
     async *stream(request) {
       if (request.runId.startsWith("compaction-")) {
         compactionRequests += 1
@@ -1001,7 +1001,7 @@ function userMessage(
   id = "restored-user",
   runId = "run-restored",
   createdAt = 1,
-): IUserMessage {
+): UserMessage {
   return {
     id,
     sessionId,
@@ -1032,7 +1032,7 @@ function toolCallAssistantMessage(
   runId: string,
   toolCallId: string,
   createdAt: number,
-): IAssistantMessage {
+): AssistantMessage {
   return {
     id,
     sessionId: "session-1",
@@ -1054,7 +1054,7 @@ function textAssistantMessage(
   runId: string,
   text: string,
   createdAt: number,
-): IAssistantMessage {
+): AssistantMessage {
   return {
     id,
     sessionId: "session-1",
@@ -1066,7 +1066,7 @@ function textAssistantMessage(
   }
 }
 
-function interruptedAssistantMessage(): IAssistantMessage {
+function interruptedAssistantMessage(): AssistantMessage {
   return {
     id: "assistant-interrupted",
     sessionId: "session-1",

@@ -1,7 +1,7 @@
 import type {
-    IModelProfile,
-    IModelUsage,
-    TAgentMessage,
+    AgentMessage,
+    ModelProfile,
+    ModelUsage,
 } from "@/agent"
 
 /** Durable summary replacing a compacted prefix of session messages. */
@@ -13,14 +13,14 @@ export interface ICompactionCheckpoint {
     readonly compactedMessageCount: number
     readonly throughMessageId: string
     readonly summary: string
-    readonly model?: IModelProfile
-    readonly usage?: IModelUsage
+    readonly model?: ModelProfile
+    readonly usage?: ModelUsage
 }
 
 /** Verifies that a checkpoint ends on a complete anchored message sequence. */
 export function assertCheckpointAnchor(
     checkpoint: ICompactionCheckpoint,
-    messages: readonly TAgentMessage[],
+    messages: readonly AgentMessage[],
 ): void {
     const anchor = messages[checkpoint.compactedMessageCount - 1]
     if (
@@ -35,7 +35,7 @@ export function assertCheckpointAnchor(
     }
 }
 
-function hasCompleteToolSequence(messages: readonly TAgentMessage[]): boolean {
+function hasCompleteToolSequence(messages: readonly AgentMessage[]): boolean {
     let pendingToolCallIds: Set<string> | undefined
     for (const message of messages) {
         if (pendingToolCallIds) {

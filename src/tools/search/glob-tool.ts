@@ -1,7 +1,8 @@
 import { stat } from "node:fs/promises"
 import { isAbsolute, resolve, sep, win32 } from "node:path"
+import { Type } from "typebox"
 
-import type { IAgentTool } from "@/agent"
+import type { AgentTool } from "@/agent"
 import {
     isPathInside,
     toWorkspaceRelativePath,
@@ -27,45 +28,38 @@ import {
 
 const GLOB_TIMEOUT_MS = 10_000
 
+const GLOB_INPUT_SCHEMA = Type.Object({
+    pattern: Type.String({
+        minLength: 1,
+        description: "Relative glob pattern, for example **/*.ts",
+    }),
+    path: Type.Optional(Type.String({
+        minLength: 1,
+        description: "Directory to search, relative to the workspace by default",
+    })),
+    hidden: Type.Optional(Type.Boolean({
+        default: false,
+        description: "Include hidden files and directories",
+    })),
+    limit: Type.Optional(Type.Integer({
+        minimum: 1,
+        maximum: SEARCH_MAX_LIMIT,
+        default: SEARCH_DEFAULT_LIMIT,
+        description: "Maximum number of paths to return",
+    })),
+}, { additionalProperties: false })
+
 /** Creates the tool that finds workspace files with relative glob patterns. */
 export function createGlobTool(
     resolveWorkspacePath: TWorkspacePathResolver,
     resolveRipgrepExecutable: TRipgrepExecutableResolver,
     resolveSelectedPath?: TSelectedPathResolver,
-): IAgentTool {
+): AgentTool<typeof GLOB_INPUT_SCHEMA> {
     return {
         name: "glob",
         description: "Find files in a workspace directory or a directory explicitly selected with @.",
         acceptsSelectedPathReferences: resolveSelectedPath !== undefined,
-        inputSchema: {
-            type: "object",
-            properties: {
-                pattern: {
-                    type: "string",
-                    minLength: 1,
-                    description: "Relative glob pattern, for example **/*.ts",
-                },
-                path: {
-                    type: "string",
-                    minLength: 1,
-                    description: "Directory to search, relative to the workspace by default",
-                },
-                hidden: {
-                    type: "boolean",
-                    default: false,
-                    description: "Include hidden files and directories",
-                },
-                limit: {
-                    type: "integer",
-                    minimum: 1,
-                    maximum: SEARCH_MAX_LIMIT,
-                    default: SEARCH_DEFAULT_LIMIT,
-                    description: "Maximum number of paths to return",
-                },
-            },
-            required: ["pattern"],
-            additionalProperties: false,
-        },
+        inputSchema: GLOB_INPUT_SCHEMA,
         execute: async (input, context) => {
             const pattern = requireNonEmptyString(input, "pattern")
             validateRelativeGlob(pattern, "Glob pattern")

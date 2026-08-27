@@ -1,4 +1,4 @@
-import type { TAgentMessage } from "@/agent"
+import type { AgentMessage } from "@/agent"
 import {
     assertCheckpointAnchor,
     type ICompactionCheckpoint,
@@ -20,7 +20,7 @@ export class InMemorySessionManager implements ISessionManager {
     private readonly sessionsById = new Map<TSessionId, ISessionInfo>()
     private readonly messagesBySession = new Map<
         TSessionId,
-        readonly TAgentMessage[]
+        readonly AgentMessage[]
     >()
     private readonly checkpointsBySession = new Map<
         TSessionId,
@@ -45,11 +45,11 @@ export class InMemorySessionManager implements ISessionManager {
         return structuredClone([...this.sessionsById.values()])
     }
 
-    readonly getMessages = (sessionId: string): readonly TAgentMessage[] => {
+    readonly getMessages = (sessionId: string): readonly AgentMessage[] => {
         return structuredClone(this.messagesBySession.get(sessionId) ?? [])
     }
 
-    readonly appendMessage = (message: TAgentMessage): void => {
+    readonly appendMessage = (message: AgentMessage): void => {
         assertDurableSessionMessage(message)
 
         const info = this.sessionsById.get(message.sessionId)
@@ -105,7 +105,7 @@ export class InMemorySessionManager implements ISessionManager {
         this.checkpointsBySession.delete(sessionId)
     }
 
-    getAllMessages(): readonly TAgentMessage[] {
+    getAllMessages(): readonly AgentMessage[] {
         return structuredClone([...this.messagesBySession.values()].flat())
     }
 }

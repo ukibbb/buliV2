@@ -30,9 +30,9 @@ import {
 import { BuliToolApproval } from "@/app/ui/controller/tool-approval"
 import type { TAuthenticationMode } from "@/authentication/ui"
 import type {
-    IUserInput,
-    TToolApprovalDecision,
-    TUserInput,
+    ToolApprovalDecision,
+    UserInput,
+    UserInputContent,
 } from "@/agent"
 
 export type {
@@ -63,7 +63,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     private readonly pathMenu: BuliPathMenu
     private readonly inputSubmission: BuliInputSubmission
     private readonly toolApproval: BuliToolApproval
-    private inputDraft: IUserInput = { text: "" }
+    private inputDraft: UserInputContent = { text: "" }
 
     constructor(options: IBuliUiControllerOptions) {
         this.application = options.application
@@ -114,14 +114,14 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
         )
     }
 
-    readonly getInputDraft = (): IUserInput => {
+    readonly getInputDraft = (): UserInputContent => {
         const input = this.store.getSnapshot().input
         if (this.inputDraft.text !== input) this.inputDraft = { text: input }
         return this.inputDraft
     }
 
     readonly updateDraft = (
-        input: IUserInput,
+        input: UserInputContent,
         mention?: IPathMention,
     ): void => {
         const snapshot = this.store.getSnapshot()
@@ -148,7 +148,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     }
 
     readonly submitInput = (
-        input: TUserInput,
+        input: UserInput,
         delivery: TBuliInputDelivery = "auto",
     ): Promise<TBuliInputSubmitResult> => {
         this.pathMenu.cancel()
@@ -161,7 +161,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
 
     readonly resolveToolApproval = (
         approvalId: string,
-        decision: TToolApprovalDecision,
+        decision: ToolApprovalDecision,
         beforeResolve?: () => boolean,
     ): void => {
         this.toolApproval.resolve(approvalId, decision, beforeResolve)
@@ -301,7 +301,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
         return route.type === "session" ? route.sessionId : null
     }
 
-    private readonly consumeInputDraft = (input: IUserInput): void => {
+    private readonly consumeInputDraft = (input: UserInputContent): void => {
         if (!sameUserInput(this.inputDraft, input)) return
         this.inputDraft = { text: "" }
         this.store.consumeInput(input.text)

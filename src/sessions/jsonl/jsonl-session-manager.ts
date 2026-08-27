@@ -13,7 +13,7 @@ import {
 } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
-import type { TAgentMessage } from "@/agent"
+import type { AgentMessage } from "@/agent"
 import {
     assertCheckpointAnchor,
     type ICompactionCheckpoint,
@@ -42,7 +42,7 @@ interface ISessionRecord {
 interface IMessageRecord {
     readonly recordType: "message"
     readonly version: 2
-    readonly message: TAgentMessage
+    readonly message: AgentMessage
 }
 
 interface ICompactionRecord {
@@ -83,12 +83,12 @@ export class JsonlSessionManager implements ISessionManager {
 
     readonly getMessages = (
         sessionId: string,
-    ): readonly TAgentMessage[] => {
+    ): readonly AgentMessage[] => {
         this.assertActive()
         return this.memory.getMessages(sessionId)
     }
 
-    readonly appendMessage = (message: TAgentMessage): void => {
+    readonly appendMessage = (message: AgentMessage): void => {
         this.assertActive()
         assertDurableSessionMessage(message)
 
@@ -166,7 +166,7 @@ export class JsonlSessionManager implements ISessionManager {
         const hasTerminatedTail = contents.endsWith("\n")
         const lastRecordIndex = lines.findLastIndex((line) => line.trim().length > 0)
         const infoBySession = new Map<string, ISessionInfo>()
-        const messagesBySession = new Map<string, TAgentMessage[]>()
+        const messagesBySession = new Map<string, AgentMessage[]>()
         const checkpointsBySession = new Map<string, ICompactionCheckpoint>()
         const sessionOrder: string[] = []
         const seenSessionIds = new Set<string>()
@@ -350,7 +350,7 @@ function sessionRecord(info: ISessionInfo): ISessionRecord {
     }
 }
 
-function messageRecord(message: TAgentMessage): IMessageRecord {
+function messageRecord(message: AgentMessage): IMessageRecord {
     return {
         recordType: "message",
         version: 2,

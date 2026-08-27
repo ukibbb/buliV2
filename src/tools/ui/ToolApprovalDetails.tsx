@@ -1,12 +1,12 @@
 import { pathToFiletype } from "@opentui/core"
 import type { ReactNode } from "react"
 
-import type { TToolApprovalRequest } from "@/agent"
+import type { ToolApprovalRequest } from "@/agent"
 import { syntax, theme } from "@/terminal/theme"
 import { splitWorkspaceDiff } from "@/tools/ui/workspace-diff"
 
 interface IToolApprovalDetailsProps {
-    readonly request: TToolApprovalRequest
+    readonly request: ToolApprovalRequest
 }
 
 /** Renders request-specific approval content without owning interaction state. */

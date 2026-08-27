@@ -2,28 +2,29 @@ import { expect, test } from "bun:test"
 import { Buffer } from "node:buffer"
 
 import type {
-  IAgentEvent,
-  IAgentModel,
-  IAgentModelEvent,
-  IAgentModelRequest,
-  IAgentTool,
-  IAgentToolExecutionContext,
-  IUserMessage,
+  AgentEvent,
+  AgentInputQueue,
+  AgentModel,
+  AgentModelEvent,
+  AgentModelRequest,
+  AgentTool,
+  AgentToolContext,
+  UserMessage,
 } from "@/agent"
-import { runAgentLoop } from "@/agent/agent-loop"
+import { runAgentLoop } from "@/agent"
 
 const RUN_ID = "run-1"
 
-class ScriptedModel implements IAgentModel {
-  readonly requests: IAgentModelRequest[] = []
+class ScriptedModel implements AgentModel {
+  readonly requests: AgentModelRequest[] = []
 
   constructor(
     private readonly script:
-      | readonly IAgentModelEvent[]
-      | ((iteration: number) => readonly IAgentModelEvent[]),
+      | readonly AgentModelEvent[]
+      | ((iteration: number) => readonly AgentModelEvent[]),
   ) {}
 
-  async *stream(request: IAgentModelRequest): AsyncIterable<IAgentModelEvent> {
+  async *stream(request: AgentModelRequest): AsyncIterable<AgentModelEvent> {
     const iteration = this.requests.length
     this.requests.push({
       ...request,
@@ -46,24 +47,28 @@ test("emits an explicit lifecycle for a text response", async () => {
     { type: "text-end", id: "answer" },
     { type: "finish", reason: "stop" },
   ])
-  const events: IAgentEvent[] = []
+  const events: AgentEvent[] = []
 
-  const result = await runAgentLoop({
-    sessionId: "session-1",
-    runId: RUN_ID,
-    systemPrompt: "System",
-    messages: [],
-    prompt: userMessage("Question"),
-    model,
-    reasoningEffort: "medium",
-    tools: [],
-    signal: new AbortController().signal,
-    emit: (event) => {
-      events.push(structuredClone(event))
+  const result = await runAgentLoop(
+    userMessage("Question"),
+    {
+      systemPrompt: "System",
+      messages: [],
+      tools: [],
     },
-    now: timeGenerator(),
-    generateId: idGenerator(),
-  })
+    {
+      sessionId: "session-1",
+      runId: RUN_ID,
+      model,
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+      emit: (event) => {
+        events.push(structuredClone(event))
+      },
+      now: timeGenerator(),
+      generateId: idGenerator(),
+    },
+  )
 
   expect(events.map((event) => event.type)).toEqual([
     "agent_start",
@@ -123,7 +128,7 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
   let maximumActiveToolCalls = 0
   const executionRunIds: string[] = []
   const executionMessages: Array<readonly unknown[] | undefined> = []
-  const readFileTool: IAgentTool = {
+  const readFileTool: AgentTool = {
     name: "read_file",
     description: "Read a file",
     inputSchema: { type: "object" },
@@ -139,24 +144,28 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
       return `contents:${String(input.path)}`
     },
   }
-  const events: IAgentEvent[] = []
+  const events: AgentEvent[] = []
 
-  const result = await runAgentLoop({
-    sessionId: "session-1",
-    runId: RUN_ID,
-    systemPrompt: "System",
-    messages: [],
-    prompt: userMessage("Read"),
-    model,
-    reasoningEffort: "medium",
-    tools: [readFileTool],
-    signal: new AbortController().signal,
-    emit: (event) => {
-      events.push(structuredClone(event))
+  const result = await runAgentLoop(
+    userMessage("Read"),
+    {
+      systemPrompt: "System",
+      messages: [],
+      tools: [readFileTool],
     },
-    now: timeGenerator(),
-    generateId: idGenerator(),
-  })
+    {
+      sessionId: "session-1",
+      runId: RUN_ID,
+      model,
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+      emit: (event) => {
+        events.push(structuredClone(event))
+      },
+      now: timeGenerator(),
+      generateId: idGenerator(),
+    },
+  )
 
   const readmeResult = {
     id: "generated-2",
@@ -271,12 +280,64 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
   })
 })
 
+test("does not execute tool calls from an output-limited response", async () => {
+  const model = new ScriptedModel((iteration) => iteration === 0
+    ? [
+        {
+          type: "tool-call",
+          toolCallId: "call-truncated",
+          toolName: "write_something",
+          input: { content: "apparently valid but truncated" },
+        },
+        { type: "finish", reason: "length" },
+      ]
+    : [{ type: "finish", reason: "stop" }])
+  let executions = 0
+  const tool: AgentTool = {
+    name: "write_something",
+    description: "Mutate external state",
+    inputSchema: { type: "object" },
+    execute: async () => {
+      executions += 1
+      return "mutated"
+    },
+  }
+
+  const result = await runAgentLoop(
+    userMessage("Write"),
+    {
+      systemPrompt: "System",
+      messages: [],
+      tools: [tool],
+    },
+    {
+      sessionId: "session-1",
+      runId: RUN_ID,
+      model,
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+      emit: () => undefined,
+      now: timeGenerator(),
+      generateId: idGenerator(),
+    },
+  )
+
+  expect(executions).toBe(0)
+  expect(model.requests).toHaveLength(2)
+  expect(result.messages.find((message) => message.role === "toolResult"))
+    .toMatchObject({
+      toolCallId: "call-truncated",
+      isError: true,
+      content: expect.stringContaining("output token limit"),
+    })
+})
+
 test("supplies session, model, and conversation context to host tools", async () => {
   let iteration = 0
-  const model: IAgentModel = {
+  const model: AgentModel = {
     async *stream(request) {
       request.reportProviderAccountId?.("account-context")
-      const events: readonly IAgentModelEvent[] = iteration++ === 0
+      const events: readonly AgentModelEvent[] = iteration++ === 0
         ? [
             {
               type: "tool-call",
@@ -290,8 +351,8 @@ test("supplies session, model, and conversation context to host tools", async ()
       for (const event of events) yield event
     },
   }
-  let observedContext: IAgentToolExecutionContext | undefined
-  const tool: IAgentTool = {
+  let observedContext: AgentToolContext | undefined
+  const tool: AgentTool = {
     name: "inspect_context",
     description: "Inspect host context",
     inputSchema: { type: "object", additionalProperties: false },
@@ -302,28 +363,32 @@ test("supplies session, model, and conversation context to host tools", async ()
     },
   }
 
-  await runAgentLoop({
-    sessionId: "session-context",
-    runId: RUN_ID,
-    systemPrompt: "System",
-    messages: [userMessage("Previous question")],
-    prompt: {
+  await runAgentLoop(
+    {
       ...userMessage("Current question"),
       sessionId: "session-context",
     },
-    model,
-    modelProfile: {
-      providerId: "openai",
-      modelId: "gpt-5.6-sol",
-      contextWindowTokens: 128_000,
+    {
+      systemPrompt: "System",
+      messages: [userMessage("Previous question")],
+      tools: [tool],
     },
-    reasoningEffort: "medium",
-    tools: [tool],
-    signal: new AbortController().signal,
-    emit: () => undefined,
-    now: timeGenerator(),
-    generateId: idGenerator(),
-  })
+    {
+      sessionId: "session-context",
+      runId: RUN_ID,
+      model,
+      modelProfile: {
+        providerId: "openai",
+        modelId: "gpt-5.6-sol",
+        contextWindowTokens: 128_000,
+      },
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+      emit: () => undefined,
+      now: timeGenerator(),
+      generateId: idGenerator(),
+    },
+  )
 
   if (!observedContext) throw new Error("Expected tool execution context")
   expect(observedContext.sessionId).toBe("session-context")
@@ -428,7 +493,7 @@ test("turns invalid structured tool results into errors", async () => {
   ]
 
   for (const testCase of cases) {
-    const execute = (async () => testCase.value) as unknown as IAgentTool["execute"]
+    const execute = (async () => testCase.value) as unknown as AgentTool["execute"]
     const { toolResult } = await executeSingleTool(execute)
     expect(toolResult).toMatchObject({
       content: testCase.error,
@@ -538,7 +603,7 @@ test("always gives tools an approval bridge with exact execution context", async
       ]
     : [{ type: "finish", reason: "stop" }])
   const decisions: string[] = []
-  const tool: IAgentTool = {
+  const tool: AgentTool = {
     name: "run_command",
     approvalKind: "command",
     description: "Run a command",
@@ -566,34 +631,38 @@ test("always gives tools an approval bridge with exact execution context", async
     aborted: boolean
   }> = []
 
-  const result = await runAgentLoop({
-    sessionId: "session-1",
-    runId: RUN_ID,
-    systemPrompt: "System",
-    messages: [],
-    prompt: userMessage("List the workspace files"),
-    model,
-    reasoningEffort: "medium",
-    tools: [tool],
-    signal: new AbortController().signal,
-    emit: () => undefined,
-    requestApproval: async (draft, context) => {
-      expect(draft).toMatchObject({
-        kind: "command",
-        command: "ls",
-        cwd: "/workspace",
-      })
-      approvalContexts.push({
-        sessionId: context.sessionId,
-        runId: context.runId,
-        toolCallId: context.toolCallId,
-        aborted: context.signal.aborted,
-      })
-      return "copy"
+  const result = await runAgentLoop(
+    userMessage("List the workspace files"),
+    {
+      systemPrompt: "System",
+      messages: [],
+      tools: [tool],
     },
-    now: timeGenerator(),
-    generateId: idGenerator(),
-  })
+    {
+      sessionId: "session-1",
+      runId: RUN_ID,
+      model,
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+      emit: () => undefined,
+      requestApproval: async (draft, context) => {
+        expect(draft).toMatchObject({
+          kind: "command",
+          command: "ls",
+          cwd: "/workspace",
+        })
+        approvalContexts.push({
+          sessionId: context.sessionId,
+          runId: context.runId,
+          toolCallId: context.toolCallId,
+          aborted: context.signal.aborted,
+        })
+        return "copy"
+      },
+      now: timeGenerator(),
+      generateId: idGenerator(),
+    },
+  )
 
   expect(decisions).toEqual(["copy"])
   expect(approvalContexts).toEqual([{
@@ -626,7 +695,7 @@ test("allows one approval request per tool call", async () => {
     diff: "--- a/file.ts\n+++ b/file.ts",
     paths: ["file.ts"],
   }
-  const tool: IAgentTool = {
+  const tool: AgentTool = {
     name: "apply_patch",
     approvalKind: "patch",
     description: "Apply a patch",
@@ -639,24 +708,28 @@ test("allows one approval request per tool call", async () => {
     },
   }
 
-  const result = await runAgentLoop({
-    sessionId: "session-1",
-    runId: RUN_ID,
-    systemPrompt: "System",
-    messages: [],
-    prompt: userMessage("Apply the patch"),
-    model,
-    reasoningEffort: "medium",
-    tools: [tool],
-    signal: new AbortController().signal,
-    emit: () => undefined,
-    requestApproval: async () => {
-      approvals += 1
-      return "reject"
+  const result = await runAgentLoop(
+    userMessage("Apply the patch"),
+    {
+      systemPrompt: "System",
+      messages: [],
+      tools: [tool],
     },
-    now: timeGenerator(),
-    generateId: idGenerator(),
-  })
+    {
+      sessionId: "session-1",
+      runId: RUN_ID,
+      model,
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+      emit: () => undefined,
+      requestApproval: async () => {
+        approvals += 1
+        return "reject"
+      },
+      now: timeGenerator(),
+      generateId: idGenerator(),
+    },
+  )
 
   expect(approvals).toBe(1)
   expect(result.messages.find((message) => message.role === "toolResult"))
@@ -667,20 +740,20 @@ test("allows one approval request per tool call", async () => {
 })
 
 test("exposes every registered tool for every prompt", async () => {
-  const readTool: IAgentTool = {
+  const readTool: AgentTool = {
     name: "read",
     description: "Read",
     inputSchema: { type: "object" },
     execute: async () => "read",
   }
-  const patchTool: IAgentTool = {
+  const patchTool: AgentTool = {
     name: "apply_patch",
     approvalKind: "patch",
     description: "Patch",
     inputSchema: { type: "object" },
     execute: async () => "patch",
   }
-  const commandTool: IAgentTool = {
+  const commandTool: AgentTool = {
     name: "bash",
     approvalKind: "command",
     description: "Command",
@@ -696,18 +769,22 @@ test("exposes every registered tool for every prompt", async () => {
 
   for (const prompt of prompts) {
     const model = new ScriptedModel([{ type: "finish", reason: "stop" }])
-    await runAgentLoop({
-      sessionId: "session-1",
-      runId: RUN_ID,
-      systemPrompt: "System",
-      messages: [],
-      prompt: userMessage(prompt),
-      model,
-      reasoningEffort: "medium",
-      tools: [readTool, patchTool, commandTool],
-      signal: new AbortController().signal,
-      emit: () => undefined,
-    })
+    await runAgentLoop(
+      userMessage(prompt),
+      {
+        systemPrompt: "System",
+        messages: [],
+        tools: [readTool, patchTool, commandTool],
+      },
+      {
+        sessionId: "session-1",
+        runId: RUN_ID,
+        model,
+        reasoningEffort: "medium",
+        signal: new AbortController().signal,
+        emit: () => undefined,
+      },
+    )
 
     expect(model.requests[0]?.tools.map((tool) => tool.name)).toEqual([
       "read",
@@ -719,7 +796,7 @@ test("exposes every registered tool for every prompt", async () => {
 
 test("exposes action tools independently of message history", async () => {
   const model = new ScriptedModel([{ type: "finish", reason: "stop" }])
-  const patchTool: IAgentTool = {
+  const patchTool: AgentTool = {
     name: "apply_patch",
     approvalKind: "patch",
     description: "Patch",
@@ -732,18 +809,22 @@ test("exposes action tools independently of message history", async () => {
     runId: "previous-run",
   }
 
-  await runAgentLoop({
-    sessionId: "session-1",
-    runId: RUN_ID,
-    systemPrompt: "System",
-    messages: [previousRequest],
-    prompt: userMessage("Continue"),
-    model,
-    reasoningEffort: "medium",
-    tools: [patchTool],
-    signal: new AbortController().signal,
-    emit: () => undefined,
-  })
+  await runAgentLoop(
+    userMessage("Continue"),
+    {
+      systemPrompt: "System",
+      messages: [previousRequest],
+      tools: [patchTool],
+    },
+    {
+      sessionId: "session-1",
+      runId: RUN_ID,
+      model,
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+      emit: () => undefined,
+    },
+  )
 
   expect(model.requests[0]?.tools.map((tool) => tool.name)).toEqual([
     "apply_patch",
@@ -777,13 +858,13 @@ test("keeps all tools available across read and approval continuations", async (
     return [{ type: "finish", reason: "stop" }]
   })
   let approvals = 0
-  const readTool: IAgentTool = {
+  const readTool: AgentTool = {
     name: "read",
     description: "Read",
     inputSchema: { type: "object", additionalProperties: false },
     execute: async () => "contents",
   }
-  const patchTool: IAgentTool = {
+  const patchTool: AgentTool = {
     name: "apply_patch",
     approvalKind: "patch",
     description: "Patch",
@@ -800,24 +881,28 @@ test("keeps all tools available across read and approval continuations", async (
     },
   }
 
-  await runAgentLoop({
-    sessionId: "session-1",
-    runId: RUN_ID,
-    systemPrompt: "System",
-    messages: [],
-    prompt: userMessage("Implement the parser change"),
-    model,
-    reasoningEffort: "medium",
-    tools: [readTool, patchTool],
-    signal: new AbortController().signal,
-    emit: () => undefined,
-    requestApproval: async () => {
-      approvals += 1
-      return "reject"
+  await runAgentLoop(
+    userMessage("Implement the parser change"),
+    {
+      systemPrompt: "System",
+      messages: [],
+      tools: [readTool, patchTool],
     },
-    now: timeGenerator(),
-    generateId: idGenerator(),
-  })
+    {
+      sessionId: "session-1",
+      runId: RUN_ID,
+      model,
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+      emit: () => undefined,
+      requestApproval: async () => {
+        approvals += 1
+        return "reject"
+      },
+      now: timeGenerator(),
+      generateId: idGenerator(),
+    },
+  )
 
   expect(approvals).toBe(1)
   expect(model.requests[0]?.tools.map((tool) => tool.name)).toEqual([
@@ -854,7 +939,7 @@ test("lets each action call request its own approval", async () => {
     : [{ type: "finish", reason: "stop" }])
   let executions = 0
   let approvals = 0
-  const tool: IAgentTool = {
+  const tool: AgentTool = {
     name: "apply_patch",
     approvalKind: "patch",
     description: "Patch",
@@ -872,24 +957,28 @@ test("lets each action call request its own approval", async () => {
     },
   }
 
-  const result = await runAgentLoop({
-    sessionId: "session-1",
-    runId: RUN_ID,
-    systemPrompt: "System",
-    messages: [],
-    prompt: userMessage("Prepare both patches"),
-    model,
-    reasoningEffort: "medium",
-    tools: [tool],
-    signal: new AbortController().signal,
-    emit: () => undefined,
-    requestApproval: async () => {
-      approvals += 1
-      return "reject"
+  const result = await runAgentLoop(
+    userMessage("Prepare both patches"),
+    {
+      systemPrompt: "System",
+      messages: [],
+      tools: [tool],
     },
-    now: timeGenerator(),
-    generateId: idGenerator(),
-  })
+    {
+      sessionId: "session-1",
+      runId: RUN_ID,
+      model,
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+      emit: () => undefined,
+      requestApproval: async () => {
+        approvals += 1
+        return "reject"
+      },
+      now: timeGenerator(),
+      generateId: idGenerator(),
+    },
+  )
 
   expect(executions).toBe(2)
   expect(approvals).toBe(2)
@@ -907,7 +996,7 @@ test("lets each action call request its own approval", async () => {
 
 test("injects steering only after the complete tool batch", async () => {
   const order: string[] = []
-  const steering: IUserMessage[] = []
+  const steering: UserMessage[] = []
   const model = new ScriptedModel((iteration) => {
     order.push(`model:${iteration}`)
     return iteration === 0
@@ -928,7 +1017,7 @@ test("injects steering only after the complete tool batch", async () => {
         ]
       : [{ type: "finish", reason: "stop" }]
   })
-  const tool: IAgentTool = {
+  const tool: AgentTool = {
     name: "read_file",
     description: "Read a file",
     inputSchema: { type: "object" },
@@ -937,40 +1026,46 @@ test("injects steering only after the complete tool batch", async () => {
       return String(input.path)
     },
   }
-  const events: IAgentEvent[] = []
+  const events: AgentEvent[] = []
 
-  const result = await runAgentLoop({
-    sessionId: "session-1",
-    runId: RUN_ID,
-    systemPrompt: "System",
-    messages: [],
-    prompt: userMessage("Read both files"),
-    model,
-    reasoningEffort: "medium",
-    tools: [tool],
-    signal: new AbortController().signal,
-    emit: (event) => {
-      events.push(structuredClone(event))
-      if (
-        event.type === "tool_execution_start"
-        && event.toolCallId === "call-first"
-      ) {
-        steering.push({
-          id: "steering-during-tools",
-          sessionId: "session-1",
-          runId: RUN_ID,
-          role: "user",
-          source: "steer",
-          content: "Check both results",
-          createdAt: 3,
-        })
-      }
+  const result = await runAgentLoop(
+    userMessage("Read both files"),
+    {
+      systemPrompt: "System",
+      messages: [],
+      tools: [tool],
     },
-    hasSteeringMessages: () => steering.length > 0,
-    takeSteeringMessage: () => steering.shift(),
-    now: timeGenerator(),
-    generateId: idGenerator(),
-  })
+    {
+      sessionId: "session-1",
+      runId: RUN_ID,
+      model,
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+      emit: (event) => {
+        events.push(structuredClone(event))
+        if (
+          event.type === "tool_execution_start"
+          && event.toolCallId === "call-first"
+        ) {
+          steering.push({
+            id: "steering-during-tools",
+            sessionId: "session-1",
+            runId: RUN_ID,
+            role: "user",
+            source: "steer",
+            content: "Check both results",
+            createdAt: 3,
+          })
+        }
+      },
+      inputQueue: testInputQueue({
+        hasSteering: () => steering.length > 0,
+        takeSteering: () => steering.shift(),
+      }),
+      now: timeGenerator(),
+      generateId: idGenerator(),
+    },
+  )
 
   expect(order).toEqual([
     "model:0",
@@ -998,8 +1093,8 @@ test("injects steering only after the complete tool batch", async () => {
 })
 
 test("delivers follow-up only after tool continuation and steering", async () => {
-  const steering: IUserMessage[] = []
-  const followUps: IUserMessage[] = []
+  const steering: UserMessage[] = []
+  const followUps: UserMessage[] = []
   const model = new ScriptedModel((iteration) => iteration === 0
     ? [
         {
@@ -1011,51 +1106,57 @@ test("delivers follow-up only after tool continuation and steering", async () =>
         { type: "finish", reason: "tool-calls" },
       ]
     : [{ type: "finish", reason: "stop" }])
-  const tool: IAgentTool = {
+  const tool: AgentTool = {
     name: "read_file",
     description: "Read a file",
     inputSchema: { type: "object" },
     execute: async () => "contents",
   }
 
-  const result = await runAgentLoop({
-    sessionId: "session-1",
-    runId: RUN_ID,
-    systemPrompt: "System",
-    messages: [],
-    prompt: userMessage("Read the file"),
-    model,
-    reasoningEffort: "medium",
-    tools: [tool],
-    signal: new AbortController().signal,
-    emit: (event) => {
-      if (event.type !== "tool_execution_start") return
-      steering.push({
-        id: "steering-1",
-        sessionId: "session-1",
-        runId: RUN_ID,
-        role: "user",
-        source: "steer",
-        content: "Check the result first",
-        createdAt: 2,
-      })
-      followUps.push({
-        id: "follow-up-1",
-        sessionId: "session-1",
-        runId: RUN_ID,
-        role: "user",
-        source: "followUp",
-        content: "Then summarize everything",
-        createdAt: 3,
-      })
+  const result = await runAgentLoop(
+    userMessage("Read the file"),
+    {
+      systemPrompt: "System",
+      messages: [],
+      tools: [tool],
     },
-    hasSteeringMessages: () => steering.length > 0,
-    takeSteeringMessage: () => steering.shift(),
-    hasFollowUpMessages: () => followUps.length > 0,
-    takeFollowUpMessage: () => followUps.shift(),
-    now: timeGenerator(),
-    generateId: idGenerator(),
-  })
+    {
+      sessionId: "session-1",
+      runId: RUN_ID,
+      model,
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+      emit: (event) => {
+        if (event.type !== "tool_execution_start") return
+        steering.push({
+          id: "steering-1",
+          sessionId: "session-1",
+          runId: RUN_ID,
+          role: "user",
+          source: "steer",
+          content: "Check the result first",
+          createdAt: 2,
+        })
+        followUps.push({
+          id: "follow-up-1",
+          sessionId: "session-1",
+          runId: RUN_ID,
+          role: "user",
+          source: "followUp",
+          content: "Then summarize everything",
+          createdAt: 3,
+        })
+      },
+      inputQueue: testInputQueue({
+        hasSteering: () => steering.length > 0,
+        takeSteering: () => steering.shift(),
+        hasFollowUp: () => followUps.length > 0,
+        takeFollowUp: () => followUps.shift(),
+      }),
+      now: timeGenerator(),
+      generateId: idGenerator(),
+    },
+  )
 
   expect(model.requests).toHaveLength(3)
   expect(model.requests[1]?.messages.at(-1)).toMatchObject({
@@ -1088,20 +1189,24 @@ test("turns an unknown local tool into a model-visible error", async () => {
       ]
     : [{ type: "finish", reason: "stop" }])
 
-  await runAgentLoop({
-    sessionId: "session-1",
-    runId: RUN_ID,
-    systemPrompt: "System",
-    messages: [],
-    prompt: userMessage("Run"),
-    model,
-    reasoningEffort: "medium",
-    tools: [],
-    signal: new AbortController().signal,
-    emit: () => undefined,
-    now: timeGenerator(),
-    generateId: idGenerator(),
-  })
+  await runAgentLoop(
+    userMessage("Run"),
+    {
+      systemPrompt: "System",
+      messages: [],
+      tools: [],
+    },
+    {
+      sessionId: "session-1",
+      runId: RUN_ID,
+      model,
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+      emit: () => undefined,
+      now: timeGenerator(),
+      generateId: idGenerator(),
+    },
+  )
 
   expect(model.requests[1]?.messages.at(-1)).toEqual({
     id: "generated-2",
@@ -1118,7 +1223,7 @@ test("turns an unknown local tool into a model-visible error", async () => {
 
 test("gives abort precedence over a racing provider finish", async () => {
   const controller = new AbortController()
-  const model: IAgentModel = {
+  const model: AgentModel = {
     async *stream() {
       yield {
         type: "tool-call",
@@ -1133,20 +1238,24 @@ test("gives abort precedence over a racing provider finish", async () => {
     },
   }
 
-  const result = await runAgentLoop({
-    sessionId: "session-1",
-    runId: RUN_ID,
-    systemPrompt: "System",
-    messages: [],
-    prompt: userMessage("Question"),
-    model,
-    reasoningEffort: "medium",
-    tools: [],
-    signal: controller.signal,
-    emit: () => undefined,
-    now: timeGenerator(),
-    generateId: idGenerator(),
-  })
+  const result = await runAgentLoop(
+    userMessage("Question"),
+    {
+      systemPrompt: "System",
+      messages: [],
+      tools: [],
+    },
+    {
+      sessionId: "session-1",
+      runId: RUN_ID,
+      model,
+      reasoningEffort: "medium",
+      signal: controller.signal,
+      emit: () => undefined,
+      now: timeGenerator(),
+      generateId: idGenerator(),
+    },
+  )
 
   const assistant = result.messages.at(-1)
   expect(result.reason).toBe("aborted")
@@ -1181,29 +1290,33 @@ test("stops a tool continuation when aborted during turn_end", async () => {
     },
     { type: "finish", reason: "tool-calls" },
   ])
-  const tool: IAgentTool = {
+  const tool: AgentTool = {
     name: "read_file",
     description: "Read a file",
     inputSchema: { type: "object" },
     execute: async () => "contents",
   }
 
-  const result = await runAgentLoop({
-    sessionId: "session-1",
-    runId: RUN_ID,
-    systemPrompt: "System",
-    messages: [],
-    prompt: userMessage("Read"),
-    model,
-    reasoningEffort: "medium",
-    tools: [tool],
-    signal: controller.signal,
-    emit: (event) => {
-      if (event.type === "turn_end") controller.abort("Stopped during turn_end")
+  const result = await runAgentLoop(
+    userMessage("Read"),
+    {
+      systemPrompt: "System",
+      messages: [],
+      tools: [tool],
     },
-    now: timeGenerator(),
-    generateId: idGenerator(),
-  })
+    {
+      sessionId: "session-1",
+      runId: RUN_ID,
+      model,
+      reasoningEffort: "medium",
+      signal: controller.signal,
+      emit: (event) => {
+        if (event.type === "turn_end") controller.abort("Stopped during turn_end")
+      },
+      now: timeGenerator(),
+      generateId: idGenerator(),
+    },
+  )
 
   expect(result.reason).toBe("aborted")
 })
@@ -1215,50 +1328,58 @@ test("gives abort precedence over a provider error during turn_end", async () =>
     error: new Error("Provider failed"),
   }])
 
-  const result = await runAgentLoop({
-    sessionId: "session-1",
-    runId: RUN_ID,
-    systemPrompt: "System",
-    messages: [],
-    prompt: userMessage("Question"),
-    model,
-    reasoningEffort: "medium",
-    tools: [],
-    signal: controller.signal,
-    emit: (event) => {
-      if (event.type === "turn_end") controller.abort("Stopped during turn_end")
+  const result = await runAgentLoop(
+    userMessage("Question"),
+    {
+      systemPrompt: "System",
+      messages: [],
+      tools: [],
     },
-    now: timeGenerator(),
-    generateId: idGenerator(),
-  })
+    {
+      sessionId: "session-1",
+      runId: RUN_ID,
+      model,
+      reasoningEffort: "medium",
+      signal: controller.signal,
+      emit: (event) => {
+        if (event.type === "turn_end") controller.abort("Stopped during turn_end")
+      },
+      now: timeGenerator(),
+      generateId: idGenerator(),
+    },
+  )
 
   expect(result.reason).toBe("aborted")
 })
 
 test("rejects duplicate tool names before starting the model", async () => {
   const model = new ScriptedModel([{ type: "finish", reason: "stop" }])
-  const duplicate: IAgentTool = {
+  const duplicate: AgentTool = {
     name: "read_file",
     description: "Read",
     inputSchema: { type: "object" },
     execute: async () => "unused",
   }
-  const events: IAgentEvent[] = []
+  const events: AgentEvent[] = []
 
-  await expect(runAgentLoop({
-    sessionId: "session-1",
-    runId: RUN_ID,
-    systemPrompt: "System",
-    messages: [],
-    prompt: userMessage("Question"),
-    model,
-    reasoningEffort: "medium",
-    tools: [duplicate, { ...duplicate }],
-    signal: new AbortController().signal,
-    emit: (event) => {
-      events.push(event)
+  await expect(runAgentLoop(
+    userMessage("Question"),
+    {
+      systemPrompt: "System",
+      messages: [],
+      tools: [duplicate, { ...duplicate }],
     },
-  })).rejects.toThrow("Duplicate tool: read_file")
+    {
+      sessionId: "session-1",
+      runId: RUN_ID,
+      model,
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+      emit: (event) => {
+        events.push(event)
+      },
+    },
+  )).rejects.toThrow("Duplicate tool: read_file")
 
   expect(model.requests).toHaveLength(0)
   expect(events).toHaveLength(0)
@@ -1277,7 +1398,7 @@ test("turns invalid tool input into a model-visible result without executing", a
       ]
     : [{ type: "finish", reason: "stop" }])
   let executionCount = 0
-  const tool: IAgentTool = {
+  const tool: AgentTool = {
     name: "read_file",
     description: "Read",
     inputSchema: {
@@ -1292,20 +1413,24 @@ test("turns invalid tool input into a model-visible result without executing", a
     },
   }
 
-  const result = await runAgentLoop({
-    sessionId: "session-1",
-    runId: RUN_ID,
-    systemPrompt: "System",
-    messages: [],
-    prompt: userMessage("Read"),
-    model,
-    reasoningEffort: "medium",
-    tools: [tool],
-    signal: new AbortController().signal,
-    emit: () => {},
-    now: timeGenerator(),
-    generateId: idGenerator(),
-  })
+  const result = await runAgentLoop(
+    userMessage("Read"),
+    {
+      systemPrompt: "System",
+      messages: [],
+      tools: [tool],
+    },
+    {
+      sessionId: "session-1",
+      runId: RUN_ID,
+      model,
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+      emit: () => {},
+      now: timeGenerator(),
+      generateId: idGenerator(),
+    },
+  )
 
   const toolResult = result.messages.find((message) => message.role === "toolResult")
   expect(executionCount).toBe(0)
@@ -1331,7 +1456,7 @@ test("serializes tool progress before the final result and ignores late updates"
       ]
     : [{ type: "finish", reason: "stop" }])
   let lateProgress: ((progress: string) => void) | undefined
-  const tool: IAgentTool = {
+  const tool: AgentTool = {
     name: "scan",
     description: "Scan",
     inputSchema: { type: "object", additionalProperties: false },
@@ -1343,25 +1468,29 @@ test("serializes tool progress before the final result and ignores late updates"
       return "complete"
     },
   }
-  const events: IAgentEvent[] = []
+  const events: AgentEvent[] = []
 
-  await runAgentLoop({
-    sessionId: "session-1",
-    runId: RUN_ID,
-    systemPrompt: "System",
-    messages: [],
-    prompt: userMessage("Scan"),
-    model,
-    reasoningEffort: "medium",
-    tools: [tool],
-    signal: new AbortController().signal,
-    emit: async (event) => {
-      await Promise.resolve()
-      events.push(structuredClone(event))
+  await runAgentLoop(
+    userMessage("Scan"),
+    {
+      systemPrompt: "System",
+      messages: [],
+      tools: [tool],
     },
-    now: timeGenerator(),
-    generateId: idGenerator(),
-  })
+    {
+      sessionId: "session-1",
+      runId: RUN_ID,
+      model,
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+      emit: async (event) => {
+        await Promise.resolve()
+        events.push(structuredClone(event))
+      },
+      now: timeGenerator(),
+      generateId: idGenerator(),
+    },
+  )
   lateProgress?.("late")
   await Promise.resolve()
 
@@ -1407,7 +1536,7 @@ test("truncates custom tool content and summary before persistence and continuat
         { type: "finish", reason: "tool-calls" },
       ]
     : [{ type: "finish", reason: "stop" }])
-  const tool: IAgentTool = {
+  const tool: AgentTool = {
     name: "large",
     description: "Large output",
     inputSchema: { type: "object", additionalProperties: false },
@@ -1418,20 +1547,24 @@ test("truncates custom tool content and summary before persistence and continuat
     }),
   }
 
-  const result = await runAgentLoop({
-    sessionId: "session-1",
-    runId: RUN_ID,
-    systemPrompt: "System",
-    messages: [],
-    prompt: userMessage("Run"),
-    model,
-    reasoningEffort: "medium",
-    tools: [tool],
-    signal: new AbortController().signal,
-    emit: () => {},
-    now: timeGenerator(),
-    generateId: idGenerator(),
-  })
+  const result = await runAgentLoop(
+    userMessage("Run"),
+    {
+      systemPrompt: "System",
+      messages: [],
+      tools: [tool],
+    },
+    {
+      sessionId: "session-1",
+      runId: RUN_ID,
+      model,
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+      emit: () => {},
+      now: timeGenerator(),
+      generateId: idGenerator(),
+    },
+  )
 
   const persisted = result.messages.find((message) => message.role === "toolResult")
   const continued = model.requests[1]?.messages.find(
@@ -1452,7 +1585,7 @@ test("truncates custom tool content and summary before persistence and continuat
 })
 
 async function executeSingleTool(
-  execute: IAgentTool["execute"],
+  execute: AgentTool["execute"],
   signal: AbortSignal = new AbortController().signal,
 ) {
   const model = new ScriptedModel((iteration) => iteration === 0
@@ -1466,28 +1599,46 @@ async function executeSingleTool(
         { type: "finish", reason: "tool-calls" },
       ]
     : [{ type: "finish", reason: "stop" }])
-  const result = await runAgentLoop({
-    sessionId: "session-1",
-    runId: RUN_ID,
-    systemPrompt: "System",
-    messages: [],
-    prompt: userMessage("Run tool"),
-    model,
-    reasoningEffort: "medium",
-    tools: [{
-      name: "test_tool",
-      description: "Test tool",
-      inputSchema: { type: "object", additionalProperties: false },
-      execute,
-    }],
-    signal,
-    emit: () => undefined,
-    now: timeGenerator(),
-    generateId: idGenerator(),
-  })
+  const result = await runAgentLoop(
+    userMessage("Run tool"),
+    {
+      systemPrompt: "System",
+      messages: [],
+      tools: [{
+        name: "test_tool",
+        description: "Test tool",
+        inputSchema: { type: "object", additionalProperties: false },
+        execute,
+      }],
+    },
+    {
+      sessionId: "session-1",
+      runId: RUN_ID,
+      model,
+      reasoningEffort: "medium",
+      signal,
+      emit: () => undefined,
+      now: timeGenerator(),
+      generateId: idGenerator(),
+    },
+  )
   const toolResult = result.messages.find((message) => message.role === "toolResult")
   if (toolResult?.role !== "toolResult") throw new Error("Expected tool result")
   return { result, toolResult }
+}
+
+function testInputQueue(
+  overrides: Partial<AgentInputQueue>,
+): AgentInputQueue {
+  return {
+    hasSteering: () => false,
+    takeSteering: () => undefined,
+    hasFollowUp: () => false,
+    takeFollowUp: () => undefined,
+    restore: () => undefined,
+    close: () => undefined,
+    ...overrides,
+  }
 }
 
 function userMessage(text: string) {

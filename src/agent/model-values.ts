@@ -1,5 +1,5 @@
 /** Provider-neutral model metadata shared by agent, sessions, application and UI. */
-export interface IModelProfile {
+export interface ModelProfile {
     readonly providerId: string
     readonly modelId: string
     // Missing means that the provider has no verified context limit yet.
@@ -7,7 +7,7 @@ export interface IModelProfile {
 }
 
 /** Token accounting persisted with assistant messages and compaction checkpoints. */
-export interface IModelUsage {
+export interface ModelUsage {
     readonly inputTokens?: number
     readonly outputTokens?: number
     readonly totalTokens?: number
@@ -17,7 +17,7 @@ export interface IModelUsage {
 }
 
 /** Reasoning levels understood by application selection and model adapters. */
-export type TReasoningEffort =
+export type ReasoningEffort =
     | "none"
     | "minimal"
     | "low"

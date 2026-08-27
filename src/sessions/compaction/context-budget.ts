@@ -1,9 +1,9 @@
 import { Buffer } from "node:buffer"
 
 import type {
-    IAgentToolDescriptor,
-    IModelProfile,
-    TAgentMessage,
+    AgentMessage,
+    AgentToolDescriptor,
+    ModelProfile,
 } from "@/agent"
 
 /** Context usage at or above this ratio is eligible for compaction. */
@@ -17,9 +17,9 @@ export const ESTIMATED_IMAGE_TOKENS = 2_000
 export interface IContextInput {
     readonly systemPrompt: string
     readonly contextSummary?: string
-    readonly messages: readonly TAgentMessage[]
-    readonly tools: readonly IAgentToolDescriptor[]
-    readonly modelProfile?: IModelProfile
+    readonly messages: readonly AgentMessage[]
+    readonly tools: readonly AgentToolDescriptor[]
+    readonly modelProfile?: ModelProfile
 }
 
 /** Estimated request usage plus model-limit information when it is known. */
@@ -51,13 +51,13 @@ export function estimateContextInputTokens(input: IContextInput): number {
 
 /** Estimates only the serialized message portion of a provider request. */
 export function estimateMessagesInputTokens(
-    messages: readonly TAgentMessage[],
+    messages: readonly AgentMessage[],
 ): number {
     return estimateSerializedTokens(providerVisibleMessages(messages))
         + estimatedImageTokens(messages)
 }
 
-function estimatedImageTokens(messages: readonly TAgentMessage[]): number {
+function estimatedImageTokens(messages: readonly AgentMessage[]): number {
     return messages.reduce((total, message) => total + (
         message.role === "user"
             ? (message.attachments?.length ?? 0) * ESTIMATED_IMAGE_TOKENS
@@ -133,8 +133,8 @@ export function reportedInputSafetyTokens(input: IContextInput): number {
 
 /** Anchors at provider usage and adds a byte-level bound for everything appended. */
 export function reportedInputTokenFloor(
-    messages: readonly TAgentMessage[],
-    modelProfile?: IModelProfile,
+    messages: readonly AgentMessage[],
+    modelProfile?: ModelProfile,
 ): number {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
         const message = messages[index]
@@ -157,7 +157,7 @@ export function reportedInputTokenFloor(
 }
 
 function providerVisibleMessages(
-    messages: readonly TAgentMessage[],
+    messages: readonly AgentMessage[],
 ): readonly unknown[] {
     return messages.flatMap((message): readonly unknown[] => {
         switch (message.role) {

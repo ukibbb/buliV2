@@ -1,8 +1,9 @@
+import { Type } from "typebox"
 import { Value } from "typebox/value"
 
 import type {
-    IAgentTool,
-    TAgentMessage,
+    AgentMessage,
+    AgentTool,
 } from "@/agent"
 import { OPENAI_PROVIDER_ID } from "@/providers/openai/auth/openai-auth"
 import type { TOpenAiCodexSearch } from "@/providers/openai/transport/codex-fetch"
@@ -17,7 +18,7 @@ const WEB_SEARCH_DESCRIPTION = `Access the live internet through OpenAI web sear
 
 Use search_query for current facts and discovery, then open, click, or find to inspect sources. Batch independent operations when possible. search_query accepts at most four queries; four queries require response_length medium or long. Internal reference IDs are only for later web_search calls and must not appear in the final answer. Cite supporting pages with descriptive Markdown links near each claim.`
 
-const WEB_SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
+const WEB_SEARCH_INPUT_SCHEMA = Type.Unsafe<Record<string, unknown>>({
     type: "object",
     properties: {
         search_query: queryArray(
@@ -99,7 +100,7 @@ const WEB_SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
         },
     },
     additionalProperties: false,
-}
+})
 
 export interface IOpenAiWebSearchToolOptions {
     readonly search: TOpenAiCodexSearch
@@ -108,7 +109,7 @@ export interface IOpenAiWebSearchToolOptions {
 /** Creates the host-owned standalone web search tool backed by ChatGPT OAuth. */
 export function createOpenAiWebSearchTool(
     options: IOpenAiWebSearchToolOptions,
-): IAgentTool {
+): AgentTool<typeof WEB_SEARCH_INPUT_SCHEMA> {
     return {
         name: "web_search",
         description: WEB_SEARCH_DESCRIPTION,
@@ -177,7 +178,7 @@ interface ISearchMessage {
 }
 
 function recentSearchInput(
-    messages: readonly TAgentMessage[],
+    messages: readonly AgentMessage[],
 ): readonly ISearchMessage[] {
     const userIndexes = messages.flatMap((message, index) => (
         message.role === "user" ? [index] : []

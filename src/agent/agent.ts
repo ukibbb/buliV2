@@ -1,48 +1,53 @@
-import { runAgentLoop } from "@/agent/agent-loop"
+import {
+    runAgentLoop,
+    type AgentContext,
+    type AgentInputQueue,
+    type AgentLoopConfig,
+} from "@/agent/agent-loop"
 import type {
-    IAgentEvent,
-    TAgentEventListener,
-    TAgentCriticalEventSink,
+    AgentCriticalEventSink,
+    AgentEvent,
+    AgentEventListener,
 } from "@/agent/events"
 import type {
-    IAgentRunConfiguration,
-    TAgentRunConfigurationResolver,
+    AgentRunConfiguration,
+    AgentRunConfigurationResolver,
 } from "@/agent/model"
 import type {
-    IUserMessage,
-    IUserInput,
-    IUserPathReference,
-    TAgentMessage,
-    TUserInput,
-    TUserMessageSource,
+    AgentMessage,
+    UserInput,
+    UserInputContent,
+    UserMessage,
+    UserMessageSource,
+    UserPathReference,
 } from "@/agent/messages"
 import { USER_PATH_REFERENCES_PER_SESSION_MAX } from "@/agent/messages"
 import type {
-    IAgentRunHandle,
-    IAgentState,
-    TAgentContextProjector,
-    TAgentRunEndReason,
+    AgentContextProjector,
+    AgentRunEndReason,
+    AgentRunHandle,
+    AgentState,
 } from "@/agent/state"
 import { reduceAgentState } from "@/agent/state-reducer"
-import type { IAgentTool } from "@/agent/tool"
+import type { AgentTool } from "@/agent/tool"
 import {
     assertToolApprovalDecision,
     createToolApprovalRequest,
     toolApprovalAbortMessage,
-    type TToolApprovalDecision,
-    type TToolApprovalDraft,
-    type TToolApprovalRequest,
+    type ToolApprovalDecision,
+    type ToolApprovalDraft,
+    type ToolApprovalRequest,
 } from "@/agent/tool-approval"
 import { generateRandomId } from "@/common/ids"
 
-interface IAgentOptions {
+export interface AgentOptions {
     readonly sessionId: string
     readonly systemPrompt: string
-    readonly resolveRunConfiguration: TAgentRunConfigurationResolver
-    readonly tools: readonly IAgentTool[]
-    readonly initialMessages?: readonly TAgentMessage[]
-    readonly projectContext?: TAgentContextProjector
-    readonly criticalEventSink?: TAgentCriticalEventSink
+    readonly resolveRunConfiguration: AgentRunConfigurationResolver
+    readonly tools: readonly AgentTool[]
+    readonly initialMessages?: readonly AgentMessage[]
+    readonly projectContext?: AgentContextProjector
+    readonly criticalEventSink?: AgentCriticalEventSink
     readonly onObserverError?: (error: unknown) => void
     readonly now?: () => number
     readonly generateId?: () => string
@@ -63,34 +68,34 @@ interface IActiveAgentRun {
 }
 
 interface IQueuedAgentMessages {
-    readonly steering: readonly IUserMessage[]
-    readonly followUp: readonly IUserMessage[]
+    readonly steering: readonly UserMessage[]
+    readonly followUp: readonly UserMessage[]
 }
 
 interface IPendingToolApproval {
     readonly activeRun: IActiveAgentRun
-    readonly request: TToolApprovalRequest
-    readonly resolve: (decision: TToolApprovalDecision) => void
+    readonly request: ToolApprovalRequest
+    readonly resolve: (decision: ToolApprovalDecision) => void
     readonly reject: (reason?: unknown) => void
 }
 
 /** Public facade owning one session's live state, queued input, and active run. */
 export class Agent {
-    private stateValue: IAgentState
-    private readonly resolveRunConfiguration: TAgentRunConfigurationResolver
-    private readonly criticalEventSink: TAgentCriticalEventSink | undefined
+    private stateValue: AgentState
+    private readonly resolveRunConfiguration: AgentRunConfigurationResolver
+    private readonly criticalEventSink: AgentCriticalEventSink | undefined
     private readonly onObserverError: ((error: unknown) => void) | undefined
-    private readonly listeners = new Set<TAgentEventListener>()
+    private readonly listeners = new Set<AgentEventListener>()
     private readonly now: () => number
     private readonly generateId: () => string
-    private readonly projectContext: TAgentContextProjector | undefined
-    private steeringQueue: IUserMessage[] = []
-    private followUpQueue: IUserMessage[] = []
+    private readonly projectContext: AgentContextProjector | undefined
+    private steeringQueue: UserMessage[] = []
+    private followUpQueue: UserMessage[] = []
     private activeRun: IActiveAgentRun | undefined
     private pendingToolApproval: IPendingToolApproval | undefined
     private readonly issuedToolApprovalIds = new Set<string>()
 
-    constructor(options: IAgentOptions) {
+    constructor(options: AgentOptions) {
         this.resolveRunConfiguration = options.resolveRunConfiguration
         this.criticalEventSink = options.criticalEventSink
         this.onObserverError = options.onObserverError
@@ -112,24 +117,24 @@ export class Agent {
         }
     }
 
-    get state(): IAgentState {
+    get state(): AgentState {
         return this.stateValue
     }
 
-    get pendingSteeringMessages(): readonly IUserMessage[] {
+    get pendingSteeringMessages(): readonly UserMessage[] {
         return structuredClone(this.steeringQueue)
     }
 
-    get pendingFollowUpMessages(): readonly IUserMessage[] {
+    get pendingFollowUpMessages(): readonly UserMessage[] {
         return structuredClone(this.followUpQueue)
     }
 
-    subscribe(listener: TAgentEventListener): () => void {
+    subscribe(listener: AgentEventListener): () => void {
         this.listeners.add(listener)
         return () => this.listeners.delete(listener)
     }
 
-    prompt(input: TUserInput): IAgentRunHandle {
+    prompt(input: UserInput): AgentRunHandle {
         const normalizedInput = normalizeUserInput(input)
         if (!normalizedInput.text.trim() && !normalizedInput.attachments?.length) {
             throw new Error("Prompt cannot be empty")
@@ -143,7 +148,7 @@ export class Agent {
             )
         }
 
-        const runConfiguration: IAgentRunConfiguration = this.resolveRunConfiguration()
+        const runConfiguration: AgentRunConfiguration = this.resolveRunConfiguration()
         const context = this.projectContext?.(this.stateValue.messages) ?? {
             messages: this.stateValue.messages,
         }
@@ -194,11 +199,11 @@ export class Agent {
         }
     }
 
-    steer(input: TUserInput): void {
+    steer(input: UserInput): void {
         this.enqueueQueuedMessage(input, "steer")
     }
 
-    followUp(input: TUserInput): void {
+    followUp(input: UserInput): void {
         // Follow-up nie zmienia bieżącego turnu. Czeka, aż skończą się tool
         // continuation i steering, a dopiero potem uruchamia kolejny request.
         this.enqueueQueuedMessage(input, "followUp")
@@ -216,7 +221,7 @@ export class Agent {
 
     resolveToolApproval(
         approvalId: string,
-        decision: TToolApprovalDecision,
+        decision: ToolApprovalDecision,
     ): void {
         const pending = this.pendingToolApproval
         if (!pending) throw new Error("No tool approval is pending")
@@ -230,7 +235,7 @@ export class Agent {
     }
 
     private enqueueQueuedMessage(
-        input: TUserInput,
+        input: UserInput,
         source: "steer" | "followUp",
     ): void {
         const normalizedInput = normalizeUserInput(input)
@@ -277,7 +282,7 @@ export class Agent {
         }
     }
 
-    restoreMessages(messages: readonly TAgentMessage[]): void {
+    restoreMessages(messages: readonly AgentMessage[]): void {
         if (this.activeRun) {
             throw new Error("Cannot restore messages while Agent is running")
         }
@@ -292,28 +297,39 @@ export class Agent {
 
     private async executeRun(
         activeRun: IActiveAgentRun,
-        prompt: IUserMessage,
-        runConfiguration: IAgentRunConfiguration,
-        context: ReturnType<TAgentContextProjector>,
+        prompt: UserMessage,
+        runConfiguration: AgentRunConfiguration,
+        context: ReturnType<AgentContextProjector>,
     ): Promise<void> {
-        let reason: TAgentRunEndReason = "internal-error"
+        let reason: AgentRunEndReason = "internal-error"
         let failed = false
         let failure: unknown
 
         try {
-            const result = await runAgentLoop({
-                sessionId: this.stateValue.sessionId,
-                runId: activeRun.runId,
+            const agentContext: AgentContext = {
                 systemPrompt: this.stateValue.systemPrompt,
                 messages: context.messages,
                 ...(context.contextSummary === undefined
                     ? {}
                     : { contextSummary: context.contextSummary }),
-                prompt,
+                tools: this.stateValue.tools,
                 selectedPathReferences: collectPathReferences(
                     this.stateValue.messages,
                     prompt,
                 ),
+            }
+            const inputQueue: AgentInputQueue = {
+                hasSteering: () => this.hasSteeringMessages(activeRun),
+                takeSteering: () => this.takeSteeringMessage(activeRun),
+                hasFollowUp: () => this.hasFollowUpMessages(activeRun),
+                takeFollowUp: () => this.takeFollowUpMessage(activeRun),
+                restore: (message) =>
+                    this.restoreQueuedMessage(activeRun, message),
+                close: () => this.closeQueuedInput(activeRun),
+            }
+            const loopConfig: AgentLoopConfig = {
+                sessionId: this.stateValue.sessionId,
+                runId: activeRun.runId,
                 model: runConfiguration.model,
                 ...(runConfiguration.modelProfile === undefined
                     ? {}
@@ -325,7 +341,6 @@ export class Agent {
                             runConfiguration.providerAccountId,
                     }),
                 reasoningEffort: runConfiguration.reasoningEffort,
-                tools: this.stateValue.tools,
                 signal: activeRun.abortController.signal,
                 emit: (event) => this.processEvent(event, activeRun),
                 requestApproval: (draft, approvalContext) => {
@@ -343,20 +358,15 @@ export class Agent {
                         activeRun,
                     )
                 },
-                hasSteeringMessages: () =>
-                    this.hasSteeringMessages(activeRun),
-                takeSteeringMessage: () =>
-                    this.takeSteeringMessage(activeRun),
-                hasFollowUpMessages: () =>
-                    this.hasFollowUpMessages(activeRun),
-                takeFollowUpMessage: () =>
-                    this.takeFollowUpMessage(activeRun),
-                restoreQueuedMessage: (message) =>
-                    this.restoreQueuedMessage(activeRun, message),
-                closeQueuedInput: () => this.closeQueuedInput(activeRun),
+                inputQueue,
                 now: this.now,
                 generateId: this.generateId,
-            })
+            }
+            const result = await runAgentLoop(
+                prompt,
+                agentContext,
+                loopConfig,
+            )
             reason = result.reason
 
         } catch (error) {
@@ -436,7 +446,7 @@ export class Agent {
     }
 
     private async processEvent(
-        event: IAgentEvent,
+        event: AgentEvent,
         activeRun: IActiveAgentRun,
     ): Promise<void> {
         const signal = activeRun.abortController.signal
@@ -455,7 +465,7 @@ export class Agent {
         }
     }
 
-    private notifyListeners(event: IAgentEvent, signal: AbortSignal): void {
+    private notifyListeners(event: AgentEvent, signal: AbortSignal): void {
         for (const listener of [...this.listeners]) {
             try {
                 const result = listener(event, signal)
@@ -480,21 +490,21 @@ export class Agent {
 
     private takeSteeringMessage(
         activeRun: IActiveAgentRun,
-    ): IUserMessage | undefined {
+    ): UserMessage | undefined {
         if (this.activeRun !== activeRun) return undefined
         return this.steeringQueue.shift()
     }
 
     private takeFollowUpMessage(
         activeRun: IActiveAgentRun,
-    ): IUserMessage | undefined {
+    ): UserMessage | undefined {
         if (this.activeRun !== activeRun) return undefined
         return this.followUpQueue.shift()
     }
 
     private restoreQueuedMessage(
         activeRun: IActiveAgentRun,
-        message: IUserMessage,
+        message: UserMessage,
     ): void {
         if (this.activeRun !== activeRun) return
         if (message.source === "steer") this.steeringQueue.unshift(message)
@@ -506,10 +516,10 @@ export class Agent {
     }
 
     private requestToolApproval(
-        draft: TToolApprovalDraft,
+        draft: ToolApprovalDraft,
         toolCallId: string,
         activeRun: IActiveAgentRun,
-    ): Promise<TToolApprovalDecision> {
+    ): Promise<ToolApprovalDecision> {
         if (this.activeRun !== activeRun) {
             return Promise.reject(new Error("Agent run is no longer active"))
         }
@@ -529,7 +539,7 @@ export class Agent {
             activeRun.runId,
             toolCallId,
         )
-        const deferred = Promise.withResolvers<TToolApprovalDecision>()
+        const deferred = Promise.withResolvers<ToolApprovalDecision>()
         void deferred.promise.catch(() => { })
         const pending: IPendingToolApproval = {
             activeRun,
@@ -576,7 +586,7 @@ export class Agent {
 
     private resolveToolApprovalRequest(
         pending: IPendingToolApproval,
-        decision: TToolApprovalDecision,
+        decision: ToolApprovalDecision,
     ): void {
         if (this.pendingToolApproval !== pending) return
         this.pendingToolApproval = undefined
@@ -590,22 +600,22 @@ export class Agent {
     }
 
     private publishEphemeralEvent(
-        event: IAgentEvent,
+        event: AgentEvent,
         activeRun: IActiveAgentRun,
     ): void {
         this.reduce(event)
         this.notifyListeners(event, activeRun.abortController.signal)
     }
 
-    private reduce(event: IAgentEvent): void {
+    private reduce(event: AgentEvent): void {
         this.stateValue = reduceAgentState(this.stateValue, event)
     }
 
     private createUserMessage(
-        input: IUserInput,
+        input: UserInputContent,
         runId: string,
-        source: TUserMessageSource,
-    ): IUserMessage {
+        source: UserMessageSource,
+    ): UserMessage {
         return {
             id: this.generateId(),
             sessionId: this.stateValue.sessionId,
@@ -624,7 +634,7 @@ export class Agent {
     }
 }
 
-function normalizeUserInput(input: TUserInput): IUserInput {
+function normalizeUserInput(input: UserInput): UserInputContent {
     if (typeof input === "string") return { text: input }
     return {
         text: input.text,
@@ -638,10 +648,10 @@ function normalizeUserInput(input: TUserInput): IUserInput {
 }
 
 function collectPathReferences(
-    messages: readonly TAgentMessage[],
-    prompt: IUserMessage,
-): IUserPathReference[] {
-    const references: IUserPathReference[] = []
+    messages: readonly AgentMessage[],
+    prompt: UserMessage,
+): UserPathReference[] {
+    const references: UserPathReference[] = []
     const seen = new Set<string>()
     const conversation = [...messages, prompt]
     outer: for (let messageIndex = conversation.length - 1; messageIndex >= 0; messageIndex -= 1) {

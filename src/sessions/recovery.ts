@@ -1,16 +1,16 @@
 import type {
-    IAssistantMessage,
-    IToolResultMessage,
-    TAgentMessage,
+    AgentMessage,
+    AssistantMessage,
+    ToolResultMessage,
 } from "@/agent"
 
 /** Creates durable error results for tool calls left unmatched by an interrupted run. */
 export function createInterruptedToolResults(
-    messages: readonly TAgentMessage[],
-): readonly IToolResultMessage[] {
+    messages: readonly AgentMessage[],
+): readonly ToolResultMessage[] {
     const messageIds = new Set(messages.map((message) => message.id))
     let pending: {
-        assistant: IAssistantMessage
+        assistant: AssistantMessage
         remainingToolCallIds: Set<string>
     } | undefined
 

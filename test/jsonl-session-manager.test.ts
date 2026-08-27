@@ -10,11 +10,11 @@ import { homedir, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
 import type {
-  IAgentModelRequest,
-  IAssistantMessage,
-  IToolResultMessage,
-  TAgentMessage,
-  IUserMessage,
+  AgentMessage,
+  AgentModelRequest,
+  AssistantMessage,
+  ToolResultMessage,
+  UserMessage,
 } from "@/agent"
 import {
   AgentSession,
@@ -91,7 +91,7 @@ test("round-trips selected paths and direct image attachments", async () => {
   try {
     const manager = jsonlManager(filePath)
     manager.createSession(sessionInfo())
-    const message: IUserMessage = {
+    const message: UserMessage = {
       ...userMessage("Review @/tmp/file [Image 1]"),
       references: [{
         type: "path",
@@ -131,14 +131,14 @@ test("round-trips old and new tool result records without a version migration", 
 
   try {
     const legacy = toolResultMessage("Legacy result")
-    const structured: IToolResultMessage = {
+    const structured: ToolResultMessage = {
       ...toolResultMessage("Applied result"),
       id: "structured-result",
       createdAt: 3,
       outcome: "manual",
       summary: "Run the copied command manually",
     }
-    const unknownEffects: IToolResultMessage = {
+    const unknownEffects: ToolResultMessage = {
       ...toolResultMessage("Execution may have changed files"),
       id: "unknown-effects-result",
       createdAt: 4,
@@ -600,7 +600,7 @@ test("restores completed turns into the next Agent model request", async () => {
       createdAt: 2,
     }))
 
-    const requests: IAgentModelRequest[] = []
+    const requests: AgentModelRequest[] = []
     const session = new AgentSession({
       agentId: "test-agent",
       sessionId: "session-1",
@@ -741,10 +741,10 @@ function sessionRecord(info: ISessionInfo): {
   }
 }
 
-function messageRecord(message: TAgentMessage): {
+function messageRecord(message: AgentMessage): {
   readonly recordType: "message"
   readonly version: 2
-  readonly message: TAgentMessage
+  readonly message: AgentMessage
 } {
   return {
     recordType: "message",
@@ -777,7 +777,7 @@ interface IMessageOptions {
 function userMessage(
   content: string,
   options: IMessageOptions = {},
-): IUserMessage {
+): UserMessage {
   return {
     id: options.id ?? "user-1",
     sessionId: options.sessionId ?? "session-1",
@@ -792,7 +792,7 @@ function userMessage(
 function assistantMessage(
   text: string,
   options: IMessageOptions & { readonly completed?: boolean } = {},
-): IAssistantMessage {
+): AssistantMessage {
   return {
     id: options.id ?? "assistant-1",
     sessionId: options.sessionId ?? "session-1",
@@ -804,7 +804,7 @@ function assistantMessage(
   }
 }
 
-function toolResultMessage(content: string): IToolResultMessage {
+function toolResultMessage(content: string): ToolResultMessage {
   return {
     id: "tool-result-1",
     sessionId: "session-1",

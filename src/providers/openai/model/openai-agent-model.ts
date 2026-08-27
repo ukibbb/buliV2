@@ -15,12 +15,12 @@ import {
 } from "ai"
 
 import type {
-    IAgentModel,
-    IAgentModelEvent,
-    IAgentModelRequest,
-    IAgentToolDescriptor,
-    IModelUsage,
-    TAgentMessage,
+    AgentMessage,
+    AgentModel,
+    AgentModelEvent,
+    AgentModelRequest,
+    AgentToolDescriptor,
+    ModelUsage,
 } from "@/agent"
 import {
     isModelContextOverflowError,
@@ -73,7 +73,7 @@ type AIStreamEvent = ReturnType<typeof streamText<ToolSet>>["stream"] extends
 type AIAssistantPart = Exclude<AssistantContent, string>[number]
 
 /** Translates one Buli model turn to and from the OpenAI AI SDK protocol. */
-export class OpenAiAgentModel implements IAgentModel {
+export class OpenAiAgentModel implements AgentModel {
     private readonly auth: IOpenAiModelTransport
     private readonly modelId: string
     private readonly expectedAccountId: string | undefined
@@ -87,8 +87,8 @@ export class OpenAiAgentModel implements IAgentModel {
     }
 
     async *stream(
-        request: IAgentModelRequest,
-    ): AsyncIterable<IAgentModelEvent> {
+        request: AgentModelRequest,
+    ): AsyncIterable<AgentModelEvent> {
         request.signal.throwIfAborted()
         const credential = await this.auth.requireCredential(request.signal)
         if (
@@ -194,7 +194,7 @@ function withServiceTier(
 }
 
 function toAiTools(
-    descriptors: readonly IAgentToolDescriptor[],
+    descriptors: readonly AgentToolDescriptor[],
 ): ToolSet {
     return Object.fromEntries(descriptors.map((descriptor) => [
         descriptor.name,
@@ -209,7 +209,7 @@ function toAiTools(
 }
 
 function toModelMessages(
-    messages: readonly TAgentMessage[],
+    messages: readonly AgentMessage[],
     contextSummary?: string,
 ): ModelMessage[] {
     const projected = messages.flatMap((message): ModelMessage[] => {
@@ -279,7 +279,7 @@ function toModelMessages(
 
 function toAgentModelEvent(
     event: AIStreamEvent,
-): IAgentModelEvent | undefined {
+): AgentModelEvent | undefined {
     switch (event.type) {
         case "text-start":
             return { type: "text-start", id: event.id }
@@ -304,7 +304,9 @@ function toAgentModelEvent(
             const usage = toModelUsage(event.totalUsage)
             return {
                 type: "finish",
-                reason: event.rawFinishReason ?? event.finishReason,
+                // Control flow must use the SDK-normalized reason. Provider-specific
+                // values such as `max_output_tokens` are diagnostic, not protocol.
+                reason: event.finishReason,
                 ...(usage === undefined ? {} : { usage }),
             }
         }
@@ -320,8 +322,8 @@ function toAgentModelEvent(
     }
 }
 
-function toModelUsage(usage: LanguageModelUsage): IModelUsage | undefined {
-    const result: IModelUsage = {
+function toModelUsage(usage: LanguageModelUsage): ModelUsage | undefined {
+    const result: ModelUsage = {
         ...(usage.inputTokens === undefined
             ? {}
             : { inputTokens: usage.inputTokens }),

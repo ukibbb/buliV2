@@ -2,13 +2,13 @@ import { expect, test } from "bun:test"
 
 import {
   Agent,
-  type IAgentEvent,
-  type IAgentModel,
-  type IAgentModelRequest,
-  type IAgentTool,
-  type TToolApprovalDecision,
-  type TToolApprovalDraft,
-  type TToolApprovalRequest,
+  type AgentEvent,
+  type AgentModel,
+  type AgentModelRequest,
+  type AgentTool,
+  type ToolApprovalDecision,
+  type ToolApprovalDraft,
+  type ToolApprovalRequest,
 } from "@/agent"
 
 test("Agent.prompt returns a synchronous handle and Agent owns live state", async () => {
@@ -205,7 +205,7 @@ test("public observer exceptions do not fail the run", async () => {
 })
 
 test("agent_settled appears exactly once and all events carry the runId", async () => {
-  const events: IAgentEvent[] = []
+  const events: AgentEvent[] = []
   const agent = new Agent({
     sessionId: "session-1",
     systemPrompt: "System",
@@ -267,8 +267,8 @@ test("Agent delivers queued steering FIFO one message per response", async () =>
   const secondStarted = Promise.withResolvers<void>()
   const releaseFirst = Promise.withResolvers<void>()
   const releaseSecond = Promise.withResolvers<void>()
-  const requests: IAgentModelRequest[] = []
-  const model: IAgentModel = {
+  const requests: AgentModelRequest[] = []
+  const model: AgentModel = {
     async *stream(request) {
       const index = requests.length
       requests.push({
@@ -347,7 +347,7 @@ test("Agent delivers queued steering FIFO one message per response", async () =>
 test("Agent delivers follow-ups FIFO only after it would otherwise stop", async () => {
   const firstStarted = Promise.withResolvers<void>()
   const releaseFirst = Promise.withResolvers<void>()
-  const requests: IAgentModelRequest[] = []
+  const requests: AgentModelRequest[] = []
   const agent = new Agent({
     sessionId: "session-1",
     systemPrompt: "System",
@@ -414,7 +414,7 @@ test("Agent rejects steering until the initial prompt is durable", async () => {
   const releasePromptPersistence = Promise.withResolvers<void>()
   const firstRequestStarted = Promise.withResolvers<void>()
   const releaseFirstRequest = Promise.withResolvers<void>()
-  const requests: IAgentModelRequest[] = []
+  const requests: AgentModelRequest[] = []
   const agent = new Agent({
     sessionId: "session-1",
     systemPrompt: "System",
@@ -473,7 +473,7 @@ test("Agent rejects steering until the initial prompt is durable", async () => {
 
 test("Agent publishes an immutable approval and approve resumes the pending run", async () => {
   const draftPaths = ["src/domain.ts"]
-  const decisions: TToolApprovalDecision[] = []
+  const decisions: ToolApprovalDecision[] = []
   const agent = approvalAgent({
     kind: "patch",
     title: "Apply domain types",
@@ -481,8 +481,8 @@ test("Agent publishes an immutable approval and approve resumes the pending run"
     diff: "--- a/src/domain.ts\n+++ b/src/domain.ts",
     paths: draftPaths,
   }, decisions)
-  const requested = Promise.withResolvers<TToolApprovalRequest>()
-  const events: IAgentEvent[] = []
+  const requested = Promise.withResolvers<ToolApprovalRequest>()
+  const events: AgentEvent[] = []
   agent.subscribe((event) => {
     events.push(event)
     if (event.type === "tool_approval_requested") {
@@ -524,7 +524,7 @@ test("Agent publishes an immutable approval and approve resumes the pending run"
   expect(request.paths).toEqual(["src/domain.ts"])
   expect(() => {
     (agent.state as {
-      pendingToolApproval: TToolApprovalRequest | undefined
+      pendingToolApproval: ToolApprovalRequest | undefined
     }).pendingToolApproval = undefined
   }).toThrow()
   expect(agent.state.pendingToolApproval).toBe(request)
@@ -565,9 +565,9 @@ test("Agent publishes an immutable approval and approve resumes the pending run"
 })
 
 test("Agent keeps invalid patch decisions and mismatched IDs pending", async () => {
-  const decisions: TToolApprovalDecision[] = []
+  const decisions: ToolApprovalDecision[] = []
   const agent = approvalAgent(patchApprovalDraft(), decisions)
-  const requested = Promise.withResolvers<TToolApprovalRequest>()
+  const requested = Promise.withResolvers<ToolApprovalRequest>()
   agent.subscribe((event) => {
     if (event.type === "tool_approval_requested") {
       requested.resolve(event.request)
@@ -593,9 +593,9 @@ test("Agent keeps invalid patch decisions and mismatched IDs pending", async () 
 })
 
 test("Agent handles sequential patch approvals and keeps the tool available", async () => {
-  const requests: IAgentModelRequest[] = []
-  const decisions: TToolApprovalDecision[] = []
-  const patchTool: IAgentTool = {
+  const requests: AgentModelRequest[] = []
+  const decisions: ToolApprovalDecision[] = []
+  const patchTool: AgentTool = {
     name: "apply_patch",
     approvalKind: "patch",
     description: "Prepare a patch",
@@ -607,7 +607,7 @@ test("Agent handles sequential patch approvals and keeps the tool available", as
       return decision
     },
   }
-  const model: IAgentModel = {
+  const model: AgentModel = {
     async *stream(request) {
       const index = requests.length
       requests.push({
@@ -643,8 +643,8 @@ test("Agent handles sequential patch approvals and keeps the tool available", as
     }),
     tools: [patchTool],
   })
-  const firstRequested = Promise.withResolvers<TToolApprovalRequest>()
-  const secondRequested = Promise.withResolvers<TToolApprovalRequest>()
+  const firstRequested = Promise.withResolvers<ToolApprovalRequest>()
+  const secondRequested = Promise.withResolvers<ToolApprovalRequest>()
   const requested = [firstRequested, secondRequested] as const
   let requestIndex = 0
   agent.subscribe((event) => {
@@ -682,9 +682,9 @@ test("Agent handles sequential patch approvals and keeps the tool available", as
 })
 
 test("Agent rejects unknown command decisions and delivers copy", async () => {
-  const decisions: TToolApprovalDecision[] = []
+  const decisions: ToolApprovalDecision[] = []
   const agent = approvalAgent(commandApprovalDraft(), decisions)
-  const requested = Promise.withResolvers<TToolApprovalRequest>()
+  const requested = Promise.withResolvers<ToolApprovalRequest>()
   agent.subscribe((event) => {
     if (event.type === "tool_approval_requested") {
       requested.resolve(event.request)
@@ -696,7 +696,7 @@ test("Agent rejects unknown command decisions and delivers copy", async () => {
 
   expect(() => agent.resolveToolApproval(
     request.id,
-    "later" as TToolApprovalDecision,
+    "later" as ToolApprovalDecision,
   )).toThrow("Invalid tool approval decision: later")
   expect(agent.state.pendingToolApproval).toBe(request)
 
@@ -707,10 +707,10 @@ test("Agent rejects unknown command decisions and delivers copy", async () => {
 })
 
 test("Agent abort settles a waiting approval and clears pending state", async () => {
-  const decisions: TToolApprovalDecision[] = []
-  const events: IAgentEvent[] = []
+  const decisions: ToolApprovalDecision[] = []
+  const events: AgentEvent[] = []
   const agent = approvalAgent(commandApprovalDraft(), decisions)
-  const requested = Promise.withResolvers<TToolApprovalRequest>()
+  const requested = Promise.withResolvers<ToolApprovalRequest>()
   agent.subscribe((event) => {
     events.push(event)
     if (event.type === "tool_approval_requested") {
@@ -743,7 +743,7 @@ test("Agent abort settles a waiting approval and clears pending state", async ()
 
 test("Agent rejects overlap, abort settles the active run, and can clear when idle", async () => {
   const started = Promise.withResolvers<void>()
-  const model: IAgentModel = {
+  const model: AgentModel = {
     async *stream(request) {
       started.resolve()
       await new Promise<void>((resolve) => {
@@ -785,7 +785,7 @@ test("Agent rejects overlap, abort settles the active run, and can clear when id
 test("selected path capabilities survive projection and reach only opted-in tools", async () => {
   const received: unknown[] = []
   const ordinary: unknown[] = []
-  const selectedTool: IAgentTool = {
+  const selectedTool: AgentTool = {
     name: "selected_read",
     description: "Read selected paths",
     inputSchema: { type: "object", additionalProperties: false },
@@ -795,7 +795,7 @@ test("selected path capabilities survive projection and reach only opted-in tool
       return "selected"
     },
   }
-  const ordinaryTool: IAgentTool = {
+  const ordinaryTool: AgentTool = {
     name: "ordinary",
     description: "Ordinary tool",
     inputSchema: { type: "object", additionalProperties: false },
@@ -805,7 +805,7 @@ test("selected path capabilities survive projection and reach only opted-in tool
     },
   }
   let turn = 0
-  const model: IAgentModel = {
+  const model: AgentModel = {
     async *stream() {
       if (turn++ === 0) {
         yield {
@@ -857,7 +857,7 @@ test("selected path capabilities survive projection and reach only opted-in tool
 
 test("selected path capability limit retains the newest prompt", async () => {
   const received: unknown[] = []
-  const selectedTool: IAgentTool = {
+  const selectedTool: AgentTool = {
     name: "selected_read",
     description: "Read selected paths",
     inputSchema: { type: "object", additionalProperties: false },
@@ -868,7 +868,7 @@ test("selected path capability limit retains the newest prompt", async () => {
     },
   }
   let turn = 0
-  const model: IAgentModel = {
+  const model: AgentModel = {
     async *stream() {
       if (turn++ === 0) {
         yield {
@@ -912,7 +912,7 @@ test("selected path capability limit retains the newest prompt", async () => {
   expect(references.at(-1)?.path).toBe("/outside/current.ts")
 })
 
-function completedModel(): IAgentModel {
+function completedModel(): AgentModel {
   return {
     async *stream() {
       yield { type: "text-start", id: "answer" }
@@ -933,10 +933,10 @@ function pathReference(path: string) {
 }
 
 function approvalAgent(
-  draft: TToolApprovalDraft,
-  decisions: TToolApprovalDecision[],
+  draft: ToolApprovalDraft,
+  decisions: ToolApprovalDecision[],
 ): Agent {
-  const tool: IAgentTool = {
+  const tool: AgentTool = {
     name: "approval_tool",
     approvalKind: draft.kind,
     description: "Request approval",
@@ -949,7 +949,7 @@ function approvalAgent(
     },
   }
   let requestCount = 0
-  const model: IAgentModel = {
+  const model: AgentModel = {
     async *stream() {
       if (requestCount++ === 0) {
         yield {
@@ -975,7 +975,7 @@ function approvalAgent(
   })
 }
 
-function patchApprovalDraft(): TToolApprovalDraft {
+function patchApprovalDraft(): ToolApprovalDraft {
   return {
     kind: "patch",
     title: "Apply patch",
@@ -985,7 +985,7 @@ function patchApprovalDraft(): TToolApprovalDraft {
   }
 }
 
-function commandApprovalDraft(): TToolApprovalDraft {
+function commandApprovalDraft(): ToolApprovalDraft {
   return {
     kind: "command",
     title: "Run tests",

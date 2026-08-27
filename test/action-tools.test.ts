@@ -14,10 +14,10 @@ import { tmpdir } from "node:os"
 import { join, relative } from "node:path"
 
 import type {
-  IAgentToolExecutionResult,
-  IAgentToolExecutionContext,
-  TToolApprovalDecision,
-  TToolApprovalDraft,
+  AgentToolContext,
+  AgentToolResult,
+  ToolApprovalDecision,
+  ToolApprovalDraft,
 } from "@/agent"
 import { createApplyPatchTool, createBashTool } from "@/tools"
 import { StaleWorkspacePatchError } from "@/tools/patch/patch-engine"
@@ -83,7 +83,9 @@ test("action tools validate direct input before requesting approval", async () =
       patchText: patchText("*** Add File: added.txt\n+content"),
       explanation: "Add a fixture",
       unexpected: true,
-    }, executionContext)).rejects.toThrow("unknown property")
+    } as Parameters<typeof applyPatch.execute>[0], executionContext)).rejects.toThrow(
+      "unknown property",
+    )
     await expect(applyPatch.execute({
       patchText: patchText("*** Add File: added.txt\n+content"),
       explanation: "   ",
@@ -95,7 +97,10 @@ test("action tools validate direct input before requesting approval", async () =
       executionContext,
     )).rejects.toThrow("timeout must be at most 3600")
     await expect(bash.execute(
-      { ...bashInput("exit 0"), extra: "not allowed" },
+      {
+        ...bashInput("exit 0"),
+        extra: "not allowed",
+      } as Parameters<typeof bash.execute>[0],
       executionContext,
     )).rejects.toThrow("unknown property")
 
@@ -119,9 +124,9 @@ test("action tools validate direct input before requesting approval", async () =
 test("apply_patch shows the exact plan before mutation and applies only after approve", async () => {
   const workspace = await temporaryWorkspace()
   const file = join(workspace, "file.txt")
-  const approval = Promise.withResolvers<TToolApprovalDecision>()
+  const approval = Promise.withResolvers<ToolApprovalDecision>()
   const requested = Promise.withResolvers<void>()
-  const drafts: TToolApprovalDraft[] = []
+  const drafts: ToolApprovalDraft[] = []
   try {
     await writeFile(file, "before\n")
     const tool = createApplyPatchTool(workspace)
@@ -246,9 +251,9 @@ test("bash shows exact command details and starts no process before reject", asy
   const workspace = await temporaryWorkspace()
   const nested = join(workspace, "nested")
   const marker = join(workspace, "ran.txt")
-  const approval = Promise.withResolvers<TToolApprovalDecision>()
+  const approval = Promise.withResolvers<ToolApprovalDecision>()
   const requested = Promise.withResolvers<void>()
-  const drafts: TToolApprovalDraft[] = []
+  const drafts: ToolApprovalDraft[] = []
   try {
     await mkdir(nested)
     const command = bunCommand(`await Bun.write(${JSON.stringify(marker)}, "ran")`)
@@ -466,11 +471,11 @@ interface IContextOptions {
   readonly signal?: AbortSignal
   readonly reportProgress?: (progress: string) => void
   readonly requestApproval?: (
-    draft: TToolApprovalDraft,
-  ) => Promise<TToolApprovalDecision>
+    draft: ToolApprovalDraft,
+  ) => Promise<ToolApprovalDecision>
 }
 
-function context(options: IContextOptions = {}): IAgentToolExecutionContext {
+function context(options: IContextOptions = {}): AgentToolContext {
   return {
     sessionId: "session-action-tool",
     toolCallId: "call-action-tool",
@@ -487,8 +492,8 @@ function context(options: IContextOptions = {}): IAgentToolExecutionContext {
 }
 
 function structuredToolResult(
-  result: string | IAgentToolExecutionResult,
-): IAgentToolExecutionResult {
+  result: string | AgentToolResult,
+): AgentToolResult {
   if (typeof result === "string") throw new Error("Expected a structured tool result")
   return result
 }
@@ -497,10 +502,20 @@ function patchText(body: string): string {
   return `*** Begin Patch\n${body}\n*** End Patch`
 }
 
+interface BashInput {
+  readonly command: string
+  readonly purpose: string
+  readonly explanation: string
+  readonly expectedOutcome: string
+  readonly sideEffects: string
+  readonly cwd?: string
+  readonly timeout?: number
+}
+
 function bashInput(
   command: string,
-  overrides: Record<string, unknown> = {},
-): Record<string, unknown> {
+  overrides: Partial<BashInput> = {},
+): BashInput {
   return {
     command,
     purpose: "Exercise the shell tool",

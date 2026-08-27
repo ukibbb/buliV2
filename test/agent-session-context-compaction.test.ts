@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test"
 
 import {
-  type IAgentModel,
-  type IAgentModelRequest,
-  type IAgentTool,
+  type AgentMessage,
+  type AgentModel,
+  type AgentModelRequest,
+  type AgentTool,
   ModelContextOverflowError,
-  type TAgentMessage,
 } from "@/agent"
 import {
   AgentSession,
@@ -24,7 +24,7 @@ const MODEL_PROFILE = {
 
 test("AgentSession dispatches below-threshold requests without compaction", async () => {
   const manager = managerWithSession()
-  const requests: IAgentModelRequest[] = []
+  const requests: AgentModelRequest[] = []
   const session = openSession(manager, {
     async *stream(request) {
       requests.push(cloneRequest(request))
@@ -57,9 +57,9 @@ test("AgentSession dispatches below-threshold requests without compaction", asyn
 test("AgentSession compacts at preflight and dispatches the same durable prompt", async () => {
   const manager = managerWithSession()
   seedLargeTurns(manager, 2)
-  const summaryRequests: IAgentModelRequest[] = []
-  const conversationRequests: IAgentModelRequest[] = []
-  const model: IAgentModel = {
+  const summaryRequests: AgentModelRequest[] = []
+  const conversationRequests: AgentModelRequest[] = []
+  const model: AgentModel = {
     async *stream(request) {
       if (isCompactionRequest(request)) {
         summaryRequests.push(cloneRequest(request))
@@ -148,8 +148,8 @@ test("AgentSession compacts a 238k request before dispatching to a 272k model", 
   })
   const contextWindowTokens = 272_000
   const prompt = "Keep this prompt"
-  const summaryRequests: IAgentModelRequest[] = []
-  const conversationRequests: IAgentModelRequest[] = []
+  const summaryRequests: AgentModelRequest[] = []
+  const conversationRequests: AgentModelRequest[] = []
   const session = openSession(manager, {
     async *stream(request) {
       if (isCompactionRequest(request)) {
@@ -208,7 +208,7 @@ test("AgentSession compacts a 238k request before dispatching to a 272k model", 
 })
 
 test("retained message allowance accounts for an existing large summary", () => {
-  const request: IAgentModelRequest = {
+  const request: AgentModelRequest = {
     sessionId: "session-1",
     runId: "run-1",
     systemPrompt: "System",
@@ -229,7 +229,7 @@ test("AgentSession blocks an oversized request when compaction has no progress",
   const manager = managerWithSession()
   let conversationAttempts = 0
   let summaryAttempts = 0
-  const requests: IAgentModelRequest[] = []
+  const requests: AgentModelRequest[] = []
   const session = openSession(manager, {
     async *stream(request) {
       if (isCompactionRequest(request)) {
@@ -311,9 +311,9 @@ test("AgentSession aborts preflight when the summary prompt cannot fit", async (
 test("AgentSession compacts oversized tool continuations before dispatch", async () => {
   const manager = managerWithSession()
   seedTurn(manager)
-  const requests: IAgentModelRequest[] = []
+  const requests: AgentModelRequest[] = []
   let summaries = 0
-  const tool: IAgentTool = {
+  const tool: AgentTool = {
     name: "large_result",
     description: "Returns a large result",
     inputSchema: { type: "object", additionalProperties: false },
@@ -371,7 +371,7 @@ for (const overflowMode of ["emitted", "thrown"] as const) {
     seedTurn(manager)
     let conversationAttempts = 0
     let summaryAttempts = 0
-    const requests: IAgentModelRequest[] = []
+    const requests: AgentModelRequest[] = []
     const session = openSession(manager, {
       async *stream(request) {
         if (isCompactionRequest(request)) {
@@ -430,7 +430,7 @@ test("AgentSession can compact at preflight and advance again for overflow recov
   seedLargeTurns(manager, 5)
   let conversationAttempts = 0
   let summaryAttempts = 0
-  const requests: IAgentModelRequest[] = []
+  const requests: AgentModelRequest[] = []
   const session = openSession(manager, {
     async *stream(request) {
       if (isCompactionRequest(request)) {
@@ -641,8 +641,8 @@ test("AgentSession aborts preflight compaction without saving a checkpoint", asy
 
 function openSession(
   manager: ISessionManager,
-  model: IAgentModel,
-  tools: readonly IAgentTool[] = [],
+  model: AgentModel,
+  tools: readonly AgentTool[] = [],
   contextWindowTokens: number = MODEL_PROFILE.contextWindowTokens,
 ): AgentSession {
   return new AgentSession({
@@ -675,7 +675,7 @@ function managerWithSession(): InMemorySessionManager {
 }
 
 function seedTurn(manager: InMemorySessionManager): void {
-  const messages: readonly TAgentMessage[] = [
+  const messages: readonly AgentMessage[] = [
     {
       id: "old-user",
       sessionId: "session-1",
@@ -728,7 +728,7 @@ function seedLargeTurns(
   }
 }
 
-function cloneRequest(request: IAgentModelRequest): IAgentModelRequest {
+function cloneRequest(request: AgentModelRequest): AgentModelRequest {
   return {
     ...request,
     messages: structuredClone(request.messages),
@@ -736,7 +736,7 @@ function cloneRequest(request: IAgentModelRequest): IAgentModelRequest {
   }
 }
 
-function isCompactionRequest(request: IAgentModelRequest): boolean {
+function isCompactionRequest(request: AgentModelRequest): boolean {
   return request.runId.startsWith("compaction-")
 }
 

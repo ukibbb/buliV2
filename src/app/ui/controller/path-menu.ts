@@ -8,7 +8,7 @@ import {
     errorMessage,
     type IBuliPathMenuItem,
 } from "@/app/ui/controller/state"
-import type { IUserPathReference } from "@/agent"
+import type { UserPathReference } from "@/agent"
 
 const PATH_SEARCH_DEBOUNCE_MS = 20
 
@@ -16,7 +16,7 @@ export interface IPathCompletion {
     readonly triggerStart: number
     readonly triggerEnd: number
     readonly value: string
-    readonly reference: Omit<IUserPathReference, "source">
+    readonly reference: Omit<UserPathReference, "source">
 }
 
 /** Owns cancellable fd completion and converts a selection into a path capability. */

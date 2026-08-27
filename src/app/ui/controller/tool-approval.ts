@@ -1,6 +1,6 @@
 import type { IBuliApplication } from "@/app/contracts"
 import { BuliUiStateStore } from "@/app/ui/controller/state"
-import type { TToolApprovalDecision } from "@/agent"
+import type { ToolApprovalDecision } from "@/agent"
 
 interface IBuliToolApprovalOptions {
     readonly application: IBuliApplication
@@ -23,7 +23,7 @@ export class BuliToolApproval {
 
     readonly resolve = (
         approvalId: string,
-        decision: TToolApprovalDecision,
+        decision: ToolApprovalDecision,
         beforeResolve?: () => boolean,
     ): void => {
         if (this.store.isDisposed || this.resolutionPending) return

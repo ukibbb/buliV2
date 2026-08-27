@@ -1,20 +1,20 @@
 import { Value } from "typebox/value"
 
-import type { IAgentEvent } from "@/agent/events"
+import type { AgentEvent } from "@/agent/events"
 import type {
-    IToolCallContent,
-    IToolResultMessage,
-    IUserPathReference,
-    TAgentMessage,
+    AgentMessage,
+    ToolCallContent,
+    ToolResultMessage,
+    UserPathReference,
 } from "@/agent/messages"
-import type { IModelProfile } from "@/agent/model-values"
+import type { ModelProfile } from "@/agent/model-values"
 import type {
-    TToolApprovalDecision,
-    TToolApprovalDraft,
+    ToolApprovalDecision,
+    ToolApprovalDraft,
 } from "@/agent/tool-approval"
 import type {
-    IAgentTool,
-    TToolExecutionOutcome,
+    AgentTool,
+    ToolExecutionOutcome,
 } from "@/agent/tool"
 import { truncateToolOutput } from "@/agent/tool-output"
 
@@ -26,30 +26,30 @@ const SIDE_EFFECTS_UNKNOWN_SUMMARY =
 interface IExecuteToolCallsOptions {
     readonly sessionId: string
     readonly runId: string
-    readonly modelProfile?: IModelProfile
+    readonly modelProfile?: ModelProfile
     readonly providerAccountId?: string
-    readonly messages: readonly TAgentMessage[]
-    readonly selectedPathReferences?: readonly IUserPathReference[]
+    readonly messages: readonly AgentMessage[]
+    readonly selectedPathReferences?: readonly UserPathReference[]
     readonly signal: AbortSignal
-    readonly emit: (event: IAgentEvent) => void | Promise<void>
+    readonly emit: (event: AgentEvent) => void | Promise<void>
     readonly requestApproval?: (
-        draft: TToolApprovalDraft,
+        draft: ToolApprovalDraft,
         context: {
             readonly sessionId: string
             readonly runId: string
             readonly toolCallId: string
             readonly signal: AbortSignal
         },
-    ) => Promise<TToolApprovalDecision>
+    ) => Promise<ToolApprovalDecision>
     readonly now: () => number
     readonly generateId: () => string
 }
 
 /** Builds the single validated tool registry shared by model and local execution. */
 export function indexAgentTools(
-    tools: readonly IAgentTool[],
-): ReadonlyMap<string, IAgentTool> {
-    const toolsByName = new Map<string, IAgentTool>()
+    tools: readonly AgentTool[],
+): ReadonlyMap<string, AgentTool> {
+    const toolsByName = new Map<string, AgentTool>()
     for (const tool of tools) {
         if (toolsByName.has(tool.name)) {
             throw new Error(`Duplicate tool: ${tool.name}`)
@@ -61,11 +61,11 @@ export function indexAgentTools(
 
 /** Executes local tool calls sequentially and publishes each result lifecycle. */
 export async function executeToolCallsSequentially(
-    toolCalls: readonly IToolCallContent[],
-    toolsByName: ReadonlyMap<string, IAgentTool>,
+    toolCalls: readonly ToolCallContent[],
+    toolsByName: ReadonlyMap<string, AgentTool>,
     options: IExecuteToolCallsOptions,
-): Promise<IToolResultMessage[]> {
-    const results: IToolResultMessage[] = []
+): Promise<ToolResultMessage[]> {
+    const results: ToolResultMessage[] = []
 
     for (const toolCall of toolCalls) {
         await options.emit({
@@ -91,14 +91,55 @@ export async function executeToolCallsSequentially(
     return results
 }
 
-async function executeToolCall(
-    toolCall: IToolCallContent,
-    toolsByName: ReadonlyMap<string, IAgentTool>,
+/** Publishes error results for tool calls that must not reach local executors. */
+export async function failToolCallsWithoutExecution(
+    toolCalls: readonly ToolCallContent[],
+    content: string,
     options: IExecuteToolCallsOptions,
-): Promise<IToolResultMessage> {
+): Promise<ToolResultMessage[]> {
+    const results: ToolResultMessage[] = []
+
+    for (const toolCall of toolCalls) {
+        await options.emit({
+            type: "tool_execution_start",
+            runId: options.runId,
+            toolCallId: toolCall.toolCallId,
+            toolName: toolCall.toolName,
+            input: structuredClone(toolCall.input),
+        })
+        const result: ToolResultMessage = {
+            id: options.generateId(),
+            sessionId: options.sessionId,
+            runId: options.runId,
+            role: "toolResult",
+            toolCallId: toolCall.toolCallId,
+            toolName: toolCall.toolName,
+            content: truncateToolOutput(content),
+            isError: true,
+            createdAt: options.now(),
+        }
+        await options.emit({
+            type: "tool_execution_end",
+            runId: options.runId,
+            toolCallId: toolCall.toolCallId,
+            toolName: toolCall.toolName,
+            result,
+        })
+        await emitCompletedMessage(result, options.runId, options.emit)
+        results.push(result)
+    }
+
+    return results
+}
+
+async function executeToolCall(
+    toolCall: ToolCallContent,
+    toolsByName: ReadonlyMap<string, AgentTool>,
+    options: IExecuteToolCallsOptions,
+): Promise<ToolResultMessage> {
     let content: string
     let isError: boolean
-    let outcome: TToolExecutionOutcome | undefined
+    let outcome: ToolExecutionOutcome | undefined
     let summary: string | undefined
     const tool = toolsByName.get(toolCall.toolName)
 
@@ -112,7 +153,7 @@ async function executeToolCall(
         let acceptingProgress = true
         let acceptingApprovals = true
         let approvalRequested = false
-        let pendingApprovalTask: Promise<TToolApprovalDecision> | undefined
+        let pendingApprovalTask: Promise<ToolApprovalDecision> | undefined
         let progressTask: Promise<void> = Promise.resolve()
         const reportProgress = (progress: string): void => {
             if (!acceptingProgress) return
@@ -127,8 +168,8 @@ async function executeToolCall(
             void progressTask.catch(() => {})
         }
         const requestApproval = (
-            draft: TToolApprovalDraft,
-        ): Promise<TToolApprovalDecision> => {
+            draft: ToolApprovalDraft,
+        ): Promise<ToolApprovalDecision> => {
             if (!acceptingApprovals) {
                 return Promise.reject(new Error(
                     `Tool "${tool.name}" is no longer accepting approval requests`,
@@ -155,7 +196,7 @@ async function executeToolCall(
                 ))
             }
 
-            let task: Promise<TToolApprovalDecision>
+            let task: Promise<ToolApprovalDecision>
             try {
                 options.signal.throwIfAborted()
                 approvalRequested = true
@@ -280,7 +321,7 @@ function normalizeToolExecutionResult(
     value: unknown,
 ): {
     readonly content: string
-    readonly outcome: TToolExecutionOutcome
+    readonly outcome: ToolExecutionOutcome
     readonly summary?: string
 } {
     if (typeof value === "string") {
@@ -313,7 +354,7 @@ function normalizeToolExecutionResult(
     }
 }
 
-function isToolExecutionOutcome(value: unknown): value is TToolExecutionOutcome {
+function isToolExecutionOutcome(value: unknown): value is ToolExecutionOutcome {
     return value === "completed"
         || value === "rejected"
         || value === "manual"
@@ -337,7 +378,7 @@ function isUnknownSideEffectsError(error: unknown): boolean {
 }
 
 function assertToolInput(
-    tool: IAgentTool,
+    tool: AgentTool,
     input: Record<string, unknown>,
 ): void {
     if (Value.Check(tool.inputSchema, input)) return
@@ -352,9 +393,9 @@ function assertToolInput(
 }
 
 async function emitCompletedMessage(
-    message: IToolResultMessage,
+    message: ToolResultMessage,
     runId: string,
-    emit: (event: IAgentEvent) => void | Promise<void>,
+    emit: (event: AgentEvent) => void | Promise<void>,
 ): Promise<void> {
     await emit({ type: "message_start", runId, message })
     await emit({ type: "message_end", runId, message })

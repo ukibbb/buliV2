@@ -9,9 +9,9 @@ import {
     useBuliUiSnapshot,
 } from "@/app/ui/context/ui-controller-context"
 import type {
-    IUserMessage,
-    TAgentRunEndReason,
-    TToolApprovalRequest,
+    AgentRunEndReason,
+    ToolApprovalRequest,
+    UserMessage,
 } from "@/agent"
 import type { IContextUsage } from "@/sessions"
 import { useTerminalClipboard } from "@/terminal/clipboard/ClipboardOverlay"
@@ -20,10 +20,10 @@ interface IChatProps {
     readonly isRunning?: boolean
     readonly isCompacting?: boolean
     readonly contextUsage?: IContextUsage | undefined
-    readonly pendingSteeringMessages?: readonly IUserMessage[]
-    readonly pendingFollowUpMessages?: readonly IUserMessage[]
-    readonly pendingToolApproval?: TToolApprovalRequest
-    readonly lastRunReason?: TAgentRunEndReason
+    readonly pendingSteeringMessages?: readonly UserMessage[]
+    readonly pendingFollowUpMessages?: readonly UserMessage[]
+    readonly pendingToolApproval?: ToolApprovalRequest
+    readonly lastRunReason?: AgentRunEndReason
     readonly errorMessage?: string
 }
 
@@ -100,8 +100,8 @@ export const Chat = memo(ChatView, (previous, next) => (
 ))
 
 function sameMessageQueue(
-    previous: readonly IUserMessage[] | undefined,
-    next: readonly IUserMessage[] | undefined,
+    previous: readonly UserMessage[] | undefined,
+    next: readonly UserMessage[] | undefined,
 ): boolean {
     if (previous === next) return true
     if (previous === undefined || next === undefined) return false

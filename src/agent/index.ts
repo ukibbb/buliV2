@@ -1,28 +1,38 @@
 /** Public agent feature API used by sessions, adapters and application composition. */
 export { Agent } from "@/agent/agent"
+export type { AgentOptions } from "@/agent/agent"
+export { runAgentLoop } from "@/agent/agent-loop"
+export type {
+    AgentApprovalContext,
+    AgentApprovalHandler,
+    AgentContext,
+    AgentEventSink,
+    AgentInputQueue,
+    AgentLoopConfig,
+} from "@/agent/agent-loop"
 export { isImmutableAssistantSnapshot } from "@/agent/assistant-message-builder"
 export { systemPrompt } from "@/agent/system-prompt"
-export type { IWorkspaceInstructions } from "@/agent/system-prompt"
+export type { WorkspaceInstructions } from "@/agent/system-prompt"
 export type {
-    IAgentEvent,
-    TAgentCriticalEventSink,
-    TAgentEventListener,
+    AgentCriticalEventSink,
+    AgentEvent,
+    AgentEventListener,
 } from "@/agent/events"
 export type {
-    IAssistantMessage,
-    IReasoningContent,
-    ITextContent,
-    IToolCallContent,
-    IToolResultMessage,
-    IUserImageAttachment,
-    IUserInput,
-    IUserMessage,
-    IUserPathReference,
-    IUserSourceText,
-    TAgentMessage,
-    TAssistantContent,
-    TUserInput,
-    TUserMessageSource,
+    AgentMessage,
+    AssistantContent,
+    AssistantMessage,
+    ReasoningContent,
+    TextContent,
+    ToolCallContent,
+    ToolResultMessage,
+    UserImageAttachment,
+    UserInput,
+    UserInputContent,
+    UserMessage,
+    UserMessageSource,
+    UserPathReference,
+    UserSourceText,
 } from "@/agent/messages"
 export {
     USER_IMAGE_ATTACHMENTS_MAX,
@@ -33,43 +43,43 @@ export {
 } from "@/agent/messages"
 export { isValidUserImage } from "@/agent/user-image"
 export type {
-    IAgentModel,
-    IAgentModelEvent,
-    IAgentModelRequest,
-    IAgentRunConfiguration,
-    TAgentRunConfigurationResolver,
+    AgentModel,
+    AgentModelEvent,
+    AgentModelRequest,
+    AgentRunConfiguration,
+    AgentRunConfigurationResolver,
 } from "@/agent/model"
 export {
     isModelContextOverflowError,
     ModelContextOverflowError,
 } from "@/agent/model"
 export type {
-    IModelProfile,
-    IModelUsage,
-    TReasoningEffort,
+    ModelProfile,
+    ModelUsage,
+    ReasoningEffort,
 } from "@/agent/model-values"
 export type {
-    IAgentContextProjection,
-    IAgentLoopResult,
-    IAgentRunHandle,
-    IAgentState,
-    TAgentRunEndReason,
-    TAgentContextProjector,
+    AgentContextProjection,
+    AgentContextProjector,
+    AgentLoopResult,
+    AgentRunEndReason,
+    AgentRunHandle,
+    AgentState,
 } from "@/agent/state"
 export type {
-    IAgentTool,
-    IAgentToolDescriptor,
-    IAgentToolExecutionContext,
-    IAgentToolExecutionResult,
-    TToolApprovalKind,
-    TToolExecutionOutcome,
+    AgentTool,
+    AgentToolContext,
+    AgentToolDescriptor,
+    AgentToolResult,
+    ToolApprovalKind,
+    ToolExecutionOutcome,
 } from "@/agent/tool"
 export type {
-    ICommandToolApprovalDraft,
-    ICommandToolApprovalRequest,
-    IPatchToolApprovalDraft,
-    IPatchToolApprovalRequest,
-    TToolApprovalDecision,
-    TToolApprovalDraft,
-    TToolApprovalRequest,
+    CommandToolApprovalDraft,
+    CommandToolApprovalRequest,
+    PatchToolApprovalDraft,
+    PatchToolApprovalRequest,
+    ToolApprovalDecision,
+    ToolApprovalDraft,
+    ToolApprovalRequest,
 } from "@/agent/tool-approval"

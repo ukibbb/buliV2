@@ -13,8 +13,8 @@ import { tmpdir } from "node:os"
 import { delimiter as PATH_DELIMITER, join, relative } from "node:path"
 
 import type {
-  IAgentTool,
-  IAgentToolExecutionContext,
+  AgentTool,
+  AgentToolContext,
 } from "@/agent/tool"
 import { createWorkspaceTools } from "@/tools"
 
@@ -578,14 +578,14 @@ test("tools stop before work when already aborted", async () => {
   }
 })
 
-function getTool(tools: readonly IAgentTool[], name: string): IAgentTool {
+function getTool(tools: readonly AgentTool[], name: string): AgentTool {
   const tool = tools.find((candidate) => candidate.name === name)
   if (!tool) throw new Error(`Expected ${name} tool`)
   return tool
 }
 
 function textResult(
-  result: Awaited<ReturnType<IAgentTool["execute"]>>,
+  result: Awaited<ReturnType<AgentTool["execute"]>>,
 ): string {
   if (typeof result !== "string") return result.content
   return result
@@ -593,8 +593,8 @@ function textResult(
 
 function context(
   signal: AbortSignal = new AbortController().signal,
-  selectedPathReferences?: IAgentToolExecutionContext["selectedPathReferences"],
-): IAgentToolExecutionContext {
+  selectedPathReferences?: AgentToolContext["selectedPathReferences"],
+): AgentToolContext {
   return {
     sessionId: "session-workspace-tool",
     toolCallId: "call-workspace-tool",

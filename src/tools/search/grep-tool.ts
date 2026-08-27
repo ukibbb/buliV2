@@ -1,7 +1,8 @@
 import { Buffer } from "node:buffer"
 import { resolve } from "node:path"
+import { Type } from "typebox"
 
-import type { IAgentTool } from "@/agent"
+import type { AgentTool } from "@/agent"
 import {
     toWorkspaceRelativePath,
     type TWorkspacePathResolver,
@@ -26,60 +27,50 @@ import {
 const GREP_TIMEOUT_MS = 30_000
 const RENDERED_LINE_MAX_CHARACTERS = 2_000
 
+const GREP_INPUT_SCHEMA = Type.Object({
+    pattern: Type.String({
+        minLength: 1,
+        description: "Non-empty regular expression or literal text to find",
+    }),
+    path: Type.Optional(Type.String({
+        minLength: 1,
+        description: "File or directory to search inside the workspace",
+    })),
+    include: Type.Optional(Type.String({
+        minLength: 1,
+        description: "Only search files matching this glob",
+    })),
+    literal: Type.Optional(Type.Boolean({
+        default: false,
+        description: "Treat pattern as literal text instead of a regular expression",
+    })),
+    caseSensitive: Type.Optional(Type.Boolean({
+        default: true,
+        description: "Match letter case",
+    })),
+    context: Type.Optional(Type.Integer({
+        minimum: 0,
+        maximum: 10,
+        default: 0,
+        description: "Context lines to show before and after each match",
+    })),
+    limit: Type.Optional(Type.Integer({
+        minimum: 1,
+        maximum: SEARCH_MAX_LIMIT,
+        default: SEARCH_DEFAULT_LIMIT,
+        description: "Maximum number of matching lines to return",
+    })),
+}, { additionalProperties: false })
+
 /** Creates the tool that searches workspace text with ripgrep expressions. */
 export function createGrepTool(
     resolveWorkspacePath: TWorkspacePathResolver,
     resolveRipgrepExecutable: TRipgrepExecutableResolver,
-): IAgentTool {
+): AgentTool<typeof GREP_INPUT_SCHEMA> {
     return {
         name: "grep",
         description: "Search workspace text with ripgrep regular expressions.",
-        inputSchema: {
-            type: "object",
-            properties: {
-                pattern: {
-                    type: "string",
-                    minLength: 1,
-                    description: "Non-empty regular expression or literal text to find",
-                },
-                path: {
-                    type: "string",
-                    minLength: 1,
-                    description: "File or directory to search inside the workspace",
-                },
-                include: {
-                    type: "string",
-                    minLength: 1,
-                    description: "Only search files matching this glob",
-                },
-                literal: {
-                    type: "boolean",
-                    default: false,
-                    description: "Treat pattern as literal text instead of a regular expression",
-                },
-                caseSensitive: {
-                    type: "boolean",
-                    default: true,
-                    description: "Match letter case",
-                },
-                context: {
-                    type: "integer",
-                    minimum: 0,
-                    maximum: 10,
-                    default: 0,
-                    description: "Context lines to show before and after each match",
-                },
-                limit: {
-                    type: "integer",
-                    minimum: 1,
-                    maximum: SEARCH_MAX_LIMIT,
-                    default: SEARCH_DEFAULT_LIMIT,
-                    description: "Maximum number of matching lines to return",
-                },
-            },
-            required: ["pattern"],
-            additionalProperties: false,
-        },
+        inputSchema: GREP_INPUT_SCHEMA,
         execute: async (input, context) => {
             const pattern = requireNonEmptyString(input, "pattern")
             rejectNul(pattern, "Search pattern")

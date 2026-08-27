@@ -1,41 +1,41 @@
-import type { IAgentModelEvent } from "@/agent/model"
+import type { AgentModelEvent } from "@/agent/model"
 import type {
-    IAssistantMessage,
-    IToolResultMessage,
-    TAgentMessage,
+    AgentMessage,
+    AssistantMessage,
+    ToolResultMessage,
 } from "@/agent/messages"
-import type { TAgentRunEndReason } from "@/agent/state"
+import type { AgentRunEndReason } from "@/agent/state"
 import type {
-    TToolApprovalDecision,
-    TToolApprovalRequest,
+    ToolApprovalDecision,
+    ToolApprovalRequest,
 } from "@/agent/tool-approval"
 
-interface IAgentEventBase {
+interface AgentEventBase {
     readonly runId: string
 }
 
-type TAgentEventPayload =
+type AgentEventPayload =
     | { readonly type: "agent_start" }
     | {
         readonly type: "agent_end"
-        readonly reason: TAgentRunEndReason
-        readonly messages: readonly TAgentMessage[]
+        readonly reason: AgentRunEndReason
+        readonly messages: readonly AgentMessage[]
     }
     | { readonly type: "turn_start"; readonly index: number }
     | {
         readonly type: "turn_end"
         readonly index: number
-        readonly message: IAssistantMessage
-        readonly toolResults: readonly IToolResultMessage[]
+        readonly message: AssistantMessage
+        readonly toolResults: readonly ToolResultMessage[]
         readonly willContinue: boolean
     }
-    | { readonly type: "message_start"; readonly message: TAgentMessage }
+    | { readonly type: "message_start"; readonly message: AgentMessage }
     | {
         readonly type: "message_update"
-        readonly message: IAssistantMessage
-        readonly modelEvent: IAgentModelEvent
+        readonly message: AssistantMessage
+        readonly modelEvent: AgentModelEvent
     }
-    | { readonly type: "message_end"; readonly message: TAgentMessage }
+    | { readonly type: "message_end"; readonly message: AgentMessage }
     | {
         readonly type: "tool_execution_start"
         readonly toolCallId: string
@@ -52,33 +52,33 @@ type TAgentEventPayload =
         readonly type: "tool_execution_end"
         readonly toolCallId: string
         readonly toolName: string
-        readonly result: IToolResultMessage
+        readonly result: ToolResultMessage
     }
     | {
         readonly type: "tool_approval_requested"
-        readonly request: TToolApprovalRequest
+        readonly request: ToolApprovalRequest
     }
     | {
         readonly type: "tool_approval_resolved"
         readonly approvalId: string
-        readonly decision: TToolApprovalDecision | undefined
+        readonly decision: ToolApprovalDecision | undefined
     }
     | {
         readonly type: "agent_settled"
-        readonly reason: TAgentRunEndReason
+        readonly reason: AgentRunEndReason
         readonly errorMessage?: string
     }
 
 /** Event protocol connecting live agent execution with persistence and UI. */
-export type IAgentEvent = IAgentEventBase & TAgentEventPayload
+export type AgentEvent = AgentEventBase & AgentEventPayload
 
-export type TAgentEventListener = (
-    event: IAgentEvent,
+export type AgentEventListener = (
+    event: AgentEvent,
     signal: AbortSignal,
 ) => void | Promise<void>
 
 /** Critical sink that must finish before an event is considered accepted. */
-export type TAgentCriticalEventSink = (
-    event: IAgentEvent,
+export type AgentCriticalEventSink = (
+    event: AgentEvent,
     signal: AbortSignal,
 ) => void | Promise<void>

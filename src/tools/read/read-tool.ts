@@ -1,7 +1,8 @@
 import { Buffer } from "node:buffer"
 import { open, opendir, stat } from "node:fs/promises"
+import { Type } from "typebox"
 
-import type { IAgentTool } from "@/agent"
+import type { AgentTool } from "@/agent"
 import type {
     TSelectedPathResolver,
     TWorkspacePathResolver,
@@ -16,40 +17,34 @@ const FILE_READ_CHUNK_BYTES = 64 * 1024
 const READ_MAX_FILE_BYTES = 4 * 1024 * 1024
 const READ_MAX_DIRECTORY_ENTRIES = 100_000
 
+const READ_INPUT_SCHEMA = Type.Object({
+    path: Type.String({
+        minLength: 1,
+        description: "Relative path, or an absolute path inside the workspace",
+    }),
+    offset: Type.Optional(Type.Integer({
+        minimum: 1,
+        default: 1,
+        description: "First line or directory entry to return (1-based)",
+    })),
+    limit: Type.Optional(Type.Integer({
+        minimum: 1,
+        maximum: READ_DEFAULT_LIMIT,
+        default: READ_DEFAULT_LIMIT,
+        description: "Maximum number of lines or entries to return",
+    })),
+}, { additionalProperties: false })
+
 /** Creates the tool that reads text files and lists workspace directories. */
 export function createReadTool(
     resolveWorkspacePath: TWorkspacePathResolver,
     resolveSelectedPath?: TSelectedPathResolver,
-): IAgentTool {
+): AgentTool<typeof READ_INPUT_SCHEMA> {
     return {
         name: "read",
         description: "Read a text file or list a workspace directory or a path explicitly selected with @.",
         acceptsSelectedPathReferences: resolveSelectedPath !== undefined,
-        inputSchema: {
-            type: "object",
-            properties: {
-                path: {
-                    type: "string",
-                    minLength: 1,
-                    description: "Relative path, or an absolute path inside the workspace",
-                },
-                offset: {
-                    type: "integer",
-                    minimum: 1,
-                    default: 1,
-                    description: "First line or directory entry to return (1-based)",
-                },
-                limit: {
-                    type: "integer",
-                    minimum: 1,
-                    maximum: READ_DEFAULT_LIMIT,
-                    default: READ_DEFAULT_LIMIT,
-                    description: "Maximum number of lines or entries to return",
-                },
-            },
-            required: ["path"],
-            additionalProperties: false,
-        },
+        inputSchema: READ_INPUT_SCHEMA,
         execute: async (input, context) => {
             const path = requireNonEmptyString(input, "path")
             const offset = optionalInteger(input, "offset", 1, 1)

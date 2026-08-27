@@ -1,10 +1,10 @@
 import { useMemo, type ReactNode } from "react"
 
 import type {
-    IAssistantMessage,
-    IToolCallContent,
-    IToolResultMessage,
-    TAgentMessage,
+    AgentMessage,
+    AssistantMessage,
+    ToolCallContent,
+    ToolResultMessage,
 } from "@/agent"
 import { ToolActivityLine } from "@/sessions/ui/ToolActivity"
 import { syntax, theme } from "@/terminal/theme"
@@ -24,16 +24,16 @@ const MARKDOWN_TABLE_OPTIONS = {
 } as const
 
 export interface ITranscriptProps {
-    readonly messages: readonly TAgentMessage[]
-    readonly streamingMessage?: IAssistantMessage
+    readonly messages: readonly AgentMessage[]
+    readonly streamingMessage?: AssistantMessage
     readonly activeRunId?: string
     readonly pendingToolCallIds?: readonly string[]
 }
 
 function AssistantCard(props: {
-    readonly message: IAssistantMessage
+    readonly message: AssistantMessage
     readonly streaming: boolean
-    readonly toolResults: ReadonlyMap<string, IToolResultMessage>
+    readonly toolResults: ReadonlyMap<string, ToolResultMessage>
     readonly activeToolCallIds: ReadonlySet<string>
     readonly runningToolCallIds: ReadonlySet<string>
 }): ReactNode {
@@ -143,7 +143,7 @@ export function Transcript(props: ITranscriptProps): ReactNode {
 }
 
 function renderDurableMessage(
-    message: TAgentMessage,
+    message: AgentMessage,
     projection: IToolActivityProjection,
     runningToolCallIds: ReadonlySet<string>,
 ): ReactNode {
@@ -171,13 +171,13 @@ function renderDurableMessage(
     }
 }
 
-const EMPTY_TOOL_RESULTS: ReadonlyMap<string, IToolResultMessage> = new Map()
+const EMPTY_TOOL_RESULTS: ReadonlyMap<string, ToolResultMessage> = new Map()
 const EMPTY_TOOL_CALL_IDS: ReadonlySet<string> = new Set()
 
 interface IToolActivityProjection {
     readonly resultsByAssistantMessageId: ReadonlyMap<
         string,
-        ReadonlyMap<string, IToolResultMessage>
+        ReadonlyMap<string, ToolResultMessage>
     >
     readonly matchedToolResultMessageIds: ReadonlySet<string>
     readonly activeAssistantMessageId?: string
@@ -185,17 +185,17 @@ interface IToolActivityProjection {
 }
 
 interface IOpenToolBatch {
-    readonly message: IAssistantMessage
-    readonly callsById: Map<string, IToolCallContent>
+    readonly message: AssistantMessage
+    readonly callsById: Map<string, ToolCallContent>
 }
 
 function projectToolActivities(
-    messages: readonly TAgentMessage[],
+    messages: readonly AgentMessage[],
     activeRunId: string | undefined,
 ): IToolActivityProjection {
     const resultsByAssistantMessageId = new Map<
         string,
-        Map<string, IToolResultMessage>
+        Map<string, ToolResultMessage>
     >()
     const matchedToolResultMessageIds = new Set<string>()
     let openBatch: IOpenToolBatch | undefined
@@ -221,7 +221,7 @@ function projectToolActivities(
         if (message.role !== "assistant") continue
         if (message.stopReason === "aborted" || message.stopReason === "error") continue
         const calls = message.content.filter(
-            (content): content is IToolCallContent => content.type === "toolCall",
+            (content): content is ToolCallContent => content.type === "toolCall",
         )
         if (calls.length === 0) continue
         openBatch = {
@@ -242,14 +242,14 @@ function projectToolActivities(
 }
 
 function belongsToBatch(
-    result: IToolResultMessage,
+    result: ToolResultMessage,
     batch: IOpenToolBatch,
 ): boolean {
     return result.sessionId === batch.message.sessionId
         && result.runId === batch.message.runId
 }
 
-function toolCallIds(message: IAssistantMessage): ReadonlySet<string> {
+function toolCallIds(message: AssistantMessage): ReadonlySet<string> {
     return new Set(message.content.flatMap((content) =>
         content.type === "toolCall" ? [content.toolCallId] : []
     ))

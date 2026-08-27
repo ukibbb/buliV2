@@ -2,7 +2,7 @@ import { realpath, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { isAbsolute, relative, resolve, sep } from "node:path"
 
-import type { IUserPathReference } from "@/agent"
+import type { UserPathReference } from "@/agent"
 
 export interface IResolvedWorkspacePath {
     readonly root: string
@@ -17,7 +17,7 @@ export type TWorkspacePathResolver = (
 
 export type TSelectedPathResolver = (
     path: string,
-    references: readonly IUserPathReference[],
+    references: readonly UserPathReference[],
     signal: AbortSignal,
 ) => Promise<IResolvedWorkspacePath>
 

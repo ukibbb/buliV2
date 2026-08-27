@@ -1,9 +1,9 @@
 import type {
-    IAgentModel,
-    IAgentTool,
-    IModelProfile,
-    TReasoningEffort,
-    TToolApprovalDecision,
+    AgentModel,
+    AgentTool,
+    ModelProfile,
+    ReasoningEffort,
+    ToolApprovalDecision,
 } from "@/agent"
 import type {
     IBuliAgentDisplayInfo,
@@ -31,15 +31,15 @@ type TBuliRuntimeSubscribe = () => void
 
 export interface IBuliAgentRuntimeConfig extends IBuliAgentDisplayInfo {
     readonly systemPrompt: string
-    readonly tools: readonly IAgentTool[]
+    readonly tools: readonly AgentTool[]
 }
 
 export interface IBuliModelRuntimeConfig extends IBuliModelDisplayInfo {
-    readonly model: IAgentModel
-    readonly modelProfile?: IModelProfile
+    readonly model: AgentModel
+    readonly modelProfile?: ModelProfile
     readonly providerAccountId?: string
     readonly fallbackSelectionId?: string
-    readonly defaultReasoningEffort: TReasoningEffort
+    readonly defaultReasoningEffort: ReasoningEffort
 }
 
 export type TBuliModelRegistrationLoader = (
@@ -256,7 +256,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
     readonly resolveToolApproval = (
         sessionId: string,
         approvalId: string,
-        decision: TToolApprovalDecision,
+        decision: ToolApprovalDecision,
     ): void => {
         if (this.disposed) throw new Error("Buli runtime is disposed")
         this.getOrOpenAgentSession(sessionId).resolveToolApproval(
@@ -312,7 +312,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
     }
 
     readonly selectReasoningEffort = (
-        reasoningEffort: TReasoningEffort,
+        reasoningEffort: ReasoningEffort,
     ): void => {
         // Przyjmij reasoning effort, który ma obowiązywać globalnie.
         if (this.disposed) throw new Error("Buli runtime is disposed")

@@ -1,6 +1,7 @@
 import { stat } from "node:fs/promises"
+import { Type } from "typebox"
 
-import type { IAgentTool } from "@/agent"
+import type { AgentTool } from "@/agent"
 import {
     PROCESS_INTERPRETER_DISPLAY,
     runShellProcess,
@@ -21,65 +22,56 @@ const INPUT_KEYS = new Set([
     "timeout",
 ])
 
+const REQUIRED_TEXT_OPTIONS = {
+    minLength: 1,
+    pattern: "\\S",
+} as const
+
+const BASH_INPUT_SCHEMA = Type.Object({
+    command: Type.String({
+        ...REQUIRED_TEXT_OPTIONS,
+        description: "Exact shell command to run once",
+    }),
+    purpose: Type.String({
+        ...REQUIRED_TEXT_OPTIONS,
+        description: "What this command is intended to accomplish",
+    }),
+    explanation: Type.String({
+        ...REQUIRED_TEXT_OPTIONS,
+        description: "Why running this command is appropriate now",
+    }),
+    expectedOutcome: Type.String({
+        ...REQUIRED_TEXT_OPTIONS,
+        description: "Expected observable result",
+    }),
+    sideEffects: Type.String({
+        ...REQUIRED_TEXT_OPTIONS,
+        description: "Expected filesystem, process, or other side effects",
+    }),
+    cwd: Type.Optional(Type.String({
+        ...REQUIRED_TEXT_OPTIONS,
+        default: ".",
+        description: "Workspace directory in which to run the command",
+    })),
+    timeout: Type.Optional(Type.Integer({
+        minimum: 1,
+        maximum: MAX_TIMEOUT_SECONDS,
+        default: DEFAULT_TIMEOUT_SECONDS,
+        description: `Maximum execution time in seconds; defaults to ${DEFAULT_TIMEOUT_SECONDS} and cannot exceed ${MAX_TIMEOUT_SECONDS}`,
+    })),
+}, { additionalProperties: false })
+
 /** Creates the approval-gated tool for running one workspace Bash command. */
-export function createBashTool(workspaceRoot: string): IAgentTool {
+export function createBashTool(
+    workspaceRoot: string,
+): AgentTool<typeof BASH_INPUT_SCHEMA> {
     const resolveWorkspacePath = createWorkspacePathResolver(workspaceRoot)
 
     return {
         name: "bash",
         approvalKind: "command",
         description: `Offer one exact command for Copy, Run once, or Reject. Run once uses ${PROCESS_INTERPRETER_DISPLAY} in a fresh non-interactive process after explicit approval. It is not a sandbox; deliberately detached descendants may outlive the run. Prefer read, glob, and grep for inspection, and apply_patch for file changes.`,
-        inputSchema: {
-            type: "object",
-            properties: {
-                command: {
-                    type: "string",
-                    minLength: 1,
-                    description: "Exact shell command to run once",
-                },
-                purpose: {
-                    type: "string",
-                    minLength: 1,
-                    description: "What this command is intended to accomplish",
-                },
-                explanation: {
-                    type: "string",
-                    minLength: 1,
-                    description: "Why running this command is appropriate now",
-                },
-                expectedOutcome: {
-                    type: "string",
-                    minLength: 1,
-                    description: "Expected observable result",
-                },
-                sideEffects: {
-                    type: "string",
-                    minLength: 1,
-                    description: "Expected filesystem, process, or other side effects",
-                },
-                cwd: {
-                    type: "string",
-                    minLength: 1,
-                    default: ".",
-                    description: "Workspace directory in which to run the command",
-                },
-                timeout: {
-                    type: "integer",
-                    minimum: 1,
-                    maximum: MAX_TIMEOUT_SECONDS,
-                    default: DEFAULT_TIMEOUT_SECONDS,
-                    description: `Maximum execution time in seconds; defaults to ${DEFAULT_TIMEOUT_SECONDS} and cannot exceed ${MAX_TIMEOUT_SECONDS}`,
-                },
-            },
-            required: [
-                "command",
-                "purpose",
-                "explanation",
-                "expectedOutcome",
-                "sideEffects",
-            ],
-            additionalProperties: false,
-        },
+        inputSchema: BASH_INPUT_SCHEMA,
         execute: async (input, context) => {
             assertOnlyInputKeys(input)
             const command = requireNonEmptyString(input, "command")

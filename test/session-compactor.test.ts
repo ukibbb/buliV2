@@ -7,15 +7,11 @@ import type {
 } from "@/agent"
 import {
   compactSessionMessages,
-  estimateMessagesInputTokens,
-  findCompactionCutoff,
   type ICompactionCheckpoint,
-  MAX_RETAINED_CONTEXT_TOKENS,
   projectAgentContext,
-  retainedContextTargetTokens,
 } from "@/sessions"
 
-test("findCompactionCutoff retains a user-led suffix and complete tool batches", () => {
+test("compactSessionMessages replaces completed history and retains an unprocessed user", async () => {
   const messages: readonly AgentMessage[] = [
     user("user-1", "Inspect the file"),
     assistant("assistant-tools", [{
@@ -24,68 +20,43 @@ test("findCompactionCutoff retains a user-led suffix and complete tool batches",
       toolName: "read_file",
       input: { path: "README.md" },
     }]),
-    {
-      id: "result-1",
-      sessionId: "session-1",
-      runId: "run-1",
-      role: "toolResult",
-      toolCallId: "call-1",
-      toolName: "read_file",
-      content: "Contents",
-      isError: false,
-      createdAt: 3,
-    },
+    toolResult("result-1", "call-1", "Contents", "run-assistant-tools"),
     user("user-2", "Continue", 4),
-    assistant("assistant-2", [{ type: "text", text: "Done" }], 5),
   ]
+  const requests: AgentModelRequest[] = []
 
-  const latestTurnBudget = estimateMessagesInputTokens(messages.slice(3))
-  const cutoff = findCompactionCutoff(messages, latestTurnBudget)
-  expect(cutoff).toBe(3)
-  expect(messages[cutoff!]?.role).toBe("user")
-  expect(messages.slice(0, cutoff).map((message) => message.role)).toEqual([
-    "user",
-    "assistant",
-    "toolResult",
-  ])
-  expect(() => findCompactionCutoff(messages.slice(0, 2), latestTurnBudget)).toThrow(
-    "Incomplete tool sequence in compaction history",
-  )
+  const checkpoint = await compactSessionMessages({
+    sessionId: "session-1",
+    messages,
+    runConfiguration: configuration(requests, "Completed tool inspection"),
+    reason: "automatic",
+    signal: new AbortController().signal,
+    now: () => 100,
+    generateId: () => "checkpoint-1",
+  })
+
+  expect(checkpoint).toMatchObject({
+    compactedMessageCount: 3,
+    throughMessageId: "result-1",
+    summary: structuredSummary("Completed tool inspection"),
+  })
+  expect(requests).toHaveLength(1)
+  expect(requests[0]?.systemPrompt).toContain("## Files Read and Why")
+  expect(requests[0]?.systemPrompt).toContain("prefer completeness")
+  expect(requests[0]?.systemPrompt).not.toContain("below 2048")
+  expect(requests[0]?.systemPrompt).not.toContain("below 2,048")
+  expect(requests[0]?.messages[0]).toMatchObject({ role: "user" })
+  const prompt = requestPrompt(requests[0]!)
+  expect(prompt).toContain("[Assistant tool call: read_file]")
+  expect(prompt).toContain("[Tool result: read_file]")
+  expect(prompt).toContain("Contents")
+
+  const projection = projectAgentContext(messages, checkpoint)
+  expect(projection.contextSummary).toBe(structuredSummary("Completed tool inspection"))
+  expect(projection.messages).toEqual(messages.slice(3))
 })
 
-test("findCompactionCutoff adapts retained turns to the request budget", () => {
-  const messages = conversation(8)
-  const threeTurnBudget = estimateMessagesInputTokens(messages.slice(2))
-
-  expect(findCompactionCutoff(messages, threeTurnBudget)).toBe(2)
-  expect(messages.slice(2)).toHaveLength(6)
-
-  const oversizedLatestTurn = [
-    ...conversation(2),
-    user("large-user", "U".repeat(10_000), 3),
-    assistant("large-assistant", [{
-      type: "text",
-      text: "A".repeat(10_000),
-    }], 4),
-  ]
-  expect(findCompactionCutoff(oversizedLatestTurn, 0)).toBe(4)
-})
-
-test("findCompactionCutoff caps retained context at 20k tokens", () => {
-  const messages: readonly AgentMessage[] = [
-    user("large-user", "U".repeat(80_000)),
-    assistant("large-assistant", [{ type: "text", text: "Large answer" }]),
-    user("latest-user", "Latest question", 3),
-    assistant("latest-assistant", [{ type: "text", text: "Latest answer" }], 4),
-  ]
-
-  expect(retainedContextTargetTokens(100_000)).toBe(
-    MAX_RETAINED_CONTEXT_TOKENS,
-  )
-  expect(findCompactionCutoff(messages, 100_000)).toBe(2)
-})
-
-test("compactSessionMessages updates a previous summary using only the new prefix", async () => {
+test("compactSessionMessages updates a previous checkpoint through all completed history", async () => {
   const messages = conversation(8)
   const original = structuredClone(messages)
   const previous: ICompactionCheckpoint = {
@@ -95,37 +66,15 @@ test("compactSessionMessages updates a previous summary using only the new prefi
     reason: "manual",
     compactedMessageCount: 2,
     throughMessageId: messages[1]!.id,
-    summary: "Earlier summary",
+    summary: structuredSummary("Earlier checkpoint"),
   }
   const requests: AgentModelRequest[] = []
-  const model: AgentModel = {
-    async *stream(request) {
-      requests.push(request)
-      yield { type: "text-start", id: "summary" }
-      yield { type: "text-delta", id: "summary", delta: " Updated summary. " }
-      yield { type: "text-end", id: "summary" }
-      yield {
-        type: "finish",
-        reason: "stop",
-        usage: { inputTokens: 20, outputTokens: 3, totalTokens: 23 },
-      }
-    },
-  }
 
   const checkpoint = await compactSessionMessages({
     sessionId: "session-1",
     messages,
     previousCheckpoint: previous,
-    requestBudgetTokens: estimateMessagesInputTokens(messages.slice(4)),
-    runConfiguration: {
-      model,
-      modelProfile: {
-        providerId: "test",
-        modelId: "model-1",
-        contextWindowTokens: 4_096,
-      },
-      reasoningEffort: "low",
-    },
+    runConfiguration: configuration(requests, "Updated checkpoint"),
     reason: "automatic",
     signal: new AbortController().signal,
     now: () => 100,
@@ -134,36 +83,206 @@ test("compactSessionMessages updates a previous summary using only the new prefi
 
   expect(requests).toHaveLength(1)
   expect(requests[0]).toMatchObject({
-    contextSummary: "Earlier summary",
+    contextSummary: previous.summary,
     tools: [],
-    maxOutputTokens: 2048,
   })
-  expect(requests[0]!.messages).toHaveLength(1)
-  expect(requests[0]!.messages[0]).toMatchObject({ role: "user" })
-  expect(requests[0]!.messages[0]?.role === "user"
-    && requests[0]!.messages[0].content).toContain("[User]\nQuestion 2")
-  expect(requests[0]!.messages[0]?.role === "user"
-    && requests[0]!.messages[0].content).toContain("[Assistant]\nAnswer 3")
+  expect(requestPrompt(requests[0]!)).not.toContain("Question 0")
+  expect(requestPrompt(requests[0]!)).toContain("Question 2")
+  expect(requestPrompt(requests[0]!)).toContain("Answer 7")
   expect(checkpoint).toEqual({
     id: "checkpoint-new",
     sessionId: "session-1",
     createdAt: 100,
     reason: "automatic",
-    compactedMessageCount: 4,
-    throughMessageId: messages[3]!.id,
-    summary: "Updated summary.",
+    compactedMessageCount: 8,
+    throughMessageId: messages[7]!.id,
+    summary: structuredSummary("Updated checkpoint"),
     model: {
       providerId: "test",
       modelId: "model-1",
-      contextWindowTokens: 4_096,
+      contextWindowTokens: 100_000,
     },
-    usage: { inputTokens: 20, outputTokens: 3, totalTokens: 23 },
   })
   expect(messages).toEqual(original)
+  expect(projectAgentContext(messages, checkpoint).messages).toEqual([])
 })
 
-test("compactSessionMessages sanitizes images and bounded tool output", async () => {
+test("compactSessionMessages retains every trailing user not yet processed by a model", async () => {
+  const messages: readonly AgentMessage[] = [
+    user("old-user", "Old question"),
+    assistant("old-assistant", [{ type: "text", text: "Old answer" }]),
+    user("steer", "Adjust this", 3),
+    user("follow-up", "Then continue", 4),
+  ]
+
+  const checkpoint = await compactSessionMessages({
+    sessionId: "session-1",
+    messages,
+    runConfiguration: configuration([], "Old completed turn"),
+    reason: "automatic",
+    signal: new AbortController().signal,
+    now: () => 100,
+    generateId: () => "checkpoint-pending-users",
+  })
+
+  expect(checkpoint?.compactedMessageCount).toBe(2)
+  expect(projectAgentContext(messages, checkpoint).messages).toEqual(
+    messages.slice(2),
+  )
+})
+
+test("compactSessionMessages rejects incomplete tool history before invoking the model", async () => {
+  const messages: readonly AgentMessage[] = [
+    user("user-1", "Inspect"),
+    assistant("assistant-tools", [{
+      type: "toolCall",
+      toolCallId: "call-1",
+      toolName: "read_file",
+      input: { path: "README.md" },
+    }]),
+  ]
+  let modelCalled = false
+
+  await expect(compactSessionMessages({
+    sessionId: "session-1",
+    messages,
+    runConfiguration: {
+      model: {
+        async *stream() {
+          modelCalled = true
+        },
+      },
+      reasoningEffort: "low",
+    },
+    reason: "automatic",
+    signal: new AbortController().signal,
+    now: () => 100,
+    generateId: () => "checkpoint-incomplete-tools",
+  })).rejects.toThrow("Incomplete tool sequence in compaction history")
+  expect(modelCalled).toBe(false)
+})
+
+test("compactSessionMessages rejects tool results from a different run or tool", async () => {
+  const toolAssistant = assistant("assistant-tools", [{
+    type: "toolCall",
+    toolCallId: "call-1",
+    toolName: "read_file",
+    input: { path: "README.md" },
+  }])
+  const invalidResults = [
+    toolResult("wrong-run", "call-1", "Contents", "other-run"),
+    {
+      ...toolResult(
+        "wrong-tool",
+        "call-1",
+        "Contents",
+        toolAssistant.runId,
+      ),
+      toolName: "grep",
+    },
+  ]
+
+  for (const result of invalidResults) {
+    let modelCalled = false
+    await expect(compactSessionMessages({
+      sessionId: "session-1",
+      messages: [user("user-1", "Inspect"), toolAssistant, result],
+      runConfiguration: {
+        model: {
+          async *stream() {
+            modelCalled = true
+          },
+        },
+        reasoningEffort: "low",
+      },
+      reason: "automatic",
+      signal: new AbortController().signal,
+      now: () => 100,
+      generateId: () => "checkpoint-invalid-tool-result",
+    })).rejects.toThrow("Invalid tool sequence in compaction history")
+    expect(modelCalled).toBe(false)
+  }
+})
+
+test("compactSessionMessages replaces a legacy checkpoint beyond the safe cutoff", async () => {
+  const messages: readonly AgentMessage[] = [
+    user("old-user", "Old question"),
+    assistant("old-assistant", [{ type: "text", text: "Old answer" }]),
+    user("legacy-compacted-user", "Retry this", 3),
+    {
+      ...assistant("failed-assistant", [{ type: "text", text: "Failure" }], 4),
+      stopReason: "error",
+    },
+  ]
+  const previous: ICompactionCheckpoint = {
+    id: "legacy-checkpoint",
+    sessionId: "session-1",
+    createdAt: 5,
+    reason: "automatic",
+    compactedMessageCount: 3,
+    throughMessageId: "legacy-compacted-user",
+    summary: structuredSummary("Legacy checkpoint ".repeat(100)),
+  }
+
+  expect(projectAgentContext(messages, previous)).toEqual({ messages })
+
+  const checkpoint = await compactSessionMessages({
+    sessionId: "session-1",
+    messages,
+    previousCheckpoint: previous,
+    allowSummaryRecompression: true,
+    runConfiguration: configuration([], "Migrated checkpoint"),
+    reason: "automatic",
+    signal: new AbortController().signal,
+    now: () => 100,
+    generateId: () => "checkpoint-migrated",
+  })
+
+  expect(checkpoint).toMatchObject({
+    compactedMessageCount: 2,
+    throughMessageId: "old-assistant",
+    summary: structuredSummary("Migrated checkpoint"),
+  })
+  expect(projectAgentContext(messages, checkpoint).messages).toEqual(
+    messages.slice(2),
+  )
+})
+
+test("compactSessionMessages migrates an unstructured stored checkpoint", async () => {
+  const messages = conversation(2)
+  const previous: ICompactionCheckpoint = {
+    id: "legacy-unstructured",
+    sessionId: "session-1",
+    createdAt: 3,
+    reason: "manual",
+    compactedMessageCount: 2,
+    throughMessageId: messages[1]!.id,
+    summary: "Legacy free-form summary",
+  }
+
+  expect(projectAgentContext(messages, previous)).toEqual({ messages })
+
+  const checkpoint = await compactSessionMessages({
+    sessionId: "session-1",
+    messages,
+    previousCheckpoint: previous,
+    runConfiguration: configuration([], "Structured migration"),
+    reason: "manual",
+    signal: new AbortController().signal,
+    now: () => 100,
+    generateId: () => "checkpoint-structured",
+  })
+
+  expect(checkpoint).toMatchObject({
+    compactedMessageCount: 2,
+    throughMessageId: messages[1]!.id,
+    summary: structuredSummary("Structured migration"),
+  })
+})
+
+test("compactSessionMessages sends full durable tool output through bounded chunks", async () => {
   const imageData = "SECRET_IMAGE_DATA".repeat(1_000)
+  const toolOutputMiddle = "SECRET_TOOL_OUTPUT_MIDDLE"
   const toolOutputTail = "SECRET_TOOL_OUTPUT_TAIL"
   const messages: readonly AgentMessage[] = [
     {
@@ -185,63 +304,174 @@ test("compactSessionMessages sanitizes images and bounded tool output", async ()
         input: { path: "README.md" },
       },
     ]),
-    {
-      id: "tool-result",
-      sessionId: "session-1",
-      runId: "run-tool",
-      role: "toolResult",
-      toolCallId: "call-1",
-      toolName: "read_file",
-      content: "R".repeat(5_000) + toolOutputTail,
-      isError: false,
-      createdAt: 3,
-    },
-    user("retained-user", "Continue", 4),
+    toolResult(
+      "tool-result",
+      "call-1",
+      "R".repeat(3_000) + toolOutputMiddle + "R".repeat(3_000) + toolOutputTail,
+      "run-tool-assistant",
+    ),
+    user("pending-user", "Continue", 4),
   ]
   const requests: AgentModelRequest[] = []
+
   const checkpoint = await compactSessionMessages({
     sessionId: "session-1",
     messages,
-    requestBudgetTokens: estimateMessagesInputTokens(messages.slice(3)),
-    runConfiguration: {
-      model: {
-        async *stream(request) {
-          requests.push(request)
-          yield { type: "text-delta", id: "summary", delta: "Safe summary" }
-          yield { type: "finish", reason: "stop" }
-        },
-      },
-      modelProfile: {
-        providerId: "test",
-        modelId: "model-1",
-        contextWindowTokens: 4_096,
-      },
-      reasoningEffort: "low",
-    },
+    runConfiguration: configuration(
+      requests,
+      "Safe cumulative checkpoint",
+      6_000,
+    ),
     reason: "automatic",
     signal: new AbortController().signal,
     now: () => 100,
-    generateId: () => "checkpoint-sanitized",
+    generateId: () => "checkpoint-full-tool-output",
   })
 
   expect(requests.length).toBeGreaterThan(1)
   expect(requests.every((request) => request.messages.length === 1)).toBe(true)
-  expect(requests[0]?.contextSummary).toBeUndefined()
-  expect(requests[1]?.contextSummary).toBe("Safe summary")
-  const serializedRequest = JSON.stringify(requests)
-  expect(serializedRequest).toContain(
+  const serializedRequests = JSON.stringify(requests)
+  expect(serializedRequests).toContain(
     "[Image attachment: screen.png (image/png)]",
   )
-  expect(serializedRequest).toContain("[Assistant tool call: read_file]")
-  expect(serializedRequest).toContain("tool output truncated for compaction")
-  expect(serializedRequest).toContain(toolOutputTail)
-  expect(serializedRequest).not.toContain("SECRET_IMAGE_DATA")
-  expect(serializedRequest).not.toContain("SECRET_REASONING")
+  expect(serializedRequests).toContain("[Assistant tool call: read_file]")
+  expect(serializedRequests).toContain(toolOutputMiddle)
+  expect(serializedRequests).toContain(toolOutputTail)
+  expect(serializedRequests).not.toContain("tool output truncated for compaction")
+  expect(serializedRequests).not.toContain("SECRET_IMAGE_DATA")
+  expect(serializedRequests).not.toContain("SECRET_REASONING")
   expect(checkpoint).toMatchObject({
     compactedMessageCount: 3,
     throughMessageId: "tool-result",
-    summary: "Safe summary",
   })
+})
+
+test("compactSessionMessages preserves every UTF-8 byte across chunk boundaries", async () => {
+  const content = Array.from(
+    { length: 2_000 },
+    (_, index) => index % 2 === 0 ? `🙂 ${index}  \n\n` : `żółć ${index}\t`,
+  ).join("")
+  const messages: readonly AgentMessage[] = [
+    user("utf8-user", content),
+    assistant("utf8-assistant", [{ type: "text", text: "Done" }]),
+  ]
+  const requests: AgentModelRequest[] = []
+
+  await compactSessionMessages({
+    sessionId: "session-1",
+    messages,
+    runConfiguration: configuration(requests, "UTF-8 checkpoint", 6_000),
+    reason: "automatic",
+    signal: new AbortController().signal,
+    now: () => 100,
+    generateId: () => "checkpoint-utf8",
+  })
+
+  const prefix = "Conversation history chunk to incorporate:\n\n"
+  const suffix = "\n\nMerge this chunk into the cumulative operational checkpoint."
+  const chunks = requests.map((request) => {
+    const prompt = requestPrompt(request)
+    expect(prompt.startsWith(prefix)).toBe(true)
+    expect(prompt.endsWith(suffix)).toBe(true)
+    return prompt.slice(prefix.length, -suffix.length)
+  })
+  expect(chunks.length).toBeGreaterThan(1)
+  expect(chunks.join("")).toBe(`[User]\n${content}\n\n[Assistant]\nDone`)
+})
+
+test("compactSessionMessages recompresses an existing checkpoint at the same anchor", async () => {
+  const messages = conversation(2)
+  const previous: ICompactionCheckpoint = {
+    id: "checkpoint-old",
+    sessionId: "session-1",
+    createdAt: 3,
+    reason: "automatic",
+    compactedMessageCount: 2,
+    throughMessageId: messages[1]!.id,
+    summary: structuredSummary("X".repeat(4_000)),
+  }
+  const requests: AgentModelRequest[] = []
+
+  const checkpoint = await compactSessionMessages({
+    sessionId: "session-1",
+    messages,
+    previousCheckpoint: previous,
+    allowSummaryRecompression: true,
+    runConfiguration: configuration(requests, "Shorter checkpoint"),
+    reason: "automatic",
+    signal: new AbortController().signal,
+    now: () => 100,
+    generateId: () => "checkpoint-recompressed",
+  })
+
+  expect(checkpoint).toMatchObject({
+    id: "checkpoint-recompressed",
+    compactedMessageCount: 2,
+    throughMessageId: messages[1]!.id,
+    summary: structuredSummary("Shorter checkpoint"),
+  })
+  expect(requests[0]?.contextSummary).toBeUndefined()
+  expect(requestPrompt(requests[0]!)).toContain("Operational checkpoint chunk")
+})
+
+test("compactSessionMessages rejects same-anchor recompression without size progress", async () => {
+  const messages = conversation(2)
+  const summary = structuredSummary("Stable checkpoint")
+  const previous: ICompactionCheckpoint = {
+    id: "checkpoint-old",
+    sessionId: "session-1",
+    createdAt: 3,
+    reason: "automatic",
+    compactedMessageCount: 2,
+    throughMessageId: messages[1]!.id,
+    summary,
+  }
+
+  const checkpoint = await compactSessionMessages({
+    sessionId: "session-1",
+    messages,
+    previousCheckpoint: previous,
+    allowSummaryRecompression: true,
+    runConfiguration: configuration([], "Stable checkpoint"),
+    reason: "automatic",
+    signal: new AbortController().signal,
+    now: () => 100,
+    generateId: () => "checkpoint-no-progress",
+  })
+
+  expect(checkpoint).toBeUndefined()
+})
+
+test("compactSessionMessages accepts same-size text with smaller request serialization", async () => {
+  const messages = conversation(2)
+  const quotedSummary = structuredSummary("\"".repeat(200))
+  const plainSummary = structuredSummary("X".repeat(200))
+  expect(Buffer.byteLength(plainSummary, "utf8")).toBe(
+    Buffer.byteLength(quotedSummary, "utf8"),
+  )
+  const previous: ICompactionCheckpoint = {
+    id: "checkpoint-escaped",
+    sessionId: "session-1",
+    createdAt: 3,
+    reason: "automatic",
+    compactedMessageCount: 2,
+    throughMessageId: messages[1]!.id,
+    summary: quotedSummary,
+  }
+
+  const checkpoint = await compactSessionMessages({
+    sessionId: "session-1",
+    messages,
+    previousCheckpoint: previous,
+    allowSummaryRecompression: true,
+    runConfiguration: configuration([], "X".repeat(200)),
+    reason: "automatic",
+    signal: new AbortController().signal,
+    now: () => 100,
+    generateId: () => "checkpoint-less-escaped",
+  })
+
+  expect(checkpoint?.summary).toBe(plainSummary)
 })
 
 test("compactSessionMessages rejects summary input that cannot fit its model", async () => {
@@ -256,7 +486,6 @@ test("compactSessionMessages rejects summary input that cannot fit its model", a
   await expect(compactSessionMessages({
     sessionId: "session-1",
     messages: conversation(4),
-    requestBudgetTokens: 0,
     runConfiguration: {
       model,
       modelProfile: {
@@ -276,19 +505,17 @@ test("compactSessionMessages rejects summary input that cannot fit its model", a
   expect(modelCalled).toBe(false)
 })
 
-test("compactSessionMessages rejects a truncated summary", async () => {
-  const model: AgentModel = {
+test("compactSessionMessages rejects truncated or malformed summaries", async () => {
+  const truncated: AgentModel = {
     async *stream() {
-      yield { type: "text-delta", id: "summary", delta: "Partial summary" }
+      yield { type: "text-delta", id: "summary", delta: structuredSummary("Partial") }
       yield { type: "finish", reason: "max_output_tokens" }
     },
   }
-
   await expect(compactSessionMessages({
     sessionId: "session-1",
     messages: conversation(4),
-    requestBudgetTokens: 0,
-    runConfiguration: { model, reasoningEffort: "low" },
+    runConfiguration: { model: truncated, reasoningEffort: "low" },
     reason: "automatic",
     signal: new AbortController().signal,
     now: () => 100,
@@ -296,6 +523,50 @@ test("compactSessionMessages rejects a truncated summary", async () => {
   })).rejects.toThrow(
     "Compaction model returned an incomplete summary (max_output_tokens)",
   )
+
+  const malformed: AgentModel = {
+    async *stream() {
+      yield { type: "text-delta", id: "summary", delta: "Unstructured summary" }
+      yield { type: "finish", reason: "stop" }
+    },
+  }
+  await expect(compactSessionMessages({
+    sessionId: "session-1",
+    messages: conversation(4),
+    runConfiguration: { model: malformed, reasoningEffort: "low" },
+    reason: "automatic",
+    signal: new AbortController().signal,
+    now: () => 100,
+    generateId: () => "checkpoint-malformed",
+  })).rejects.toThrow("Compaction model omitted required section ## Goals")
+
+  const ordered = structuredSummary("Strict structure")
+  const invalidStructures = [
+    ordered
+      .replace("## Goals", "## Temporary")
+      .replace("## User Constraints", "## Goals")
+      .replace("## Temporary", "## User Constraints"),
+    `${ordered}\n\n## Goals\n- Duplicate`,
+    `${ordered}\n\n## Extra\n- Unexpected`,
+    `Prelude\n${ordered}`,
+  ]
+  for (const [index, invalidStructure] of invalidStructures.entries()) {
+    const invalidModel: AgentModel = {
+      async *stream() {
+        yield { type: "text-delta", id: "summary", delta: invalidStructure }
+        yield { type: "finish", reason: "stop" }
+      },
+    }
+    await expect(compactSessionMessages({
+      sessionId: "session-1",
+      messages: conversation(4),
+      runConfiguration: { model: invalidModel, reasoningEffort: "low" },
+      reason: "automatic",
+      signal: new AbortController().signal,
+      now: () => 100,
+      generateId: () => `checkpoint-invalid-structure-${index}`,
+    })).rejects.toThrow()
+  }
 })
 
 test("compactSessionMessages performs a final abort check", async () => {
@@ -303,7 +574,7 @@ test("compactSessionMessages performs a final abort check", async () => {
   const lateAbort = new Error("Late compaction abort")
   const model: AgentModel = {
     async *stream() {
-      yield { type: "text-delta", id: "summary", delta: "Summary" }
+      yield { type: "text-delta", id: "summary", delta: structuredSummary("Summary") }
       yield { type: "finish", reason: "stop" }
       controller.abort(lateAbort)
     },
@@ -312,7 +583,6 @@ test("compactSessionMessages performs a final abort check", async () => {
   await expect(compactSessionMessages({
     sessionId: "session-1",
     messages: conversation(4),
-    requestBudgetTokens: 0,
     runConfiguration: { model, reasoningEffort: "low" },
     reason: "manual",
     signal: controller.signal,
@@ -321,53 +591,90 @@ test("compactSessionMessages performs a final abort check", async () => {
   })).rejects.toBe(lateAbort)
 })
 
-test("projectAgentContext returns summary plus tail and rejects a stale anchor", () => {
+test("projectAgentContext returns a checkpoint plus suffix and rejects a stale anchor", () => {
   const messages = conversation(6)
   const checkpoint: ICompactionCheckpoint = {
     id: "checkpoint-1",
     sessionId: "session-1",
     createdAt: 10,
     reason: "manual",
-    compactedMessageCount: 2,
-    throughMessageId: messages[1]!.id,
-    summary: "Summary",
+    compactedMessageCount: 6,
+    throughMessageId: messages[5]!.id,
+    summary: structuredSummary("Summary"),
   }
 
   const projection = projectAgentContext(messages, checkpoint)
-  expect(projection.contextSummary).toBe("Summary")
-  expect(projection.messages).toEqual(messages.slice(2))
-  expect(projection.messages).not.toBe(messages)
+  expect(projection.contextSummary).toBe(structuredSummary("Summary"))
+  expect(projection.messages).toEqual([])
   expect(() => projectAgentContext(messages, {
     ...checkpoint,
     throughMessageId: "missing",
   })).toThrow("Compaction checkpoint does not match session session-1")
-
-  const toolMessages: readonly AgentMessage[] = [
-    user("tool-user", "Read"),
-    assistant("tool-assistant", [{
-      type: "toolCall",
-      toolCallId: "call-1",
-      toolName: "read_file",
-      input: { path: "README.md" },
-    }]),
-    {
-      id: "tool-result",
-      sessionId: "session-1",
-      runId: "run-tool",
-      role: "toolResult",
-      toolCallId: "call-1",
-      toolName: "read_file",
-      content: "Contents",
-      isError: false,
-      createdAt: 3,
-    },
-  ]
-  expect(() => projectAgentContext(toolMessages, {
-    ...checkpoint,
-    compactedMessageCount: 2,
-    throughMessageId: "tool-assistant",
-  })).toThrow("Compaction checkpoint does not match session session-1")
 })
+
+function configuration(
+  requests: AgentModelRequest[],
+  label: string,
+  contextWindowTokens = 100_000,
+) {
+  return {
+    model: {
+      async *stream(request: AgentModelRequest) {
+        requests.push(request)
+        yield {
+          type: "text-delta" as const,
+          id: "summary",
+          delta: structuredSummary(label),
+        }
+        yield { type: "finish" as const, reason: "stop" }
+      },
+    },
+    modelProfile: {
+      providerId: "test",
+      modelId: "model-1",
+      contextWindowTokens,
+    },
+    reasoningEffort: "low" as const,
+  }
+}
+
+function structuredSummary(label: string): string {
+  return `## Goals
+- ${label}
+
+## User Constraints
+- (none)
+
+## Active Request
+- ${label}
+
+## Files Read and Why
+- (none)
+
+## Modifications
+- (none)
+
+## Commands and Tests
+- (none)
+
+## Decisions
+- (none)
+
+## Current State
+- ${label}
+
+## Next Steps
+1. Continue
+
+## Handoff Guidance
+- Reread reproducible data when exact details are needed.`
+}
+
+function requestPrompt(request: AgentModelRequest): string {
+  const message = request.messages[0]
+  if (message?.role !== "user") throw new Error("Expected summary user prompt")
+  return message.content
+}
 
 function conversation(count: number): AgentMessage[] {
   return Array.from({ length: count }, (_, index) => (
@@ -401,7 +708,7 @@ function assistant(
   id: string,
   content: Extract<AgentMessage, { role: "assistant" }>["content"],
   createdAt = 2,
-): AgentMessage {
+): Extract<AgentMessage, { role: "assistant" }> {
   return {
     id,
     sessionId: "session-1",
@@ -410,5 +717,24 @@ function assistant(
     content,
     stopReason: "stop",
     createdAt,
+  }
+}
+
+function toolResult(
+  id: string,
+  toolCallId: string,
+  content: string,
+  runId: string,
+): Extract<AgentMessage, { role: "toolResult" }> {
+  return {
+    id,
+    sessionId: "session-1",
+    runId,
+    role: "toolResult",
+    toolCallId,
+    toolName: "read_file",
+    content,
+    isError: false,
+    createdAt: 3,
   }
 }

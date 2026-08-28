@@ -6,18 +6,10 @@ import {
     isModelContextOverflowError,
 } from "@/agent"
 import {
-    contextCompactionThresholdTokens,
-    ESTIMATED_BYTES_PER_TOKEN,
-    estimateContextInputTokens,
     estimateContextUsage,
-    reportedInputSafetyTokens,
     type IContextUsage,
 } from "@/sessions/compaction/context-budget"
-import {
-    retainedContextTargetTokens,
-} from "@/sessions/compaction/session-compactor"
 
-export const CONTEXT_SUMMARY_RESERVE_TOKENS = 2_048
 const MAX_COMPACTION_PASSES = 64
 
 export interface IContextAwareModelOptions {
@@ -29,7 +21,6 @@ export interface IContextAwareModelOptions {
     ) => AgentModelRequest
     readonly compactAndReproject: (
         originalRequest: AgentModelRequest,
-        requestBudgetTokens: number,
     ) => Promise<AgentModelRequest | undefined>
     readonly publishContextUsage: (usage: IContextUsage) => void
 }
@@ -134,14 +125,7 @@ async function compactPreflightRequest(
         }
         if (pass === MAX_COMPACTION_PASSES) throw requestBudgetError(usage)
 
-        const compactedRequest = await options.compactAndReproject(
-            originalRequest,
-            retainedMessageAllowanceTokens(
-                request,
-                options.contextWindowTokens,
-                options.modelProfile,
-            ),
-        )
+        const compactedRequest = await options.compactAndReproject(originalRequest)
         if (!compactedRequest) throw requestBudgetError(usage)
         request = compactedRequest
     }
@@ -152,10 +136,10 @@ async function compactOverflowRequest(
     options: IContextAwareModelOptions,
     originalRequest: AgentModelRequest,
 ): Promise<AgentModelRequest | undefined> {
-    let request = await options.compactAndReproject(originalRequest, 0)
+    let request = await options.compactAndReproject(originalRequest)
     if (!request) return undefined
 
-    for (let pass = 0; pass < MAX_COMPACTION_PASSES; pass += 1) {
+    for (let pass = 0; pass <= MAX_COMPACTION_PASSES; pass += 1) {
         originalRequest.signal.throwIfAborted()
         const usage = estimateRequestUsage(
             request,
@@ -166,7 +150,8 @@ async function compactOverflowRequest(
         if (!usage.shouldCompact || options.contextWindowTokens === undefined) {
             return request
         }
-        request = await options.compactAndReproject(originalRequest, 0)
+        if (pass === MAX_COMPACTION_PASSES) return undefined
+        request = await options.compactAndReproject(originalRequest)
         if (!request) return undefined
     }
     return undefined
@@ -181,67 +166,6 @@ function requestBudgetError(usage: IContextUsage): Error {
             : ` (${usage.estimatedInputTokens} estimated tokens; safe limit ${threshold})`}`
         + "; no provider request was sent.",
     )
-}
-
-/** Computes the retained-message target within the request and policy caps. */
-export function retainedMessageAllowanceTokens(
-    request: AgentModelRequest,
-    contextWindowTokens: number,
-    modelProfile?: ModelProfile,
-): number {
-    const thresholdTokens = contextCompactionThresholdTokens(contextWindowTokens)
-    const contextInput = {
-        systemPrompt: request.systemPrompt,
-        ...(request.contextSummary === undefined
-            ? {}
-            : { contextSummary: request.contextSummary }),
-        messages: request.messages,
-        tools: request.tools,
-        ...(modelProfile === undefined ? {} : { modelProfile }),
-    }
-    const reportedInputTokens = reportedInputSafetyTokens(contextInput)
-    if (reportedInputTokens >= thresholdTokens) return 0
-
-    const fixedRequestTokens = estimateContextInputTokens({
-        systemPrompt: request.systemPrompt,
-        messages: [],
-        tools: request.tools,
-    })
-    const summaryTokens = request.contextSummary === undefined
-        ? 0
-        : estimateContextInputTokens({
-            systemPrompt: request.systemPrompt,
-            contextSummary: request.contextSummary,
-            messages: [],
-            tools: request.tools,
-        }) - fixedRequestTokens
-    const summaryReserveTokens = Math.max(
-        CONTEXT_SUMMARY_RESERVE_TOKENS,
-        summaryTokens,
-    )
-    const retainedTokens = Math.max(
-        0,
-        thresholdTokens
-            - fixedRequestTokens
-            - summaryReserveTokens,
-    )
-    if (reportedInputTokens > 0) {
-        return retainedContextTargetTokens(retainedTokens)
-    }
-
-    const byteBoundedRetainedTokens = Math.floor(Math.max(
-        0,
-        thresholdTokens
-            - fixedRequestTokens * ESTIMATED_BYTES_PER_TOKEN
-            - Math.max(
-                CONTEXT_SUMMARY_RESERVE_TOKENS,
-                summaryTokens * ESTIMATED_BYTES_PER_TOKEN,
-            ),
-    ) / ESTIMATED_BYTES_PER_TOKEN)
-    return retainedContextTargetTokens(Math.min(
-        retainedTokens,
-        byteBoundedRetainedTokens,
-    ))
 }
 
 function estimateRequestUsage(

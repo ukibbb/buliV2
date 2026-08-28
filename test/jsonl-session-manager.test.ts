@@ -646,7 +646,7 @@ test("restores completed turns into the next Agent model request", async () => {
   }
 })
 
-test("persists only the latest compaction checkpoint without deleting history", async () => {
+test("restores the latest same-anchor checkpoint without deleting history", async () => {
   const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-compaction-"))
   const filePath = join(directory, "sessions.jsonl")
 
@@ -666,9 +666,9 @@ test("persists only the latest compaction checkpoint without deleting history", 
       sessionId: "session-1",
       createdAt: 3,
       reason: "manual",
-      compactedMessageCount: 1,
-      throughMessageId: user.id,
-      summary: "The user asked a question.",
+      compactedMessageCount: 2,
+      throughMessageId: assistant.id,
+      summary: "A deliberately longer checkpoint before recompression.",
     }
     const latest: ICompactionCheckpoint = {
       id: "checkpoint-2",
@@ -677,7 +677,7 @@ test("persists only the latest compaction checkpoint without deleting history", 
       reason: "automatic",
       compactedMessageCount: 2,
       throughMessageId: assistant.id,
-      summary: "The user asked a question and received an answer.",
+      summary: "Short checkpoint.",
       model: { providerId: "test", modelId: "model-1" },
       usage: { inputTokens: 12, outputTokens: 4, totalTokens: 16 },
     }

@@ -6,6 +6,10 @@ import {
     assertCheckpointAnchor,
     type ICompactionCheckpoint,
 } from "@/sessions/compaction/checkpoint"
+import {
+    eligibleCompactionEnd,
+    isStructuredCompactionSummary,
+} from "@/sessions/compaction/session-compactor"
 
 /** Projects durable history without changing or deleting its source messages. */
 export function projectAgentContext(
@@ -18,6 +22,18 @@ export function projectAgentContext(
         throw new Error("Compaction checkpoint belongs to another session")
     }
     assertCheckpointAnchor(checkpoint, messages)
+    let safeCompactionEnd: number
+    try {
+        safeCompactionEnd = eligibleCompactionEnd(messages)
+    } catch {
+        return { messages: structuredClone(messages) }
+    }
+    if (
+        checkpoint.compactedMessageCount > safeCompactionEnd
+        || !isStructuredCompactionSummary(checkpoint.summary)
+    ) {
+        return { messages: structuredClone(messages) }
+    }
     return {
         messages: structuredClone(
             messages.slice(checkpoint.compactedMessageCount),

@@ -146,9 +146,6 @@ export class OpenAiAgentModel implements AgentModel {
             maxRetries: 0,
             // Errors are normalized below and surfaced through Buli's stream.
             onError: () => { },
-            ...(request.maxOutputTokens === undefined
-                ? {}
-                : { maxOutputTokens: request.maxOutputTokens }),
         })
 
         try {
@@ -273,7 +270,7 @@ function toModelMessages(
     // osobno). `assistant` oznacza więc wcześniejszy stan rozmowy, nie nowy prompt.
     return [{
         role: "assistant",
-        content: `Conversation summary before the retained transcript:\n${contextSummary}`,
+        content: `Cumulative operational checkpoint:\n${contextSummary}`,
     }, ...projected]
 }
 

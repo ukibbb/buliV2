@@ -832,7 +832,40 @@ test("AgentSession dispose times out and unsubscribes from a non-cooperative mod
   expect(() => session.subscribe(() => {})).toThrow("AgentSession is disposed")
 })
 
-test("AgentSession compacts durable history and projects only summary plus tail", async () => {
+test("AgentSession does not persist a manual checkpoint that enlarges context", async () => {
+  const manager = new InMemorySessionManager()
+  manager.createSession(sessionInfo("session-1", "test-agent", "No progress"))
+  seedConversation(manager, 1)
+  const original = manager.getMessages("session-1")
+  const session = new AgentSession({
+    agentId: "test-agent",
+    sessionId: "session-1",
+    manager,
+    systemPrompt: "System",
+    resolveRunConfiguration: () => ({
+      model: {
+        async *stream() {
+          yield {
+            type: "text-delta",
+            id: "summary",
+            delta: structuredSummary("X".repeat(5_000)),
+          }
+          yield { type: "finish", reason: "stop" }
+        },
+      },
+      reasoningEffort: "medium",
+    }),
+    tools: [],
+  })
+
+  expect(await session.compact()).toBeUndefined()
+  expect(manager.getCompactionCheckpoint("session-1")).toBeUndefined()
+  expect(manager.getMessages("session-1")).toEqual(original)
+
+  await session.dispose()
+})
+
+test("AgentSession compacts durable history into one cumulative checkpoint", async () => {
   const manager = new InMemorySessionManager()
   manager.createSession(sessionInfo("session-1", "test-agent", "Compaction"))
   seedConversation(manager, 3, "x".repeat(50_000))
@@ -843,7 +876,11 @@ test("AgentSession compacts durable history and projects only summary plus tail"
       requests.push(request)
       if (request.runId.startsWith("compaction-")) {
         yield { type: "text-start", id: "summary" }
-        yield { type: "text-delta", id: "summary", delta: "Earlier context" }
+        yield {
+          type: "text-delta",
+          id: "summary",
+          delta: structuredSummary("Earlier context"),
+        }
         yield { type: "text-end", id: "summary" }
         yield {
           type: "finish",
@@ -887,16 +924,17 @@ test("AgentSession compacts durable history and projects only summary plus tail"
     reason: "manual",
     compactedMessageCount: 6,
     throughMessageId: original[5]!.id,
-    summary: "Earlier context",
+    summary: structuredSummary("Earlier context"),
   })
   expect(manager.getMessages("session-1")).toEqual(original)
+  expect(await session.compact()).toBeUndefined()
 
   const run = session.prompt("Continue")
   await run.settled
   const promptRequest = requests.find(
     (request) => !request.runId.startsWith("compaction-"),
   )
-  expect(promptRequest?.contextSummary).toBe("Earlier context")
+  expect(promptRequest?.contextSummary).toBe(structuredSummary("Earlier context"))
   expect(promptRequest?.messages.slice(0, -1)).toEqual(original.slice(6))
   expect(manager.getMessages("session-1").slice(0, 6)).toEqual([...original])
   expect(manager.getMessages("session-1").at(-1)).toMatchObject({
@@ -922,7 +960,11 @@ test("AgentSession does not compact after settlement from reported usage", async
       if (request.runId.startsWith("compaction-")) {
         compactionRequests += 1
         yield { type: "text-start", id: "summary" }
-        yield { type: "text-delta", id: "summary", delta: "Auto summary" }
+        yield {
+          type: "text-delta",
+          id: "summary",
+          delta: structuredSummary("Auto summary"),
+        }
         yield { type: "text-end", id: "summary" }
         yield { type: "finish", reason: "stop" }
         return
@@ -970,6 +1012,38 @@ function sessionInfo(id: string, agentId: string, title: string) {
     createdAt: 1,
     updatedAt: 1,
   }
+}
+
+function structuredSummary(label: string): string {
+  return `## Goals
+- ${label}
+
+## User Constraints
+- (none)
+
+## Active Request
+- ${label}
+
+## Files Read and Why
+- (none)
+
+## Modifications
+- (none)
+
+## Commands and Tests
+- (none)
+
+## Decisions
+- (none)
+
+## Current State
+- ${label}
+
+## Next Steps
+1. Continue
+
+## Handoff Guidance
+- Reread reproducible data when exact details are needed.`
 }
 
 function seedConversation(

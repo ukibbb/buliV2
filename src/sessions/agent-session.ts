@@ -133,7 +133,8 @@ export class AgentSession {
             // historię do swojego stanu i używa jej jako kontekstu kolejnych requestów.
             initialMessages,
             // Projekcja jest liczona dopiero przy nowym promptcie. Agent zachowuje
-            // pełny stan dla UI/persistence, a model dostaje summary i nowszy ogon.
+            // pełny stan dla UI/persistence, a model dostaje checkpoint i tylko
+            // wiadomości, których jeszcze nie miał szansy przetworzyć.
             projectContext: (messages) => projectAgentContext(
                 messages,
                 this.manager.getCompactionCheckpoint(this.id),
@@ -326,8 +327,8 @@ export class AgentSession {
                     : { modelProfile: runConfiguration.modelProfile }),
                 contextWindowTokens,
                 projectRequest: (request) => this.reprojectRequest(request),
-                compactAndReproject: (request, requestBudgetTokens) =>
-                    this.compactAndReproject(request, requestBudgetTokens),
+                compactAndReproject: (request) =>
+                    this.compactAndReproject(request, runConfiguration),
                 publishContextUsage: (usage) => {
                     if (this.disposed) return
                     this.contextUsage = structuredClone(usage)
@@ -339,21 +340,15 @@ export class AgentSession {
 
     private async compactAndReproject(
         originalRequest: AgentModelRequest,
-        requestBudgetTokens: number,
+        runConfiguration: AgentRunConfiguration,
     ): Promise<AgentModelRequest | undefined> {
-        const previousCount = this.manager.getCompactionCheckpoint(this.id)
-            ?.compactedMessageCount ?? 0
         const checkpoint = await (this.compactionTask ?? this.startCompaction(
             "automatic",
-            requestBudgetTokens,
             originalRequest.signal,
+            originalRequest,
+            runConfiguration,
         ))
-        if (
-            !checkpoint
-            || checkpoint.compactedMessageCount <= previousCount
-        ) {
-            return undefined
-        }
+        if (!checkpoint) return undefined
 
         return this.reprojectRequest(originalRequest, checkpoint)
     }
@@ -382,8 +377,9 @@ export class AgentSession {
 
     private startCompaction(
         reason: ICompactionCheckpoint["reason"],
-        requestBudgetTokens?: number,
         sourceSignal?: AbortSignal,
+        originalRequest?: AgentModelRequest,
+        activeRunConfiguration?: AgentRunConfiguration,
     ): Promise<ICompactionCheckpoint | undefined> {
         if (this.disposed) throw new Error("AgentSession is disposed")
         if (this.persistenceError !== undefined) {
@@ -402,8 +398,9 @@ export class AgentSession {
         this.compactionController = controller
         const operation = this.performCompaction(
             reason,
-            requestBudgetTokens,
             controller,
+            originalRequest,
+            activeRunConfiguration,
         )
         const completed = operation.then(
             (checkpoint) => {
@@ -431,30 +428,61 @@ export class AgentSession {
 
     private async performCompaction(
         reason: ICompactionCheckpoint["reason"],
-        requestBudgetTokens: number | undefined,
         controller: AbortController,
+        originalRequest?: AgentModelRequest,
+        activeRunConfiguration?: AgentRunConfiguration,
     ): Promise<ICompactionCheckpoint | undefined> {
         const previousCheckpoint = this.manager.getCompactionCheckpoint(this.id)
-        const runConfiguration = this.resolveRunConfiguration()
+        const runConfiguration = activeRunConfiguration
+            ?? this.resolveRunConfiguration()
         if (!this.agent.state.isRunning) {
             this.setCurrentModelProfile(runConfiguration.modelProfile)
         }
+        const messages = this.manager.getMessages(this.id)
         const checkpoint = await compactSessionMessages({
             sessionId: this.id,
-            messages: this.manager.getMessages(this.id),
+            messages,
             ...(previousCheckpoint === undefined
                 ? {}
                 : { previousCheckpoint }),
             runConfiguration,
-            ...(requestBudgetTokens === undefined
+            ...(originalRequest === undefined
                 ? {}
-                : { requestBudgetTokens }),
+                : { allowSummaryRecompression: true }),
             reason,
             signal: controller.signal,
             now: this.now,
             generateId: this.generateId,
         })
         if (!checkpoint) return undefined
+
+        const beforeTokens = originalRequest === undefined
+            ? estimatedProjectionInputTokens(
+                this.systemPrompt,
+                this.tools,
+                messages,
+                previousCheckpoint,
+                runConfiguration.modelProfile,
+            )
+            : estimatedRequestInputTokens(
+                this.reprojectRequest(originalRequest, previousCheckpoint),
+                runConfiguration.modelProfile,
+            )
+        const afterTokens = originalRequest === undefined
+            ? estimatedProjectionInputTokens(
+                this.systemPrompt,
+                this.tools,
+                messages,
+                checkpoint,
+                runConfiguration.modelProfile,
+            )
+            : estimatedRequestInputTokens(
+                this.reprojectRequest(originalRequest, checkpoint),
+                runConfiguration.modelProfile,
+            )
+        if (afterTokens >= beforeTokens) {
+            return undefined
+        }
 
         controller.signal.throwIfAborted()
         try {
@@ -590,6 +618,40 @@ export class AgentSession {
         }
         return this.pendingToolCallIdsSnapshot
     }
+}
+
+function estimatedRequestInputTokens(
+    request: AgentModelRequest,
+    modelProfile?: ModelProfile,
+): number {
+    return estimateContextUsage({
+        systemPrompt: request.systemPrompt,
+        ...(request.contextSummary === undefined
+            ? {}
+            : { contextSummary: request.contextSummary }),
+        messages: request.messages,
+        tools: request.tools,
+        ...(modelProfile === undefined ? {} : { modelProfile }),
+    }).estimatedInputTokens
+}
+
+function estimatedProjectionInputTokens(
+    systemPrompt: string,
+    tools: readonly AgentTool[],
+    messages: readonly AgentMessage[],
+    checkpoint: ICompactionCheckpoint | undefined,
+    modelProfile?: ModelProfile,
+): number {
+    const projection = projectAgentContext(messages, checkpoint)
+    return estimateContextUsage({
+        systemPrompt,
+        ...(projection.contextSummary === undefined
+            ? {}
+            : { contextSummary: projection.contextSummary }),
+        messages: projection.messages,
+        tools,
+        ...(modelProfile === undefined ? {} : { modelProfile }),
+    }).estimatedInputTokens
 }
 
 function userMessageInput(message: {

@@ -471,7 +471,7 @@ test("projects structured tool outcomes as text-only provider results", async ()
   }
 })
 
-test("sends projected context summaries and compaction output limits", async () => {
+test("sends cumulative checkpoints without unsupported Codex limits", async () => {
   let capturedRequest: Request | undefined
   const model = createModel(async (...args) => {
     capturedRequest = new Request(...args)
@@ -487,7 +487,6 @@ test("sends projected context summaries and compaction output limits", async () 
     messages: [userMessage("New tail")],
     tools: [],
     reasoningEffort: "low",
-    maxOutputTokens: 321,
     signal: new AbortController().signal,
   })) {
     events.push(event)
@@ -495,8 +494,23 @@ test("sends projected context summaries and compaction output limits", async () 
 
   if (!capturedRequest) throw new Error("Expected one provider request")
   const body = (await capturedRequest.json()) as Record<string, unknown>
-  expect(JSON.stringify(body)).toContain("Earlier durable context")
-  expect(body.max_output_tokens).toBe(321)
+  expect(body.input).toEqual([
+    {
+      role: "assistant",
+      content: [{
+        type: "output_text",
+        text: "Cumulative operational checkpoint:\nEarlier durable context",
+      }],
+    },
+    {
+      role: "user",
+      content: [{ type: "input_text", text: "New tail" }],
+    },
+  ])
+  expect(JSON.stringify(body)).not.toContain(
+    "Conversation summary before the retained transcript",
+  )
+  expect(body).not.toHaveProperty("max_output_tokens")
   expect(body).not.toHaveProperty("parallel_tool_calls")
   expect(body).not.toHaveProperty("service_tier")
   expect(events.at(-1)).toMatchObject({

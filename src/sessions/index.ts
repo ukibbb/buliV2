@@ -8,10 +8,8 @@ export {
     projectAgentContext,
 } from "@/sessions/compaction/context-projector"
 export {
-    CONTEXT_SUMMARY_RESERVE_TOKENS,
     createContextAwareModel,
     type IContextAwareModelOptions,
-    retainedMessageAllowanceTokens,
 } from "@/sessions/compaction/context-aware-model"
 export {
     CONTEXT_COMPACTION_THRESHOLD,
@@ -27,10 +25,7 @@ export {
 } from "@/sessions/compaction/context-budget"
 export {
     compactSessionMessages,
-    findCompactionCutoff,
     type ICompactSessionMessagesOptions,
-    MAX_RETAINED_CONTEXT_TOKENS,
-    retainedContextTargetTokens,
 } from "@/sessions/compaction/session-compactor"
 export { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
 export {

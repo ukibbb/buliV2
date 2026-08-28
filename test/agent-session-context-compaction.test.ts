@@ -12,7 +12,6 @@ import {
   contextCompactionThresholdTokens,
   estimateContextInputTokens,
   InMemorySessionManager,
-  retainedMessageAllowanceTokens,
   type ISessionManager,
 } from "@/sessions"
 
@@ -63,7 +62,11 @@ test("AgentSession compacts at preflight and dispatches the same durable prompt"
     async *stream(request) {
       if (isCompactionRequest(request)) {
         summaryRequests.push(cloneRequest(request))
-        yield { type: "text-delta", id: "summary", delta: "Earlier summary" }
+        yield {
+          type: "text-delta",
+          id: "summary",
+          delta: structuredSummary("Earlier summary"),
+        }
         yield { type: "finish", reason: "stop" }
         return
       }
@@ -98,7 +101,7 @@ test("AgentSession compacts at preflight and dispatches the same durable prompt"
   expect(manager.getCompactionCheckpoint("session-1")).toMatchObject({
     reason: "automatic",
     compactedMessageCount: 4,
-    summary: "Earlier summary",
+    summary: structuredSummary("Earlier summary"),
   })
   const durablePrompt = manager.getMessages("session-1").find(
     (message) => message.role === "user" && message.runId === run.runId,
@@ -106,7 +109,7 @@ test("AgentSession compacts at preflight and dispatches the same durable prompt"
   expect(durablePrompt).toBeDefined()
   expect(conversationRequests[0]).toMatchObject({
     runId: run.runId,
-    contextSummary: "Earlier summary",
+    contextSummary: structuredSummary("Earlier summary"),
   })
   expect(conversationRequests[0]?.messages).toEqual([durablePrompt!])
   expect(manager.getMessages("session-1").filter(
@@ -116,6 +119,124 @@ test("AgentSession compacts at preflight and dispatches the same durable prompt"
   expect(snapshots.filter((snapshot) => snapshot.isCompacting).length)
     .toBeGreaterThanOrEqual(2)
   expect(session.getSnapshot().isCompacting).toBe(false)
+
+  await session.dispose()
+})
+
+test("AgentSession uses the active run model for automatic compaction", async () => {
+  const manager = managerWithSession()
+  seedLargeTurns(manager, 2)
+  let resolutions = 0
+  let activeModelRequests = 0
+  let replacementModelRequests = 0
+  const activeModel: AgentModel = {
+    async *stream(request) {
+      activeModelRequests += 1
+      if (isCompactionRequest(request)) {
+        yield {
+          type: "text-delta",
+          id: "summary",
+          delta: structuredSummary("Active model checkpoint"),
+        }
+      }
+      yield { type: "finish", reason: "stop" }
+    },
+  }
+  const replacementModel: AgentModel = {
+    async *stream(request) {
+      replacementModelRequests += 1
+      if (isCompactionRequest(request)) {
+        yield {
+          type: "text-delta",
+          id: "summary",
+          delta: structuredSummary("Replacement model checkpoint"),
+        }
+      }
+      yield { type: "finish", reason: "stop" }
+    },
+  }
+  const session = new AgentSession({
+    agentId: "test-agent",
+    sessionId: "session-1",
+    manager,
+    systemPrompt: "System",
+    resolveRunConfiguration: () => {
+      resolutions += 1
+      const useActiveConfiguration = resolutions <= 2
+      return {
+        model: useActiveConfiguration ? activeModel : replacementModel,
+        modelProfile: useActiveConfiguration
+          ? MODEL_PROFILE
+          : {
+            providerId: "test-provider",
+            modelId: "unexpected-small-model",
+            contextWindowTokens: 2_050,
+          },
+        reasoningEffort: "medium",
+      }
+    },
+    tools: [],
+  })
+
+  await session.prompt("Keep this prompt").settled
+
+  expect(activeModelRequests).toBeGreaterThanOrEqual(2)
+  expect(replacementModelRequests).toBe(0)
+  expect(manager.getCompactionCheckpoint("session-1")?.summary).toBe(
+    structuredSummary("Active model checkpoint"),
+  )
+
+  await session.dispose()
+})
+
+test("AgentSession keeps an unprocessed image prompt out of the checkpoint", async () => {
+  const manager = managerWithSession()
+  seedLargeTurns(manager, 3)
+  const summaryRequests: AgentModelRequest[] = []
+  const conversationRequests: AgentModelRequest[] = []
+  const imageData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlL8AAAAASUVORK5CYII="
+  const session = openSession(manager, {
+    async *stream(request) {
+      if (isCompactionRequest(request)) {
+        summaryRequests.push(cloneRequest(request))
+        yield {
+          type: "text-delta",
+          id: "summary",
+          delta: structuredSummary("Earlier text-only history"),
+        }
+        yield { type: "finish", reason: "stop" }
+        return
+      }
+      conversationRequests.push(cloneRequest(request))
+      yield { type: "finish", reason: "stop" }
+    },
+  }, [], 16_000)
+
+  const run = session.prompt({
+    text: "Inspect [Image 1]",
+    attachments: [{
+      type: "image",
+      mimeType: "image/png",
+      data: imageData,
+      filename: "clipboard-1.png",
+      source: { value: "[Image 1]", start: 8, end: 17 },
+    }],
+  })
+  await run.settled
+
+  expect(JSON.stringify(summaryRequests)).not.toContain(imageData)
+  expect(JSON.stringify(summaryRequests)).not.toContain("clipboard-1.png")
+  expect(conversationRequests).toHaveLength(1)
+  expect(conversationRequests[0]?.messages).toEqual([
+    expect.objectContaining({
+      role: "user",
+      content: "Inspect [Image 1]",
+      attachments: [expect.objectContaining({
+        data: imageData,
+        filename: "clipboard-1.png",
+      })],
+    }),
+  ])
 
   await session.dispose()
 })
@@ -157,7 +278,7 @@ test("AgentSession compacts a 238k request before dispatching to a 272k model", 
         yield {
           type: "text-delta",
           id: "summary",
-          delta: `Summary ${summaryRequests.length}`,
+          delta: structuredSummary(`Summary ${summaryRequests.length}`),
         }
         yield { type: "finish", reason: "stop" }
         return
@@ -176,8 +297,7 @@ test("AgentSession compacts a 238k request before dispatching to a 272k model", 
 
   expect(summaryRequests).toHaveLength(1)
   expect(summaryRequests.every((request) => (
-    request.maxOutputTokens === 2_048
-    && request.tools.length === 0
+    request.tools.length === 0
     && estimateContextInputTokens({
       systemPrompt: request.systemPrompt,
       ...(request.contextSummary === undefined
@@ -205,24 +325,6 @@ test("AgentSession compacts a 238k request before dispatching to a 272k model", 
   })
 
   await session.dispose()
-})
-
-test("retained message allowance accounts for an existing large summary", () => {
-  const request: AgentModelRequest = {
-    sessionId: "session-1",
-    runId: "run-1",
-    systemPrompt: "System",
-    messages: [],
-    tools: [],
-    reasoningEffort: "medium",
-    signal: new AbortController().signal,
-  }
-
-  expect(retainedMessageAllowanceTokens(request, 4_096)).toBeGreaterThan(0)
-  expect(retainedMessageAllowanceTokens({
-    ...request,
-    contextSummary: "S".repeat(9_000),
-  }, 4_096)).toBe(0)
 })
 
 test("AgentSession blocks an oversized request when compaction has no progress", async () => {
@@ -325,7 +427,11 @@ test("AgentSession compacts oversized tool continuations before dispatch", async
     async *stream(request) {
       if (isCompactionRequest(request)) {
         summaries += 1
-        yield { type: "text-delta", id: "summary", delta: "Old turn" }
+        yield {
+          type: "text-delta",
+          id: "summary",
+          delta: structuredSummary("Old turn"),
+        }
         yield { type: "finish", reason: "stop" }
         return
       }
@@ -350,8 +456,8 @@ test("AgentSession compacts oversized tool continuations before dispatch", async
 
   expect(requests).toHaveLength(3)
   expect(requests[0]?.contextSummary).toBeUndefined()
-  expect(requests[1]?.contextSummary).toBe("Old turn")
-  expect(requests[2]?.contextSummary).toBe("Old turn")
+  expect(requests[1]?.contextSummary).toBe(structuredSummary("Old turn"))
+  expect(requests[2]?.contextSummary).toBe(structuredSummary("Old turn"))
   expect(requests[1]?.messages).toEqual([])
   expect(requests[2]?.messages).toEqual([])
   expect(requests[2]?.messages.some((message) => message.id === "old-user"))
@@ -368,7 +474,7 @@ test("AgentSession compacts oversized tool continuations before dispatch", async
 for (const overflowMode of ["emitted", "thrown"] as const) {
   test(`AgentSession recovers one ${overflowMode} overflow before semantic output`, async () => {
     const manager = managerWithSession()
-    seedTurn(manager)
+    seedLargeTurns(manager, 2)
     let conversationAttempts = 0
     let summaryAttempts = 0
     const requests: AgentModelRequest[] = []
@@ -376,7 +482,11 @@ for (const overflowMode of ["emitted", "thrown"] as const) {
       async *stream(request) {
         if (isCompactionRequest(request)) {
           summaryAttempts += 1
-          yield { type: "text-delta", id: "summary", delta: "Recovered context" }
+          yield {
+            type: "text-delta",
+            id: "summary",
+            delta: structuredSummary("Recovered context"),
+          }
           yield { type: "finish", reason: "stop" }
           return
         }
@@ -402,7 +512,7 @@ for (const overflowMode of ["emitted", "thrown"] as const) {
     expect(summaryAttempts).toBe(1)
     expect(requests[1]).toMatchObject({
       runId: run.runId,
-      contextSummary: "Recovered context",
+      contextSummary: structuredSummary("Recovered context"),
     })
     expect(requests[1]?.messages).toEqual([
       expect.objectContaining({
@@ -427,7 +537,7 @@ for (const overflowMode of ["emitted", "thrown"] as const) {
 
 test("AgentSession can compact at preflight and advance again for overflow recovery", async () => {
   const manager = managerWithSession()
-  seedLargeTurns(manager, 5)
+  seedLargeTurns(manager, 8)
   let conversationAttempts = 0
   let summaryAttempts = 0
   const requests: AgentModelRequest[] = []
@@ -438,7 +548,11 @@ test("AgentSession can compact at preflight and advance again for overflow recov
         yield {
           type: "text-delta",
           id: "summary",
-          delta: `Summary ${summaryAttempts}`,
+          delta: structuredSummary(
+            summaryAttempts === 1
+              ? "Initial checkpoint ".repeat(100)
+              : "Recompressed checkpoint",
+          ),
         }
         yield { type: "finish", reason: "stop" }
         return
@@ -451,18 +565,26 @@ test("AgentSession can compact at preflight and advance again for overflow recov
       }
       yield { type: "finish", reason: "stop" }
     },
-  }, [], 16_000)
+  }, [], 60_000)
 
   const run = session.prompt("Keep this prompt")
   await run.settled
 
-  expect(summaryAttempts).toBe(3)
+  expect(summaryAttempts).toBe(2)
   expect(conversationAttempts).toBe(2)
-  expect(requests[0]?.contextSummary).toBe("Summary 2")
-  expect(requests[0]!.messages.length).toBeGreaterThan(1)
+  expect(requests[0]?.contextSummary).toBe(
+    structuredSummary("Initial checkpoint ".repeat(100)),
+  )
+  expect(requests[0]?.messages).toEqual([
+    expect.objectContaining({
+      role: "user",
+      runId: run.runId,
+      content: "Keep this prompt",
+    }),
+  ])
   expect(requests[1]).toMatchObject({
     runId: run.runId,
-    contextSummary: "Summary 3",
+    contextSummary: structuredSummary("Recompressed checkpoint"),
   })
   expect(requests[1]?.messages).toEqual([
     expect.objectContaining({
@@ -472,8 +594,8 @@ test("AgentSession can compact at preflight and advance again for overflow recov
     }),
   ])
   expect(manager.getCompactionCheckpoint("session-1")).toMatchObject({
-    compactedMessageCount: 10,
-    summary: "Summary 3",
+    compactedMessageCount: 16,
+    summary: structuredSummary("Recompressed checkpoint"),
   })
 
   await session.dispose()
@@ -517,14 +639,18 @@ test("AgentSession does not retry overflow after exposing semantic output", asyn
 
 test("AgentSession surfaces a second overflow without another retry", async () => {
   const manager = managerWithSession()
-  seedTurn(manager)
+  seedLargeTurns(manager, 2)
   let conversationAttempts = 0
   let summaryAttempts = 0
   const session = openSession(manager, {
     async *stream(request) {
       if (isCompactionRequest(request)) {
         summaryAttempts += 1
-        yield { type: "text-delta", id: "summary", delta: "One retry" }
+        yield {
+          type: "text-delta",
+          id: "summary",
+          delta: structuredSummary("One retry"),
+        }
         yield { type: "finish", reason: "stop" }
         return
       }
@@ -738,6 +864,38 @@ function cloneRequest(request: AgentModelRequest): AgentModelRequest {
 
 function isCompactionRequest(request: AgentModelRequest): boolean {
   return request.runId.startsWith("compaction-")
+}
+
+function structuredSummary(label: string): string {
+  return `## Goals
+- ${label}
+
+## User Constraints
+- (none)
+
+## Active Request
+- ${label}
+
+## Files Read and Why
+- (none)
+
+## Modifications
+- (none)
+
+## Commands and Tests
+- (none)
+
+## Decisions
+- (none)
+
+## Current State
+- ${label}
+
+## Next Steps
+1. Continue
+
+## Handoff Guidance
+- Reread reproducible data when exact details are needed.`
 }
 
 function waitForAbort(signal: AbortSignal): Promise<void> {

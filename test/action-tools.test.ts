@@ -144,7 +144,7 @@ test.skipIf(process.platform === "win32")(
       const tool = createBashTool(workspace, store)
       const execution = structuredToolResult(await tool.execute(
         bashInput(bunCommand(
-          `process.stdout.write(${JSON.stringify(stdout)}); process.stderr.write(${JSON.stringify(stderr)})`,
+          `process.stdout.write("stdout-start|" + "o".repeat(70_000) + "|stdout-end"); process.stderr.write("stderr-start|" + "e".repeat(70_000) + "|stderr-end")`,
         )),
         context(),
       ))

@@ -1,26 +1,26 @@
 import type {
-  AssistantContent,
-  AssistantMessage,
-  ReasoningContent,
-  TextContent,
-  ToolCallContent,
+  TAssistantContent,
+  IAssistantMessage,
+  IReasoningContent,
+  ITextContent,
+  IToolCallContent,
 } from "@/agent/messages"
-import type { AgentModelEvent } from "@/agent/model"
-import type { ModelProfile, ModelUsage } from "@/agent/model-values"
+import type { TAgentModelEvent } from "@/agent/model"
+import type { IModelProfile, IModelUsage } from "@/agent/model-values"
 
 interface IAssistantMessageBuilderOptions {
   readonly sessionId: string
   readonly runId: string
   readonly now: () => number
   readonly generateId: () => string
-  readonly modelProfile?: ModelProfile
+  readonly modelProfile?: IModelProfile
 }
 
-const immutableAssistantSnapshots = new WeakSet<AssistantMessage>()
+const immutableAssistantSnapshots = new WeakSet<IAssistantMessage>()
 
 /** Identifies builder snapshots that are safe to retain without another clone. */
 export function isImmutableAssistantSnapshot(
-  message: AssistantMessage,
+  message: IAssistantMessage,
 ): boolean {
   return immutableAssistantSnapshots.has(message)
 }
@@ -29,12 +29,12 @@ export function isImmutableAssistantSnapshot(
 export class AssistantMessageBuilder {
   private readonly messageId: string
   private readonly createdAt: number
-  private readonly content: AssistantContent[] = []
-  private readonly textContent = new Map<string, TextContent>()
-  private readonly reasoningContent = new Map<string, ReasoningContent>()
+  private readonly content: TAssistantContent[] = []
+  private readonly textContent = new Map<string, ITextContent>()
+  private readonly reasoningContent = new Map<string, IReasoningContent>()
   private stopReason = "pending"
   private errorMessage: string | undefined
-  private usage: ModelUsage | undefined
+  private usage: IModelUsage | undefined
 
   constructor(private readonly options: IAssistantMessageBuilderOptions) {
     this.messageId = options.generateId()
@@ -45,7 +45,7 @@ export class AssistantMessageBuilder {
     return this.stopReason !== "pending"
   }
 
-  apply(event: AgentModelEvent): void {
+  apply(event: TAgentModelEvent): void {
     if (this.completed) return
 
     switch (event.type) {
@@ -81,7 +81,7 @@ export class AssistantMessageBuilder {
     }
   }
 
-  finish(reason = "stop", error?: string, usage?: ModelUsage): void {
+  finish(reason = "stop", error?: string, usage?: IModelUsage): void {
     if (this.completed) return
     this.stopReason = reason
     this.errorMessage = error
@@ -97,8 +97,8 @@ export class AssistantMessageBuilder {
     this.reasoningContent.clear()
   }
 
-  snapshot(): AssistantMessage {
-    const snapshot: AssistantMessage = structuredClone({
+  snapshot(): IAssistantMessage {
+    const snapshot: IAssistantMessage = structuredClone({
       id: this.messageId,
       sessionId: this.options.sessionId,
       runId: this.options.runId,
@@ -120,7 +120,7 @@ export class AssistantMessageBuilder {
 
   private startText(id: string): void {
     if (this.textContent.has(id)) return
-    const content: TextContent = { type: "text", text: "" }
+    const content: ITextContent = { type: "text", text: "" }
     this.textContent.set(id, content)
     this.content.push(content)
   }
@@ -128,14 +128,14 @@ export class AssistantMessageBuilder {
   private appendText(id: string, delta: string): void {
     const current = this.textContent.get(id)
     if (!current) return
-    const updated: TextContent = { ...current, text: current.text + delta }
+    const updated: ITextContent = { ...current, text: current.text + delta }
     this.textContent.set(id, updated)
     this.replaceContent(current, updated)
   }
 
   private startReasoning(id: string): void {
     if (this.reasoningContent.has(id)) return
-    const content: ReasoningContent = { type: "reasoning", text: "" }
+    const content: IReasoningContent = { type: "reasoning", text: "" }
     this.reasoningContent.set(id, content)
     this.content.push(content)
   }
@@ -143,13 +143,13 @@ export class AssistantMessageBuilder {
   private appendReasoning(id: string, delta: string): void {
     const current = this.reasoningContent.get(id)
     if (!current) return
-    const updated: ReasoningContent = { ...current, text: current.text + delta }
+    const updated: IReasoningContent = { ...current, text: current.text + delta }
     this.reasoningContent.set(id, updated)
     this.replaceContent(current, updated)
   }
 
   private addToolCall(
-    event: Extract<AgentModelEvent, { type: "tool-call" }>,
+    event: Extract<TAgentModelEvent, { type: "tool-call" }>,
   ): void {
     if (
       this.content.some(
@@ -160,7 +160,7 @@ export class AssistantMessageBuilder {
       return
     }
 
-    const content: ToolCallContent = {
+    const content: IToolCallContent = {
       type: "toolCall",
       toolCallId: event.toolCallId,
       toolName: event.toolName,
@@ -170,8 +170,8 @@ export class AssistantMessageBuilder {
   }
 
   private replaceContent(
-    current: AssistantContent,
-    replacement: AssistantContent,
+    current: TAssistantContent,
+    replacement: TAssistantContent,
   ): void {
     const index = this.content.indexOf(current)
     if (index !== -1) this.content[index] = replacement

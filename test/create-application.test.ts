@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import type { AgentModelRequest } from "@/agent"
+import type { IAgentModelRequest } from "@/agent"
 import { createBuliApplication } from "@/app/bootstrap/create-application"
 import { InMemorySessionManager } from "@/sessions"
 
@@ -14,7 +14,7 @@ test("does not attach OpenAI web search to an injected provider-neutral model", 
     join(workspace, ".buli", "AGENTS.md"),
     "Run the project checks before finishing.",
   )
-  let modelRequest: AgentModelRequest | undefined
+  let modelRequest: IAgentModelRequest | undefined
   const startup = await createBuliApplication({
     signal: new AbortController().signal,
     workspaceRoot: workspace,
@@ -34,7 +34,9 @@ test("does not attach OpenAI web search to an injected provider-neutral model", 
 
     if (!modelRequest) throw new Error("Expected one model request")
     expect(modelRequest.tools.map((tool) => tool.name)).not.toContain("web_search")
+    expect(modelRequest.tools.map((tool) => tool.name)).toContain("tool_output")
     expect(modelRequest.systemPrompt).not.toContain("web_search")
+    expect(modelRequest.systemPrompt).toContain("Używaj tool_output")
     expect(modelRequest.systemPrompt).toContain(
       '<workspace_instructions source=".buli/AGENTS.md">',
     )

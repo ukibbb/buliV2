@@ -1,21 +1,11 @@
 /** User decision that resolves one pending local tool action. */
-export type ToolApprovalDecision = "approve" | "reject" | "copy"
-
-interface ToolApprovalDraftBase {
-    readonly title: string
-    readonly explanation: string
-}
-
-/** Approval payload shown before mutating workspace files. */
-export interface PatchToolApprovalDraft extends ToolApprovalDraftBase {
-    readonly kind: "patch"
-    readonly diff: string
-    readonly paths: readonly string[]
-}
+export type TToolApprovalDecision = "approve" | "reject" | "copy"
 
 /** Approval payload shown before executing an arbitrary command. */
-export interface CommandToolApprovalDraft extends ToolApprovalDraftBase {
+export interface ICommandToolApprovalDraft {
     readonly kind: "command"
+    readonly title: string
+    readonly explanation: string
     readonly command: string
     readonly cwd: string
     readonly purpose: string
@@ -24,62 +14,41 @@ export interface CommandToolApprovalDraft extends ToolApprovalDraftBase {
     readonly timeoutSeconds: number
 }
 
-export type ToolApprovalDraft =
-    | PatchToolApprovalDraft
-    | CommandToolApprovalDraft
+export type TToolApprovalDraft = ICommandToolApprovalDraft
 
-interface ToolApprovalRequestBase {
+interface IToolApprovalRequestBase {
     readonly id: string
     readonly sessionId: string
     readonly runId: string
     readonly toolCallId: string
 }
 
-export interface PatchToolApprovalRequest
-    extends ToolApprovalRequestBase, PatchToolApprovalDraft {}
-
-export interface CommandToolApprovalRequest
-    extends ToolApprovalRequestBase, CommandToolApprovalDraft {}
+export interface ICommandToolApprovalRequest
+    extends IToolApprovalRequestBase, ICommandToolApprovalDraft {}
 
 /** Ephemeral request currently awaiting a user decision. */
-export type ToolApprovalRequest =
-    | PatchToolApprovalRequest
-    | CommandToolApprovalRequest
+export type TToolApprovalRequest = ICommandToolApprovalRequest
 
 /** Creates the immutable approval request published to agent observers. */
 export function createToolApprovalRequest(
-    draft: ToolApprovalDraft,
+    draft: TToolApprovalDraft,
     id: string,
     sessionId: string,
     runId: string,
     toolCallId: string,
-): ToolApprovalRequest {
+): TToolApprovalRequest {
     const identity = { id, sessionId, runId, toolCallId }
-    let request: ToolApprovalRequest
-    if (draft.kind === "patch") {
-        request = {
-            ...identity,
-            kind: "patch",
-            title: draft.title,
-            explanation: draft.explanation,
-            diff: draft.diff,
-            paths: [...draft.paths],
-        }
-    } else if (draft.kind === "command") {
-        request = {
-            ...identity,
-            kind: "command",
-            title: draft.title,
-            explanation: draft.explanation,
-            command: draft.command,
-            cwd: draft.cwd,
-            purpose: draft.purpose,
-            expectedOutcome: draft.expectedOutcome,
-            sideEffects: draft.sideEffects,
-            timeoutSeconds: draft.timeoutSeconds,
-        }
-    } else {
-        throw new Error("Unknown tool approval kind")
+    const request: TToolApprovalRequest = {
+        ...identity,
+        kind: "command",
+        title: draft.title,
+        explanation: draft.explanation,
+        command: draft.command,
+        cwd: draft.cwd,
+        purpose: draft.purpose,
+        expectedOutcome: draft.expectedOutcome,
+        sideEffects: draft.sideEffects,
+        timeoutSeconds: draft.timeoutSeconds,
     }
     deepFreeze(request)
     return request
@@ -87,8 +56,8 @@ export function createToolApprovalRequest(
 
 /** Rejects decisions that are unknown or invalid for the requested tool action. */
 export function assertToolApprovalDecision(
-    request: ToolApprovalRequest,
-    decision: ToolApprovalDecision,
+    _request: TToolApprovalRequest,
+    decision: TToolApprovalDecision,
 ): void {
     if (
         decision !== "approve"
@@ -96,9 +65,6 @@ export function assertToolApprovalDecision(
         && decision !== "copy"
     ) {
         throw new Error(`Invalid tool approval decision: ${String(decision)}`)
-    }
-    if (request.kind === "patch" && decision === "copy") {
-        throw new Error('Decision "copy" is not allowed for patch approval')
     }
 }
 

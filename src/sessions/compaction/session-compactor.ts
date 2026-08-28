@@ -1,9 +1,9 @@
 import { Buffer } from "node:buffer"
 
 import type {
-    AgentMessage,
-    AgentRunConfiguration,
-    ModelUsage,
+    TAgentMessage,
+    IAgentRunConfiguration,
+    IModelUsage,
 } from "@/agent"
 import {
     assertCheckpointAnchor,
@@ -45,9 +45,9 @@ const COMPACTION_RECOMPRESSION_PROMPT_SUFFIX = "\n\nRewrite this content as a ma
 /** Supplies durable history and model dependencies for one compaction pass. */
 export interface ICompactSessionMessagesOptions {
     readonly sessionId: string
-    readonly messages: readonly AgentMessage[]
+    readonly messages: readonly TAgentMessage[]
     readonly previousCheckpoint?: ICompactionCheckpoint
-    readonly runConfiguration: AgentRunConfiguration
+    readonly runConfiguration: IAgentRunConfiguration
     /** Allows an automatic pass to shrink an existing checkpoint at the same anchor. */
     readonly allowSummaryRecompression?: boolean
     readonly reason: ICompactionCheckpoint["reason"]
@@ -139,7 +139,7 @@ export async function compactSessionMessages(
 }
 
 /** Returns the complete prefix that a model has already had a chance to process. */
-export function eligibleCompactionEnd(messages: readonly AgentMessage[]): number {
+export function eligibleCompactionEnd(messages: readonly TAgentMessage[]): number {
     let latestProviderAssistantIndex = -1
     let pendingToolCalls: ReadonlyMap<
         string,
@@ -201,7 +201,7 @@ export function eligibleCompactionEnd(messages: readonly AgentMessage[]): number
     return firstUnprocessedUser === -1 ? messages.length : firstUnprocessedUser
 }
 
-function isProviderVisibleAssistant(message: AgentMessage): boolean {
+function isProviderVisibleAssistant(message: TAgentMessage): boolean {
     return message.role === "assistant"
         && message.stopReason !== "error"
         && message.stopReason !== "aborted"
@@ -218,7 +218,7 @@ interface ICompactionChunk {
 
 interface ICompactionSummaryResult {
     readonly summary: string
-    readonly usage?: ModelUsage
+    readonly usage?: IModelUsage
 }
 
 type TCompactionPromptMode = "history" | "recompress"
@@ -226,7 +226,7 @@ type TCompactionPromptMode = "history" | "recompress"
 interface ICompactionReductionState {
     nextChunkIndex: number
     recompressionPasses: number
-    usage?: ModelUsage
+    usage?: IModelUsage
 }
 
 interface IReduceCompactionHistoryOptions {
@@ -318,7 +318,7 @@ async function summarizeCompactionChunk(
         contextSummary,
         options.runConfiguration.modelProfile?.contextWindowTokens,
     )
-    const summaryPrompt: AgentMessage = {
+    const summaryPrompt: TAgentMessage = {
         id: `${checkpointId}-prompt-${chunkIndex}`,
         sessionId: options.sessionId,
         runId,
@@ -339,7 +339,7 @@ async function summarizeCompactionChunk(
     })
 
     let summary = ""
-    let usage: ModelUsage | undefined
+    let usage: IModelUsage | undefined
     let finished = false
     let finishReason: string | undefined
     for await (const event of stream) {
@@ -508,7 +508,7 @@ function splitUtf8Prefix(value: string, maximumBytes: number): ICompactionChunk 
     }
 }
 
-function serializeCompactionMessages(messages: readonly AgentMessage[]): string {
+function serializeCompactionMessages(messages: readonly TAgentMessage[]): string {
     const sections: string[] = []
     for (const message of messages) {
         switch (message.role) {
@@ -596,9 +596,9 @@ function safeJson(value: unknown): string {
 }
 
 function mergeUsage(
-    previous: ModelUsage | undefined,
-    current: ModelUsage | undefined,
-): ModelUsage | undefined {
+    previous: IModelUsage | undefined,
+    current: IModelUsage | undefined,
+): IModelUsage | undefined {
     if (!previous) return current === undefined ? undefined : structuredClone(current)
     if (!current) return previous
     return {
@@ -623,11 +623,11 @@ function mergeUsage(
     }
 }
 
-function optionalUsage<K extends keyof ModelUsage>(
+function optionalUsage<K extends keyof IModelUsage>(
     key: K,
     previous: number | undefined,
     current: number | undefined,
-): Pick<ModelUsage, K> | Record<string, never> {
+): Pick<IModelUsage, K> | Record<string, never> {
     if (previous === undefined && current === undefined) return {}
-    return { [key]: (previous ?? 0) + (current ?? 0) } as Pick<ModelUsage, K>
+    return { [key]: (previous ?? 0) + (current ?? 0) } as Pick<IModelUsage, K>
 }

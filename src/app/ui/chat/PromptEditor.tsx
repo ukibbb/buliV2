@@ -26,9 +26,9 @@ import type {
     TBuliInputSubmitResult,
 } from "@/app/ui/ui-controller"
 import type {
-    UserImageAttachment,
-    UserInputContent,
-    UserPathReference,
+    IUserImageAttachment,
+    IUserInputContent,
+    IUserPathReference,
 } from "@/agent"
 import {
     USER_IMAGE_ATTACHMENTS_MAX,
@@ -43,17 +43,17 @@ const chatTextAreaKeybindings: KeyBinding[] = [
 ]
 
 interface IPromptEditorProps {
-    readonly value: UserInputContent
+    readonly value: IUserInputContent
     readonly blocked: boolean
     readonly menuOpen: boolean
     readonly clipboard?: Pick<ClipboardService, "read">
-    readonly getCurrentValue: () => UserInputContent
+    readonly getCurrentValue: () => IUserInputContent
     readonly onValueChange: (
-        value: UserInputContent,
+        value: IUserInputContent,
         mention?: IPathMention,
     ) => void
     readonly onSubmit: (
-        input: UserInputContent,
+        input: IUserInputContent,
         delivery: TBuliInputDelivery,
     ) => Promise<TBuliInputSubmitResult>
     readonly onMoveMenuSelection: (direction: -1 | 1) => void
@@ -65,14 +65,14 @@ interface ITrackedPathReference {
     readonly markId: number
     readonly token: number
     readonly value: string
-    readonly reference: Omit<UserPathReference, "source">
+    readonly reference: Omit<IUserPathReference, "source">
 }
 
 interface ITrackedImageAttachment {
     readonly markId: number
     readonly token: number
     readonly value: string
-    readonly attachment: Omit<UserImageAttachment, "source">
+    readonly attachment: Omit<IUserImageAttachment, "source">
 }
 
 /** Owns the controlled terminal textarea, focus, keys, and safe draft clearing. */
@@ -128,7 +128,7 @@ export function PromptEditor(props: IPromptEditorProps) {
         activeClipboardReadRef.current = undefined
     }
 
-    const currentDraft = (): UserInputContent => {
+    const currentDraft = (): IUserInputContent => {
         const textArea = textAreaRef.current
         return textArea
             ? buildDraft(textArea, referencesRef.current, attachmentsRef.current)
@@ -151,7 +151,7 @@ export function PromptEditor(props: IPromptEditorProps) {
         )
     }
 
-    const clearSubmittedDraft = (submittedDraft: UserInputContent): void => {
+    const clearSubmittedDraft = (submittedDraft: IUserInputContent): void => {
         const textArea = textAreaRef.current
         if (!textArea || !sameUserInput(currentDraft(), submittedDraft)) return
         cancelClipboardRead("Prompt draft was cleared")
@@ -394,7 +394,7 @@ export function PromptEditor(props: IPromptEditorProps) {
     )
 }
 
-function nextImageNumber(input: UserInputContent): number {
+function nextImageNumber(input: IUserInputContent): number {
     return (input.attachments ?? []).reduce((maximum, attachment) => {
         const match = /^\[Image (\d+)\]$/.exec(attachment.source.value)
         return Math.max(maximum, Number(match?.[1] ?? 0))
@@ -410,8 +410,8 @@ function buildDraft(
     textArea: TextareaRenderable,
     records: readonly ITrackedPathReference[],
     attachmentRecords: readonly ITrackedImageAttachment[],
-): UserInputContent {
-    const references = records.flatMap((record): UserPathReference[] => {
+): IUserInputContent {
+    const references = records.flatMap((record): IUserPathReference[] => {
         const mark = textArea.extmarks.get(record.markId)
         if (
             !mark
@@ -432,7 +432,7 @@ function buildDraft(
         }]
     })
     const attachments = attachmentRecords.flatMap(
-        (record): UserImageAttachment[] => {
+        (record): IUserImageAttachment[] => {
             const mark = textArea.extmarks.get(record.markId)
             if (
                 !mark
@@ -463,7 +463,7 @@ function buildDraft(
 
 function restoreImageAttachments(
     textArea: TextareaRenderable,
-    input: UserInputContent,
+    input: IUserInputContent,
     nextToken: { current: number },
 ): ITrackedImageAttachment[] {
     void textArea.extmarks
@@ -498,7 +498,7 @@ function restoreImageAttachments(
 
 function restorePathReferences(
     textArea: TextareaRenderable,
-    input: UserInputContent,
+    input: IUserInputContent,
     nextToken: { current: number },
 ): ITrackedPathReference[] {
     void textArea.extmarks

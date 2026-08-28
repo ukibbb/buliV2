@@ -13,7 +13,7 @@ test("truncates by UTF-8 bytes without splitting a code point", () => {
   const truncated = truncateToolOutput(output, { maxBytes: 40, maxLines: 10 })
 
   expect(Buffer.byteLength(truncated, "utf8")).toBeLessThanOrEqual(40)
-  expect(truncated).toEndWith("... output truncated")
+  expect(truncated).toEndWith("... output preview ended")
   expect(truncated).not.toContain("�")
 })
 
@@ -21,7 +21,7 @@ test("truncates by complete line count and remains idempotent", () => {
   const output = ["one", "two", "three", "four"].join("\n")
   const truncated = truncateToolOutput(output, { maxBytes: 100, maxLines: 3 })
 
-  expect(truncated).toBe("one\ntwo\n... output truncated")
+  expect(truncated).toBe("one\ntwo\n... output preview ended")
   expect(truncateToolOutput(truncated, { maxBytes: 100, maxLines: 3 })).toBe(
     truncated,
   )

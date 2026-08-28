@@ -274,6 +274,7 @@ async function buildThirdPartyLicenses(
     const [
         ripgrepSections,
         fdSections,
+        piNotice,
         pythonLicense,
         bashLicense,
     ] = await Promise.all([
@@ -286,6 +287,7 @@ async function buildThirdPartyLicenses(
             licenseSection(fdRoot, "LICENSE-APACHE"),
             licenseSection(fdRoot, "LICENSE-MIT"),
         ]),
+        licenseSection(workspaceRoot, "THIRD_PARTY_NOTICES"),
         licenseSection(treeSitterRoot, "LICENSE.tree-sitter-python"),
         licenseSection(treeSitterRoot, "LICENSE.tree-sitter-bash"),
     ])
@@ -300,6 +302,8 @@ async function buildThirdPartyLicenses(
         "Source: https://github.com/sharkdp/fd",
         "",
         ...fdSections,
+        "",
+        piNotice,
         "",
         "tree-sitter-python 0.23.6",
         "Source: https://github.com/tree-sitter/tree-sitter-python",

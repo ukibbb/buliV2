@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer"
 
 import { expect, test } from "bun:test"
 
-import type { AgentMessage } from "@/agent"
+import type { TAgentMessage } from "@/agent"
 import {
   CONTEXT_COMPACTION_THRESHOLD,
   contextCompactionThresholdTokens,
@@ -66,21 +66,21 @@ test("does not count reasoning or failed and aborted assistant content", () => {
     type: "text",
     text: "Visible answer",
   }])
-  const withReasoning: AgentMessage = {
+  const withReasoning: TAgentMessage = {
     ...visible,
     content: [
       ...visible.content,
       { type: "reasoning", text: "R".repeat(10_000) },
     ],
   }
-  const failed: AgentMessage = {
+  const failed: TAgentMessage = {
     ...assistant("assistant-error", [{
       type: "text",
       text: "E".repeat(10_000),
     }]),
     stopReason: "error",
   }
-  const aborted: AgentMessage = {
+  const aborted: TAgentMessage = {
     ...assistant("assistant-aborted", [{
       type: "text",
       text: "A".repeat(10_000),
@@ -98,7 +98,7 @@ test("does not count reasoning or failed and aborted assistant content", () => {
 
 test("adds a conservative token estimate for direct image inputs", () => {
   const plain = user("plain", "Inspect image")
-  const withImage: AgentMessage = {
+  const withImage: TAgentMessage = {
     ...plain,
     attachments: [{
       type: "image",
@@ -143,7 +143,7 @@ test("reports the fixed 80 percent threshold and optional context usage", () => 
 })
 
 test("uses retained provider input usage as a conservative estimate floor", () => {
-  const measured: AgentMessage = {
+  const measured: TAgentMessage = {
     ...assistant("measured-assistant", [{ type: "text", text: "Short answer" }]),
     usage: { inputTokens: 238_000, outputTokens: 200, totalTokens: 238_200 },
   }
@@ -224,7 +224,7 @@ test("discards a provider usage anchor after the model changes", () => {
 function user(
   id: string,
   content: string,
-): Extract<AgentMessage, { role: "user" }> {
+): Extract<TAgentMessage, { role: "user" }> {
   return {
     id,
     sessionId: "session-1",
@@ -238,8 +238,8 @@ function user(
 
 function assistant(
   id: string,
-  content: Extract<AgentMessage, { role: "assistant" }>["content"],
-): Extract<AgentMessage, { role: "assistant" }> {
+  content: Extract<TAgentMessage, { role: "assistant" }>["content"],
+): Extract<TAgentMessage, { role: "assistant" }> {
   return {
     id,
     sessionId: "session-1",
@@ -251,7 +251,7 @@ function assistant(
   }
 }
 
-function toolResult(id: string, content: string): AgentMessage {
+function toolResult(id: string, content: string): TAgentMessage {
   return {
     id,
     sessionId: "session-1",

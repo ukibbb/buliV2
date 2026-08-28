@@ -1,13 +1,13 @@
-import type { AgentEvent } from "@/agent/events"
+import type { TAgentEvent } from "@/agent/events"
 import { isImmutableAssistantSnapshot } from "@/agent/assistant-message-builder"
-import type { AssistantMessage } from "@/agent/messages"
-import type { AgentState } from "@/agent/state"
+import type { IAssistantMessage } from "@/agent/messages"
+import type { IAgentState } from "@/agent/state"
 
 /** Applies one agent event to immutable live state without performing side effects. */
 export function reduceAgentState(
-    state: AgentState,
-    event: AgentEvent,
-): AgentState {
+    state: IAgentState,
+    event: TAgentEvent,
+): IAgentState {
     switch (event.type) {
         case "agent_start":
             return { ...state, isRunning: true }
@@ -73,7 +73,7 @@ export function reduceAgentState(
     }
 }
 
-function retainAssistantSnapshot(message: AssistantMessage): AssistantMessage {
+function retainAssistantSnapshot(message: IAssistantMessage): IAssistantMessage {
     // Builder snapshots are recursively frozen; external events retain the
     // reducer's defensive-copy behavior.
     return isImmutableAssistantSnapshot(message)

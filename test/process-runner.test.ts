@@ -78,9 +78,52 @@ test.skipIf(!BASH_EXECUTION_AVAILABLE)(
       stderr: "",
       stdoutTruncated: false,
       stderrTruncated: false,
+      stdoutInvalidUtf8: false,
+      stderrInvalidUtf8: false,
       timedOut: false,
     })
     expect(result.durationMs).toBeGreaterThanOrEqual(0)
+  },
+)
+
+test.skipIf(!BASH_EXECUTION_AVAILABLE)(
+  "runs without a timeout when timeoutMs is omitted",
+  async () => {
+    const result = await runShellProcess({
+      command: 'printf "no timeout"',
+      cwd: process.cwd(),
+      signal: new AbortController().signal,
+      outputLimits: DEFAULT_OUTPUT_LIMITS,
+    })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toBe("no timeout")
+    expect(result.timedOut).toBe(false)
+  },
+)
+
+test.skipIf(!BASH_EXECUTION_AVAILABLE)(
+  "accepts a positive fractional timeout",
+  async () => {
+    const result = await run('printf "fractional timeout"', {
+      timeoutMs: 1_000.5,
+    })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toBe("fractional timeout")
+    expect(result.timedOut).toBe(false)
+  },
+)
+
+test.skipIf(!BASH_EXECUTION_AVAILABLE)(
+  "marks complete output that is not valid UTF-8",
+  async () => {
+    const result = await run("printf '\\377'")
+
+    expect(result.stdout).toBe("�")
+    expect(result.stdoutTruncated).toBe(false)
+    expect(result.stdoutInvalidUtf8).toBe(true)
+    expect(result.stderrInvalidUtf8).toBe(false)
   },
 )
 
@@ -375,13 +418,16 @@ test("rejects invalid commands, cwd values, signals, timeouts, and limits", asyn
       outputLimits: DEFAULT_OUTPUT_LIMITS,
     })).rejects.toThrow("signal must be an AbortSignal")
     await expect(run("exit 0", { cwd: workspace, timeoutMs: 0 })).rejects.toThrow(
-      "timeoutMs must be an integer",
-    )
-    await expect(run("exit 0", { cwd: workspace, timeoutMs: 1.5 })).rejects.toThrow(
-      "timeoutMs must be an integer",
+      "timeoutMs must be a finite number greater than 0",
     )
     await expect(run("exit 0", { cwd: workspace, timeoutMs: Infinity })).rejects.toThrow(
-      "timeoutMs must be an integer",
+      "timeoutMs must be a finite number greater than 0",
+    )
+    await expect(run("exit 0", {
+      cwd: workspace,
+      timeoutMs: 2_147_483_648,
+    })).rejects.toThrow(
+      "timeoutMs must be a finite number greater than 0 and at most 2147483647",
     )
     await expect(run("exit 0", {
       cwd: workspace,

@@ -1,6 +1,6 @@
 import type {
-    AgentContextProjection,
-    AgentMessage,
+    IAgentContextProjection,
+    TAgentMessage,
 } from "@/agent"
 import {
     assertCheckpointAnchor,
@@ -13,9 +13,9 @@ import {
 
 /** Projects durable history without changing or deleting its source messages. */
 export function projectAgentContext(
-    messages: readonly AgentMessage[],
+    messages: readonly TAgentMessage[],
     checkpoint?: ICompactionCheckpoint,
-): AgentContextProjection {
+): IAgentContextProjection {
     if (!checkpoint) return { messages: structuredClone(messages) }
 
     if (messages.some((message) => message.sessionId !== checkpoint.sessionId)) {

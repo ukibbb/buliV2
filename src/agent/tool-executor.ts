@@ -1,22 +1,30 @@
+import { Buffer } from "node:buffer"
+import type { TSchema } from "typebox"
 import { Value } from "typebox/value"
 
-import type { AgentEvent } from "@/agent/events"
+import type { TAgentEvent } from "@/agent/events"
 import type {
-    AgentMessage,
-    ToolCallContent,
-    ToolResultMessage,
-    UserPathReference,
+    TAgentMessage,
+    IToolCallContent,
+    IToolResultMessage,
+    IUserPathReference,
 } from "@/agent/messages"
-import type { ModelProfile } from "@/agent/model-values"
+import type { IModelProfile } from "@/agent/model-values"
 import type {
-    ToolApprovalDecision,
-    ToolApprovalDraft,
+    TToolApprovalDecision,
+    TToolApprovalDraft,
 } from "@/agent/tool-approval"
 import type {
-    AgentTool,
-    ToolExecutionOutcome,
+    IAgentTool,
+    TToolExecutionOutcome,
 } from "@/agent/tool"
-import { truncateToolOutput } from "@/agent/tool-output"
+import {
+    isToolOutputWithinLimits,
+    MAX_TOOL_OUTPUT_BYTES,
+    MAX_TOOL_OUTPUT_LINES,
+    truncateToolOutput,
+} from "@/agent/tool-output"
+import type { IToolOutputStore } from "@/agent/tool-output-store"
 
 const COMMITTED_AFTER_ABORT_SUMMARY =
     "WARNING: Workspace changes were committed despite cancellation."
@@ -26,30 +34,31 @@ const SIDE_EFFECTS_UNKNOWN_SUMMARY =
 interface IExecuteToolCallsOptions {
     readonly sessionId: string
     readonly runId: string
-    readonly modelProfile?: ModelProfile
+    readonly modelProfile?: IModelProfile
     readonly providerAccountId?: string
-    readonly messages: readonly AgentMessage[]
-    readonly selectedPathReferences?: readonly UserPathReference[]
+    readonly messages: readonly TAgentMessage[]
+    readonly selectedPathReferences?: readonly IUserPathReference[]
     readonly signal: AbortSignal
-    readonly emit: (event: AgentEvent) => void | Promise<void>
+    readonly emit: (event: TAgentEvent) => void | Promise<void>
     readonly requestApproval?: (
-        draft: ToolApprovalDraft,
+        draft: TToolApprovalDraft,
         context: {
             readonly sessionId: string
             readonly runId: string
             readonly toolCallId: string
             readonly signal: AbortSignal
         },
-    ) => Promise<ToolApprovalDecision>
+    ) => Promise<TToolApprovalDecision>
     readonly now: () => number
     readonly generateId: () => string
+    readonly toolOutputStore?: IToolOutputStore
 }
 
 /** Builds the single validated tool registry shared by model and local execution. */
 export function indexAgentTools(
-    tools: readonly AgentTool[],
-): ReadonlyMap<string, AgentTool> {
-    const toolsByName = new Map<string, AgentTool>()
+    tools: readonly IAgentTool[],
+): ReadonlyMap<string, IAgentTool> {
+    const toolsByName = new Map<string, IAgentTool>()
     for (const tool of tools) {
         if (toolsByName.has(tool.name)) {
             throw new Error(`Duplicate tool: ${tool.name}`)
@@ -61,11 +70,11 @@ export function indexAgentTools(
 
 /** Executes local tool calls sequentially and publishes each result lifecycle. */
 export async function executeToolCallsSequentially(
-    toolCalls: readonly ToolCallContent[],
-    toolsByName: ReadonlyMap<string, AgentTool>,
+    toolCalls: readonly IToolCallContent[],
+    toolsByName: ReadonlyMap<string, IAgentTool>,
     options: IExecuteToolCallsOptions,
-): Promise<ToolResultMessage[]> {
-    const results: ToolResultMessage[] = []
+): Promise<IToolResultMessage[]> {
+    const results: IToolResultMessage[] = []
 
     for (const toolCall of toolCalls) {
         await options.emit({
@@ -93,11 +102,11 @@ export async function executeToolCallsSequentially(
 
 /** Publishes error results for tool calls that must not reach local executors. */
 export async function failToolCallsWithoutExecution(
-    toolCalls: readonly ToolCallContent[],
+    toolCalls: readonly IToolCallContent[],
     content: string,
     options: IExecuteToolCallsOptions,
-): Promise<ToolResultMessage[]> {
-    const results: ToolResultMessage[] = []
+): Promise<IToolResultMessage[]> {
+    const results: IToolResultMessage[] = []
 
     for (const toolCall of toolCalls) {
         await options.emit({
@@ -107,7 +116,7 @@ export async function failToolCallsWithoutExecution(
             toolName: toolCall.toolName,
             input: structuredClone(toolCall.input),
         })
-        const result: ToolResultMessage = {
+        const result: IToolResultMessage = {
             id: options.generateId(),
             sessionId: options.sessionId,
             runId: options.runId,
@@ -133,13 +142,13 @@ export async function failToolCallsWithoutExecution(
 }
 
 async function executeToolCall(
-    toolCall: ToolCallContent,
-    toolsByName: ReadonlyMap<string, AgentTool>,
+    toolCall: IToolCallContent,
+    toolsByName: ReadonlyMap<string, IAgentTool>,
     options: IExecuteToolCallsOptions,
-): Promise<ToolResultMessage> {
+): Promise<IToolResultMessage> {
     let content: string
     let isError: boolean
-    let outcome: ToolExecutionOutcome | undefined
+    let outcome: TToolExecutionOutcome | undefined
     let summary: string | undefined
     const tool = toolsByName.get(toolCall.toolName)
 
@@ -153,7 +162,7 @@ async function executeToolCall(
         let acceptingProgress = true
         let acceptingApprovals = true
         let approvalRequested = false
-        let pendingApprovalTask: Promise<ToolApprovalDecision> | undefined
+        let pendingApprovalTask: Promise<TToolApprovalDecision> | undefined
         let progressTask: Promise<void> = Promise.resolve()
         const reportProgress = (progress: string): void => {
             if (!acceptingProgress) return
@@ -168,8 +177,8 @@ async function executeToolCall(
             void progressTask.catch(() => {})
         }
         const requestApproval = (
-            draft: ToolApprovalDraft,
-        ): Promise<ToolApprovalDecision> => {
+            draft: TToolApprovalDraft,
+        ): Promise<TToolApprovalDecision> => {
             if (!acceptingApprovals) {
                 return Promise.reject(new Error(
                     `Tool "${tool.name}" is no longer accepting approval requests`,
@@ -196,7 +205,7 @@ async function executeToolCall(
                 ))
             }
 
-            let task: Promise<ToolApprovalDecision>
+            let task: Promise<TToolApprovalDecision>
             try {
                 options.signal.throwIfAborted()
                 approvalRequested = true
@@ -230,11 +239,18 @@ async function executeToolCall(
         }
 
         try {
-            const input = structuredClone(toolCall.input)
+            const preparedInput = tool.prepareArguments
+                ? tool.prepareArguments(structuredClone(toolCall.input))
+                : structuredClone(toolCall.input)
+            normalizeOptionalNulls(
+                preparedInput,
+                tool.inputSchema as IJsonSchemaNode,
+            )
+            const input = Value.Convert(tool.inputSchema, preparedInput)
             assertToolInput(tool, input)
             const executionResult = normalizeToolExecutionResult(
                 tool.name,
-                await tool.execute(input, {
+                await tool.execute(input as Record<string, unknown>, {
                     sessionId: options.sessionId,
                     toolCallId: toolCall.toolCallId,
                     runId: options.runId,
@@ -297,9 +313,20 @@ async function executeToolCall(
         await progressTask
     }
 
-    // Apply limits once so the model, final event, and persistence see one value.
-    content = truncateToolOutput(content)
-    if (summary !== undefined) summary = truncateToolOutput(summary)
+    if (!tool?.selfTruncatesOutput) {
+        const retained = await retainCompleteToolOutput({
+            content,
+            summary,
+            isError,
+            outcome,
+            toolCall,
+            options,
+        })
+        content = retained.content
+        summary = retained.summary
+        isError = retained.isError
+        outcome = retained.outcome
+    }
 
     return {
         id: options.generateId(),
@@ -316,12 +343,161 @@ async function executeToolCall(
     }
 }
 
+async function retainCompleteToolOutput(input: {
+    readonly content: string
+    readonly summary: string | undefined
+    readonly isError: boolean
+    readonly outcome: TToolExecutionOutcome | undefined
+    readonly toolCall: IToolCallContent
+    readonly options: IExecuteToolCallsOptions
+}): Promise<{
+    readonly content: string
+    readonly summary: string | undefined
+    readonly isError: boolean
+    readonly outcome: TToolExecutionOutcome | undefined
+}> {
+    const contentFits = isToolOutputWithinLimits(input.content)
+    const summaryFits = input.summary === undefined
+        || isToolOutputWithinLimits(input.summary)
+    if (contentFits && summaryFits) {
+        return {
+            content: input.content,
+            summary: input.summary,
+            isError: input.isError,
+            outcome: input.outcome,
+        }
+    }
+
+    const store = input.options.toolOutputStore
+    if (!store) {
+        return unavailableLargeOutput(
+            "No complete tool-output store is configured",
+            input.outcome,
+        )
+    }
+
+    try {
+        const stored = await store.store({
+            sessionId: input.options.sessionId,
+            runId: input.options.runId,
+            toolCallId: input.toolCall.toolCallId,
+            toolName: input.toolCall.toolName,
+        }, {
+            content: input.content,
+            ...(input.summary === undefined ? {} : { summary: input.summary }),
+        })
+        const header = `Complete tool result stored as outputId=${JSON.stringify(stored.outputId)}. Use tool_output with this outputId and part="content" to read exact pages.`
+        return {
+            content: storedPreview(header, input.content),
+            summary: input.summary === undefined
+                ? undefined
+                : summaryFits
+                    ? input.summary
+                    : `Complete summary stored as outputId=${JSON.stringify(stored.outputId)} with part="summary".`,
+            isError: input.isError,
+            outcome: input.outcome,
+        }
+    } catch (error) {
+        return unavailableLargeOutput(
+            `Complete tool output could not be stored: ${errorMessage(error)}`,
+            input.outcome,
+        )
+    }
+}
+
+function storedPreview(header: string, output: string): string {
+    const headerBytes = Buffer.byteLength(header, "utf8") + 1
+    return `${header}\n${truncateToolOutput(output, {
+        maxBytes: MAX_TOOL_OUTPUT_BYTES - headerBytes,
+        maxLines: MAX_TOOL_OUTPUT_LINES - 1,
+    })}`
+}
+
+function unavailableLargeOutput(
+    reason: string,
+    previousOutcome: TToolExecutionOutcome | undefined,
+): {
+    readonly content: string
+    readonly summary: string
+    readonly isError: true
+    readonly outcome: TToolExecutionOutcome
+} {
+    const warning = "The complete result is unavailable and this response must not be treated as complete. Inspect possible side effects before deciding whether it is safe to rerun the source tool."
+    const prefix = `${warning}\nReason: `
+    return {
+        content: prefix + truncateToolOutput(reason, {
+            maxBytes: MAX_TOOL_OUTPUT_BYTES - Buffer.byteLength(prefix, "utf8"),
+            maxLines: MAX_TOOL_OUTPUT_LINES - 1,
+        }),
+        summary: "Complete tool output unavailable",
+        isError: true,
+        outcome: previousOutcome === "completed"
+            ? "effects-unknown"
+            : previousOutcome === "committed-after-abort"
+                || previousOutcome === "effects-unknown"
+                ? previousOutcome
+                : "failed",
+    }
+}
+
+interface IJsonSchemaNode {
+    readonly properties?: Readonly<Record<string, IJsonSchemaNode>>
+    readonly required?: readonly string[]
+    readonly items?: IJsonSchemaNode | IJsonSchemaNode[]
+    readonly $ref?: unknown
+}
+
+/** Matches Pi's treatment of null sent for optional, non-nullable arguments. */
+function normalizeOptionalNulls(
+    value: unknown,
+    schema: IJsonSchemaNode,
+): void {
+    if (Array.isArray(value)) {
+        if (Array.isArray(schema.items)) {
+            for (const [index, item] of value.entries()) {
+                const itemSchema = schema.items[index]
+                if (itemSchema) normalizeOptionalNulls(item, itemSchema)
+            }
+        } else if (schema.items) {
+            for (const item of value) normalizeOptionalNulls(item, schema.items)
+        }
+        return
+    }
+    if (value === null || typeof value !== "object" || !schema.properties) {
+        return
+    }
+
+    const object = value as Record<string, unknown>
+    const required = new Set(schema.required ?? [])
+    for (const [key, propertySchema] of Object.entries(schema.properties)) {
+        if (!(key in object)) continue
+        if (
+            object[key] === null
+            && !required.has(key)
+            && typeof propertySchema.$ref !== "string"
+            && rejectsNull(propertySchema)
+        ) {
+            delete object[key]
+        } else {
+            normalizeOptionalNulls(object[key], propertySchema)
+        }
+    }
+}
+
+function rejectsNull(schema: IJsonSchemaNode): boolean {
+    try {
+        return !Value.Check(schema as TSchema, null)
+    } catch {
+        return false
+    }
+}
+
 function normalizeToolExecutionResult(
     toolName: string,
     value: unknown,
 ): {
     readonly content: string
-    readonly outcome: ToolExecutionOutcome
+    readonly outcome: TToolExecutionOutcome
     readonly summary?: string
 } {
     if (typeof value === "string") {
@@ -354,7 +530,7 @@ function normalizeToolExecutionResult(
     }
 }
 
-function isToolExecutionOutcome(value: unknown): value is ToolExecutionOutcome {
+function isToolExecutionOutcome(value: unknown): value is TToolExecutionOutcome {
     return value === "completed"
         || value === "rejected"
         || value === "manual"
@@ -378,8 +554,8 @@ function isUnknownSideEffectsError(error: unknown): boolean {
 }
 
 function assertToolInput(
-    tool: AgentTool,
-    input: Record<string, unknown>,
+    tool: IAgentTool,
+    input: unknown,
 ): void {
     if (Value.Check(tool.inputSchema, input)) return
 
@@ -393,9 +569,9 @@ function assertToolInput(
 }
 
 async function emitCompletedMessage(
-    message: ToolResultMessage,
+    message: IToolResultMessage,
     runId: string,
-    emit: (event: AgentEvent) => void | Promise<void>,
+    emit: (event: TAgentEvent) => void | Promise<void>,
 ): Promise<void> {
     await emit({ type: "message_start", runId, message })
     await emit({ type: "message_end", runId, message })

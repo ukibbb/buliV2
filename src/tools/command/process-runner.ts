@@ -52,9 +52,13 @@ export interface IProcessRunnerOptions {
     readonly command: string
     readonly cwd: string
     readonly signal: AbortSignal
-    readonly timeoutMs: number
+    readonly timeoutMs?: number
     readonly outputLimits: IProcessOutputLimits
     readonly onProgress?: (progress: IProcessProgress) => void
+    readonly onOutputChunk?: (
+        stream: "stdout" | "stderr",
+        chunk: Uint8Array,
+    ) => void | Promise<void>
 }
 
 export interface IProcessRunnerResult {
@@ -64,6 +68,10 @@ export interface IProcessRunnerResult {
     readonly stderr: string
     readonly stdoutTruncated: boolean
     readonly stderrTruncated: boolean
+    /** True when the complete inline stdout required replacement decoding. */
+    readonly stdoutInvalidUtf8: boolean
+    /** True when the complete inline stderr required replacement decoding. */
+    readonly stderrInvalidUtf8: boolean
     readonly durationMs: number
     readonly timedOut: boolean
     /** Present when process-tree termination could not be verified. */
@@ -163,9 +171,11 @@ export async function runShellProcess(
     options.signal.addEventListener("abort", abort, { once: true })
     if (options.signal.aborted) abort()
 
-    const timeout = setTimeout(() => {
-        if (terminationCause === undefined) void requestTermination("timeout")
-    }, options.timeoutMs)
+    const timeout = options.timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            if (terminationCause === undefined) void requestTermination("timeout")
+        }, options.timeoutMs)
 
     const onProgress = options.onProgress
     let progressEventCount = 0
@@ -187,12 +197,14 @@ export async function runShellProcess(
         "stdout",
         stdout,
         reportProgress,
+        options.onOutputChunk,
     )
     const stderrDrain = startOutputDrain(
         child.stderr,
         "stderr",
         stderr,
         reportProgress,
+        options.onOutputChunk,
     )
     const stdoutFinished = stdoutDrain.finished.catch((error: unknown) => {
         void requestTermination("failure")
@@ -221,7 +233,7 @@ export async function runShellProcess(
 
         if (firstOutcome.kind === "completed" && terminationCause === undefined) {
             completion = firstOutcome.value
-            clearTimeout(timeout)
+            if (timeout !== undefined) clearTimeout(timeout)
             if (
                 process.platform !== "win32"
                 && posixProcessGroupExists(child.pid)
@@ -264,7 +276,7 @@ export async function runShellProcess(
             }
         }
     } finally {
-        clearTimeout(timeout)
+        if (timeout !== undefined) clearTimeout(timeout)
         cleanupDeadline?.clear()
         options.signal.removeEventListener("abort", abort)
     }
@@ -282,6 +294,8 @@ export async function runShellProcess(
         stderr: stderr.text(STDERR_TRUNCATION_MARKER),
         stdoutTruncated: stdout.truncated,
         stderrTruncated: stderr.truncated,
+        stdoutInvalidUtf8: stdout.hasInvalidUtf8(),
+        stderrInvalidUtf8: stderr.hasInvalidUtf8(),
         durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
         timedOut,
         ...(cleanupWarning === undefined ? {} : { cleanupWarning }),
@@ -378,6 +392,19 @@ class BoundedOutput {
         if (!this.truncated) return text
         return `${text}${text && !text.endsWith("\n") ? "\n" : ""}${marker}`
     }
+
+    hasInvalidUtf8(): boolean {
+        const bytes = this.#captured.subarray(0, this.#capturedBytes)
+        try {
+            new TextDecoder("utf-8", { fatal: true }).decode(bytes, {
+                // A truncated byte prefix may legitimately end inside one code point.
+                stream: this.truncated,
+            })
+            return false
+        } catch {
+            return true
+        }
+    }
 }
 
 interface IOutputDrain {
@@ -393,6 +420,10 @@ function startOutputDrain(
         stream: "stdout" | "stderr",
         output: BoundedOutput,
     ) => void,
+    onOutputChunk?: (
+        stream: "stdout" | "stderr",
+        chunk: Uint8Array,
+    ) => void | Promise<void>,
 ): IOutputDrain {
     const reader = stream.getReader()
     let stopped = false
@@ -403,6 +434,15 @@ function startOutputDrain(
                 const item = await reader.read()
                 if (stopped || item.done) return
                 output.append(item.value)
+                if (onOutputChunk && item.value.byteLength > 0) {
+                    try {
+                        await onOutputChunk(name, item.value)
+                    } catch (error) {
+                        throw new Error(
+                            `Process output storage callback failed: ${errorMessage(error)}`,
+                        )
+                    }
+                }
                 if (!onProgress || item.value.byteLength === 0) continue
                 try {
                     onProgress(name, output)
@@ -773,7 +813,9 @@ function validateOptions(options: IProcessRunnerOptions): void {
     if (!(options.signal instanceof AbortSignal)) {
         throw new TypeError("Process signal must be an AbortSignal")
     }
-    validateInteger("timeoutMs", options.timeoutMs, 1, MAX_TIMEOUT_MS)
+    if (options.timeoutMs !== undefined) {
+        validateTimeout(options.timeoutMs)
+    }
 
     if (!isRecord(options.outputLimits)) {
         throw new TypeError("Process outputLimits must be an object")
@@ -798,6 +840,12 @@ function validateOptions(options: IProcessRunnerOptions): void {
     )
     if (options.onProgress !== undefined && typeof options.onProgress !== "function") {
         throw new TypeError("Process onProgress must be a function")
+    }
+    if (
+        options.onOutputChunk !== undefined
+        && typeof options.onOutputChunk !== "function"
+    ) {
+        throw new TypeError("Process onOutputChunk must be a function")
     }
 }
 
@@ -833,6 +881,14 @@ function validateInteger(
     if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
         throw new TypeError(
             `Process ${name} must be an integer from ${minimum} to ${maximum}`,
+        )
+    }
+}
+
+function validateTimeout(value: number): void {
+    if (!Number.isFinite(value) || value <= 0 || value > MAX_TIMEOUT_MS) {
+        throw new TypeError(
+            `Process timeoutMs must be a finite number greater than 0 and at most ${MAX_TIMEOUT_MS}`,
         )
     }
 }

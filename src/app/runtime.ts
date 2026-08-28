@@ -1,9 +1,10 @@
 import type {
-    AgentModel,
-    AgentTool,
-    ModelProfile,
-    ReasoningEffort,
-    ToolApprovalDecision,
+    IAgentModel,
+    IAgentTool,
+    IModelProfile,
+    IToolOutputStore,
+    TReasoningEffort,
+    TToolApprovalDecision,
 } from "@/agent"
 import type {
     IBuliAgentDisplayInfo,
@@ -31,15 +32,15 @@ type TBuliRuntimeSubscribe = () => void
 
 export interface IBuliAgentRuntimeConfig extends IBuliAgentDisplayInfo {
     readonly systemPrompt: string
-    readonly tools: readonly AgentTool[]
+    readonly tools: readonly IAgentTool[]
 }
 
 export interface IBuliModelRuntimeConfig extends IBuliModelDisplayInfo {
-    readonly model: AgentModel
-    readonly modelProfile?: ModelProfile
+    readonly model: IAgentModel
+    readonly modelProfile?: IModelProfile
     readonly providerAccountId?: string
     readonly fallbackSelectionId?: string
-    readonly defaultReasoningEffort: ReasoningEffort
+    readonly defaultReasoningEffort: TReasoningEffort
 }
 
 export type TBuliModelRegistrationLoader = (
@@ -60,6 +61,7 @@ export interface IBuliRuntimeOptions {
     readonly searchPaths?: TBuliPathSearcher
     readonly now?: () => number
     readonly generateId?: () => string
+    readonly toolOutputStore?: IToolOutputStore
 }
 
 
@@ -76,6 +78,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
     private readonly pathSearcher: TBuliPathSearcher | undefined
     private readonly now: () => number
     private readonly generateId: () => string
+    private readonly toolOutputStore: IToolOutputStore | undefined
     private readonly lifetime = new AbortController()
 
     private selection: IBuliModelSelection
@@ -112,6 +115,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
         this.selection = { ...options.selection }
         this.now = options.now ?? Date.now
         this.generateId = options.generateId ?? generateRandomId
+        this.toolOutputStore = options.toolOutputStore
 
         this.resolveAgent(this.defaultAgentId)
         this.resolveSelectedModel()
@@ -256,7 +260,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
     readonly resolveToolApproval = (
         sessionId: string,
         approvalId: string,
-        decision: ToolApprovalDecision,
+        decision: TToolApprovalDecision,
     ): void => {
         if (this.disposed) throw new Error("Buli runtime is disposed")
         this.getOrOpenAgentSession(sessionId).resolveToolApproval(
@@ -312,7 +316,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
     }
 
     readonly selectReasoningEffort = (
-        reasoningEffort: ReasoningEffort,
+        reasoningEffort: TReasoningEffort,
     ): void => {
         // Przyjmij reasoning effort, który ma obowiązywać globalnie.
         if (this.disposed) throw new Error("Buli runtime is disposed")
@@ -347,17 +351,24 @@ export class BuliApplicationRuntime implements IBuliApplication {
 
         const sessions = [...this.sessions.values()]
         const modelRefreshTask = this.modelRefreshTask
+        // An injected catalog loader may ignore cancellation. It cannot commit
+        // after disposal, so observe rejection without holding shutdown open.
+        void modelRefreshTask?.catch(() => {})
         this.sessions.clear()
         this.listeners.clear()
         const results = await Promise.allSettled(
             sessions.map(async (session) => session.dispose()),
         )
-        await modelRefreshTask?.catch(() => {})
         const errors: unknown[] = results.flatMap((result) =>
             result.status === "rejected" ? [result.reason] : []
         )
         // Manager jest właścicielem zasobów storage. Zwalniamy je po sesjach także
         // wtedy, gdy któraś sesja zgłosiła błąd.
+        try {
+            await this.toolOutputStore?.dispose()
+        } catch (error) {
+            errors.push(error)
+        }
         try {
             await this.manager.dispose?.()
         } catch (error) {
@@ -544,6 +555,9 @@ export class BuliApplicationRuntime implements IBuliApplication {
                 }
             },
             tools: agent.tools,
+            ...(this.toolOutputStore === undefined
+                ? {}
+                : { toolOutputStore: this.toolOutputStore }),
         })
     }
 

@@ -2,8 +2,8 @@
 import type { KeyEvent } from "@opentui/core"
 
 import type {
-    ToolApprovalDecision,
-    ToolApprovalRequest,
+    TToolApprovalDecision,
+    TToolApprovalRequest,
 } from "@/agent"
 
 export type TToolApprovalKeyboardAction =
@@ -16,10 +16,10 @@ export type TToolApprovalKeyboardAction =
     | "approval.scrollEnd"
 
 export interface IToolApprovalPanelProps {
-    readonly request: ToolApprovalRequest
+    readonly request: TToolApprovalRequest
     readonly onResolve: (
         approvalId: string,
-        decision: ToolApprovalDecision,
+        decision: TToolApprovalDecision,
         beforeResolve?: () => boolean,
     ) => void
     readonly onError: (error: unknown) => void
@@ -30,13 +30,8 @@ export interface IToolApprovalPanelProps {
 
 export interface IToolApprovalAction {
     readonly label: string
-    readonly decision: ToolApprovalDecision
+    readonly decision: TToolApprovalDecision
 }
-
-export const PATCH_APPROVAL_ACTIONS: readonly IToolApprovalAction[] = [
-    { label: "Reject", decision: "reject" },
-    { label: "Apply", decision: "approve" },
-]
 
 export const COMMAND_APPROVAL_ACTIONS: readonly IToolApprovalAction[] = [
     { label: "Copy", decision: "copy" },
@@ -45,9 +40,7 @@ export const COMMAND_APPROVAL_ACTIONS: readonly IToolApprovalAction[] = [
 ]
 
 export function getToolApprovalActions(
-    request: ToolApprovalRequest,
+    _request: TToolApprovalRequest,
 ): readonly IToolApprovalAction[] {
-    return request.kind === "patch"
-        ? PATCH_APPROVAL_ACTIONS
-        : COMMAND_APPROVAL_ACTIONS
+    return COMMAND_APPROVAL_ACTIONS
 }

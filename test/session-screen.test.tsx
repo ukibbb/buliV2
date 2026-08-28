@@ -23,7 +23,7 @@ import {
 } from "@/app/ui/shell/SessionCompletionNotifier"
 import { SessionScreen } from "@/app/ui/shell/SessionScreen"
 import { BuliUiController } from "@/app/ui/ui-controller"
-import type { CommandToolApprovalRequest, UserMessage } from "@/agent"
+import type { ICommandToolApprovalRequest, IUserMessage } from "@/agent"
 import type { ISessionSnapshot } from "@/sessions"
 import { theme } from "@/terminal/theme"
 
@@ -43,7 +43,7 @@ const APPLICATION_SNAPSHOT: IBuliApplicationSnapshot = {
   },
 }
 
-const APPROVAL: CommandToolApprovalRequest = {
+const APPROVAL: ICommandToolApprovalRequest = {
   kind: "command",
   id: "approval",
   sessionId: SESSION_ID,
@@ -73,7 +73,7 @@ function sessionSnapshot(
   }
 }
 
-function transcriptMessages(count: number): UserMessage[] {
+function transcriptMessages(count: number): IUserMessage[] {
   return Array.from({ length: count }, (_, index) => ({
     id: `message-${index}`,
     sessionId: SESSION_ID,

@@ -1,7 +1,7 @@
 import type {
-    AgentRunEndReason,
-    ToolApprovalRequest,
-    UserMessage,
+    TAgentRunEndReason,
+    TToolApprovalRequest,
+    IUserMessage,
 } from "@/agent"
 import { SnakeAnimation } from "@/app/ui/chat/Snake"
 import type { IContextUsage } from "@/sessions"
@@ -11,10 +11,10 @@ interface IChatStatusProps {
     readonly isRunning: boolean | undefined
     readonly isCompacting: boolean | undefined
     readonly contextUsage: IContextUsage | undefined
-    readonly pendingSteeringMessages: readonly UserMessage[] | undefined
-    readonly pendingFollowUpMessages: readonly UserMessage[] | undefined
-    readonly pendingToolApproval: ToolApprovalRequest | undefined
-    readonly lastRunReason: AgentRunEndReason | undefined
+    readonly pendingSteeringMessages: readonly IUserMessage[] | undefined
+    readonly pendingFollowUpMessages: readonly IUserMessage[] | undefined
+    readonly pendingToolApproval: TToolApprovalRequest | undefined
+    readonly lastRunReason: TAgentRunEndReason | undefined
     readonly errorMessage: string | undefined
     readonly inputError: string | null
     readonly selectedModelName: string

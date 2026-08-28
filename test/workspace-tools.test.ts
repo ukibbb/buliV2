@@ -3,626 +3,329 @@ import {
   chmod,
   mkdir,
   mkdtemp,
-  realpath,
+  readFile,
   rm,
-  symlink,
-  truncate,
   writeFile,
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { delimiter as PATH_DELIMITER, join, relative } from "node:path"
+import { join, relative } from "node:path"
 
-import type {
-  AgentTool,
-  AgentToolContext,
-} from "@/agent/tool"
+import {
+  executeToolCallsSequentially,
+  indexAgentTools,
+} from "@/agent/tool-executor"
+import type { IAgentTool, IAgentToolContext } from "@/agent/tool"
 import { createWorkspaceTools } from "@/tools"
 
-test("registers workspace tools in model-facing order", () => {
+test("registers the exact Pi-style tool and schema contract", () => {
   const tools = createWorkspaceTools(process.cwd())
 
-  expect(tools.map((tool) => tool.name)).toEqual([
-    "read",
-    "glob",
-    "grep",
-    "apply_patch",
-    "bash",
+  expect(tools.map((tool) => [
+    tool.name,
+    Object.keys(tool.inputSchema.properties ?? {}),
+    tool.inputSchema.required ?? [],
+  ])).toEqual([
+    ["read", ["path", "offset", "limit"], ["path"]],
+    ["find", ["pattern", "path", "limit"], ["pattern"]],
+    [
+      "grep",
+      ["pattern", "path", "glob", "ignoreCase", "literal", "context", "limit"],
+      ["pattern"],
+    ],
+    ["edit", ["path", "edits"], ["path", "edits"]],
+    ["write", ["path", "content"], ["path", "content"]],
+    ["bash", ["command", "timeout"], ["command"]],
   ])
-  expect(getTool(tools, "apply_patch").approvalKind).toBe("patch")
-  expect(getTool(tools, "bash").approvalKind).toBe("command")
 
-  const read = getTool(tools, "read")
-  expect(read.inputSchema).toMatchObject({
-    type: "object",
-    required: ["path"],
-    additionalProperties: false,
-    properties: {
-      path: { type: "string" },
-      offset: { type: "integer", minimum: 1, default: 1 },
-      limit: { type: "integer", minimum: 1, maximum: 2000, default: 2000 },
-    },
-  })
-
-  const glob = getTool(tools, "glob")
-  expect(glob.inputSchema).toMatchObject({
-    required: ["pattern"],
-    additionalProperties: false,
-    properties: {
-      pattern: { type: "string" },
-      path: { type: "string" },
-      hidden: { type: "boolean", default: false },
-      limit: { type: "integer", minimum: 1, maximum: 200, default: 100 },
-    },
-  })
-
-  const grep = getTool(tools, "grep")
-  expect(grep.inputSchema).toMatchObject({
-    required: ["pattern"],
-    additionalProperties: false,
-    properties: {
-      pattern: { type: "string", minLength: 1 },
-      path: { type: "string" },
-      include: { type: "string" },
-      literal: { type: "boolean", default: false },
-      caseSensitive: { type: "boolean", default: true },
-      context: { type: "integer", minimum: 0, maximum: 10, default: 0 },
-      limit: { type: "integer", minimum: 1, maximum: 200, default: 100 },
-    },
-  })
+  const editItems = getTool(tools, "edit").inputSchema.properties.edits.items
+  expect(Object.keys(editItems.properties)).toEqual(["oldText", "newText"])
+  expect(editItems.required).toEqual(["oldText", "newText"])
+  expect(tools.map((tool) => tool.approvalKind)).toEqual([
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+  ])
 })
 
-test("read returns numbered ranges and explicit continuation offsets", async () => {
-  const workspace = await temporaryWorkspace()
-  try {
-    await writeFile(join(workspace, "lines.txt"), "alpha\nbeta\ngamma\n")
-    await writeFile(join(workspace, "empty.txt"), "")
+test("read is text-only and uses Pi offset and truncation messages", async () => {
+  await withFixture(async ({ root, workspace }) => {
+    const outside = join(root, "outside")
+    await mkdir(join(outside, "directory"), { recursive: true })
+    const source = join(outside, "lines.txt")
+    await writeFile(source, "one\ntwo\nthree\nfour")
     const read = getTool(createWorkspaceTools(workspace), "read")
 
-    await expect(read.execute(
-      { path: "lines.txt" },
-      context(),
-    )).resolves.toBe("1: alpha\n2: beta\n3: gamma")
-    await expect(read.execute(
-      { path: "lines.txt", offset: 2, limit: 1 },
-      context(),
-    )).resolves.toBe("2: beta\n... truncated; continue with offset 3")
-    await expect(read.execute(
-      { path: "lines.txt", offset: 4 },
-      context(),
-    )).resolves.toBe("Offset 4 is beyond end of file (3 lines)")
-    await expect(read.execute(
-      { path: "empty.txt" },
-      context(),
-    )).resolves.toBe("File is empty")
-  } finally {
-    await removeWorkspace(workspace)
-  }
-})
-
-test("read caps long lines and total output without losing the next offset", async () => {
-  const workspace = await temporaryWorkspace()
-  try {
-    await writeFile(join(workspace, "long-line.txt"), "x".repeat(5000))
-    await writeFile(
-      join(workspace, "large.txt"),
-      Array.from({ length: 80 }, (_, index) => `${index}-${"y".repeat(1990)}`).join("\n"),
+    await expect(read.execute({
+      path: relative(workspace, source),
+      offset: 2,
+      limit: 1,
+    }, context())).resolves.toBe(
+      "two\n\n[2 more lines in file. Use offset=3 to continue.]",
     )
-    const read = getTool(createWorkspaceTools(workspace), "read")
+    await expect(read.execute({
+      path: source,
+      offset: 4,
+    }, context())).resolves.toBe("four")
+    await expect(read.execute({
+      path: join(outside, "directory"),
+    }, context())).rejects.toThrow()
 
-    const longLine = textResult(await read.execute({ path: "long-line.txt" }, context()))
-    expect([...longLine].length).toBe(2000)
-    expect(longLine).toEndWith("... [line truncated]")
-
-    const large = textResult(await read.execute({ path: "large.txt" }, context()))
-    expect(Buffer.byteLength(large, "utf8")).toBeLessThanOrEqual(50 * 1024)
-    expect(large).toMatch(/\.\.\. truncated; continue with offset \d+$/)
-  } finally {
-    await removeWorkspace(workspace)
-  }
-})
-
-test("read lists directories deterministically and marks directories", async () => {
-  const workspace = await temporaryWorkspace()
-  try {
-    await mkdir(join(workspace, "z-directory"))
-    await writeFile(join(workspace, "a-file.txt"), "content")
-    const read = getTool(createWorkspaceTools(workspace), "read")
-
-    await expect(read.execute({ path: "." }, context())).resolves.toBe(
-      "a-file.txt\nz-directory/",
+    const manyLines = Array.from(
+      { length: 2_001 },
+      (_, index) => `line-${index + 1}`,
+    ).join("\n")
+    await writeFile(join(workspace, "many.txt"), manyLines)
+    const truncated = await read.execute({ path: "many.txt" }, context())
+    expect(textResult(truncated)).toEndWith(
+      "\n\n[Showing lines 1-2000 of 2001. Use offset=2001 to continue.]",
     )
-    await expect(read.execute(
-      { path: ".", limit: 1 },
-      context(),
-    )).resolves.toBe("a-file.txt\n... truncated; continue with offset 2")
-    await expect(read.execute(
-      { path: "z-directory" },
-      context(),
-    )).resolves.toBe("Directory is empty")
-  } finally {
-    await removeWorkspace(workspace)
-  }
-})
 
-test("read rejects likely binary files", async () => {
-  const workspace = await temporaryWorkspace()
-  try {
-    await writeFile(join(workspace, "binary.dat"), Uint8Array.from([65, 0, 66, 1]))
-    await writeFile(join(workspace, "document.pdf"), "%PDF-1.7\nprintable header")
-    const read = getTool(createWorkspaceTools(workspace), "read")
-
-    await expect(read.execute(
-      { path: "binary.dat" },
-      context(),
-    )).rejects.toThrow("appears to be binary")
-    await expect(read.execute(
-      { path: "document.pdf" },
-      context(),
-    )).rejects.toThrow("appears to be binary")
-  } finally {
-    await removeWorkspace(workspace)
-  }
-})
-
-test("read rejects regular files larger than 4 MiB before scanning", async () => {
-  const workspace = await temporaryWorkspace()
-  try {
-    const oversized = join(workspace, "oversized.txt")
-    await writeFile(oversized, "text")
-    await truncate(oversized, 4 * 1024 * 1024 + 1)
-    const read = getTool(createWorkspaceTools(workspace), "read")
-
-    await expect(read.execute(
-      { path: "oversized.txt" },
-      context(),
-    )).rejects.toThrow("larger than 4 MiB")
-  } finally {
-    await removeWorkspace(workspace)
-  }
-})
-
-test("glob is sorted, scoped, ignore-aware, hidden-aware, and limited", async () => {
-  const workspace = await temporaryWorkspace()
-  try {
-    await Promise.all([
-      mkdir(join(workspace, "nested")),
-      mkdir(join(workspace, "node_modules")),
-      mkdir(join(workspace, ".git")),
-    ])
-    await Promise.all([
-      writeFile(join(workspace, "z.ts"), "z"),
-      writeFile(join(workspace, "a.ts"), "a"),
-      writeFile(join(workspace, "nested", "b.ts"), "b"),
-      writeFile(join(workspace, ".hidden.ts"), "hidden"),
-      writeFile(join(workspace, "ignored.ts"), "ignored"),
-      writeFile(join(workspace, "node_modules", "blocked.ts"), "blocked"),
-      writeFile(join(workspace, ".git", "blocked.ts"), "blocked"),
-      writeFile(join(workspace, ".gitignore"), "ignored.ts\nnode_modules\n!.hidden.ts\n"),
-    ])
-    const glob = getTool(createWorkspaceTools(workspace), "glob")
-
-    await expect(glob.execute(
-      { pattern: "**/*.ts" },
-      context(),
-    )).resolves.toBe("a.ts\nnested/b.ts\nz.ts")
-    await expect(glob.execute(
-      { pattern: "**/*.ts", limit: 2 },
-      context(),
-    )).resolves.toBe("a.ts\nnested/b.ts\n... results truncated at limit 2")
-    await expect(glob.execute(
-      { pattern: "*.ts", path: "nested" },
-      context(),
-    )).resolves.toBe("nested/b.ts")
-
-    const hidden = textResult(await glob.execute(
-      { pattern: "**/*.ts", hidden: true },
-      context(),
-    ))
-    expect(hidden.split("\n")).toEqual([".hidden.ts", "a.ts", "nested/b.ts", "z.ts"])
-    await expect(glob.execute(
-      { pattern: "**/node_modules/**", hidden: true },
-      context(),
-    )).resolves.toBe("No files found")
-    await expect(glob.execute(
-      { pattern: "**/.git/**", hidden: true },
-      context(),
-    )).resolves.toBe("No files found")
-    await expect(glob.execute(
-      { pattern: "**/*", path: "node_modules", hidden: true },
-      context(),
-    )).resolves.toBe("node_modules/blocked.ts")
-    await expect(glob.execute(
-      { pattern: "**/*", path: ".git", hidden: true },
-      context(),
-    )).resolves.toBe("No files found")
-  } finally {
-    await removeWorkspace(workspace)
-  }
-})
-
-if (process.platform !== "win32") {
-  test("glob uses an explicit ripgrep sidecar without searching PATH", async () => {
-    const workspace = await temporaryWorkspace()
-    const sidecarRoot = await temporaryWorkspace("buli-sidecar-rg-")
-    try {
-      await writeFile(join(workspace, "sidecar.ts"), "sidecar")
-      const sidecar = join(sidecarRoot, "rg")
-      await writeExecutable(
-        sidecar,
-        "#!/bin/sh\n[ \"$1\" = \"--files\" ] || exit 91\nprintf 'sidecar.ts\\000'\n",
-      )
-      const glob = getTool(createWorkspaceTools(workspace, {
-        ripgrepExecutablePath: sidecar,
-        ripgrepSearchPath: "",
-      }), "glob")
-
-      await expect(glob.execute(
-        { pattern: "**/*.ts" },
-        context(),
-      )).resolves.toBe("sidecar.ts")
-    } finally {
-      await Promise.all([removeWorkspace(workspace), removeWorkspace(sidecarRoot)])
-    }
+    await writeFile(join(workspace, "long.txt"), "x".repeat(50 * 1_024 + 1))
+    await expect(read.execute({ path: "long.txt" }, context())).resolves.toBe(
+      "[Line 1 is 50.0KB, exceeds 50.0KB limit. Use bash: sed -n '1p' long.txt | head -c 51200]",
+    )
   })
+})
 
-  test("glob skips a workspace rg and uses the next safe absolute PATH candidate", async () => {
-    const workspace = await temporaryWorkspace()
-    const safeRoot = await temporaryWorkspace("buli-safe-rg-")
-    try {
-      const workspaceBin = join(workspace, "bin")
-      const safeBin = join(safeRoot, "bin")
-      await Promise.all([mkdir(workspaceBin), mkdir(safeBin)])
-      await writeFile(join(workspace, "safe.ts"), "safe")
-      await writeExecutable(
-        join(workspaceBin, "rg"),
-        "#!/bin/sh\n: > workspace-rg-ran\nexit 90\n",
-      )
-      await writeExecutable(
-        join(safeBin, "rg"),
-        "#!/bin/sh\n[ \"$1\" = \"--files\" ] || exit 91\nprintf 'safe.ts\\000'\n",
-      )
-      const searchPath = [
-        "",
-        "relative-bin",
-        workspaceBin,
-        safeBin,
-        "",
-      ].join(PATH_DELIMITER)
-      const glob = getTool(createWorkspaceTools(workspace, {
-        ripgrepSearchPath: searchPath,
-      }), "glob")
-
-      await expect(glob.execute(
-        { pattern: "**/*.ts" },
-        context(),
-      )).resolves.toBe("safe.ts")
-      await expect(Bun.file(join(workspace, "workspace-rg-ran")).exists())
-        .resolves.toBe(false)
-    } finally {
-      await Promise.all([removeWorkspace(workspace), removeWorkspace(safeRoot)])
-    }
-  })
-
-  test("glob errors when PATH has no safe ripgrep executable", async () => {
-    const workspace = await temporaryWorkspace()
-    try {
-      const workspaceBin = join(workspace, "bin")
-      await mkdir(workspaceBin)
-      await writeExecutable(
-        join(workspaceBin, "rg"),
-        "#!/bin/sh\n: > workspace-rg-ran\n",
-      )
-      const glob = getTool(createWorkspaceTools(workspace, {
-        ripgrepSearchPath: ["", "relative-bin", workspaceBin].join(PATH_DELIMITER),
-      }), "glob")
-
-      await expect(glob.execute(
-        { pattern: "**/*" },
-        context(),
-      )).rejects.toThrow("no safe executable was found on PATH")
-      await expect(Bun.file(join(workspace, "workspace-rg-ran")).exists())
-        .resolves.toBe(false)
-    } finally {
-      await removeWorkspace(workspace)
-    }
-  })
-}
-
-test("grep supports include, literal, case, context, limits, and no matches", async () => {
-  const workspace = await temporaryWorkspace()
-  try {
-    await Promise.all([
-      mkdir(join(workspace, "nested")),
-      mkdir(join(workspace, "node_modules")),
-    ])
-    await writeFile(
-      join(workspace, "a.ts"),
-      "Alpha\nbefore\nneedle here\nafter\nneedle again\n",
-    )
-    await writeFile(join(workspace, "b.md"), "literal [ token\nNEEDLE upper\n")
-    await writeFile(join(workspace, "nested", "scoped.txt"), "scoped-only\n")
-    await writeFile(
-      join(workspace, "limit-context.txt"),
-      "before-first\nhit\nafter-first\nunrelated\nbefore-excluded\nhit\nafter-excluded\n",
-    )
-    await writeFile(join(workspace, "long.txt"), `longmatch ${"x".repeat(5000)}\n`)
-    await writeFile(join(workspace, "ignored.ts"), "needle ignored\n")
-    await writeFile(join(workspace, "node_modules", "dependency.ts"), "dependency-only\n")
-    await writeFile(join(workspace, ".gitignore"), "ignored.ts\nnode_modules\n")
-    const grep = getTool(createWorkspaceTools(workspace), "grep")
-
-    await expect(grep.execute(
-      { pattern: "needle", include: "*.ts" },
-      context(),
-    )).resolves.toBe("a.ts:3: needle here\na.ts:5: needle again")
-    await expect(grep.execute(
-      { pattern: "alpha", caseSensitive: false },
-      context(),
-    )).resolves.toBe("a.ts:1: Alpha")
-    await expect(grep.execute(
-      { pattern: "[", literal: true, include: "*.md" },
-      context(),
-    )).resolves.toBe("b.md:1: literal [ token")
-    await expect(grep.execute(
-      { pattern: "needle here", context: 1 },
-      context(),
-    )).resolves.toBe(
-      "a.ts-2- before\na.ts:3: needle here\na.ts-4- after",
-    )
-    await expect(grep.execute(
-      { pattern: "needle", limit: 1 },
-      context(),
-    )).resolves.toBe("a.ts:3: needle here\n... results truncated at limit 1")
-    await expect(grep.execute(
-      { pattern: "hit", path: "limit-context.txt", context: 1, limit: 1 },
-      context(),
-    )).resolves.toBe([
-      "limit-context.txt-1- before-first",
-      "limit-context.txt:2: hit",
-      "limit-context.txt-3- after-first",
-      "... results truncated at limit 1",
+test("find uses the injected fd executable and accepts a parent-relative path", async () => {
+  await withFixture(async ({ root, workspace }) => {
+    const outside = join(root, "outside")
+    await mkdir(outside)
+    const executable = join(root, "fd-fixture")
+    const argsLog = join(root, "fd-args.txt")
+    await writeExecutable(executable, [
+      "#!/bin/sh",
+      `printf '%s\\n' "$@" > ${shellLiteral(argsLog)}`,
+      "for last do :; done",
+      "printf '%s\\n' \"$last/src/alpha.ts\" \"$last/src/beta.ts\"",
+      "",
     ].join("\n"))
-    await expect(grep.execute(
-      { pattern: "not-present" },
-      context(),
-    )).resolves.toBe("No matches found")
-    await expect(grep.execute(
-      { pattern: "scoped-only", path: "nested" },
-      context(),
-    )).resolves.toBe("nested/scoped.txt:1: scoped-only")
-    await expect(grep.execute(
-      { pattern: "dependency-only", path: "node_modules" },
-      context(),
-    )).resolves.toBe("node_modules/dependency.ts:1: dependency-only")
+    const find = getTool(createWorkspaceTools(workspace, {
+      fdExecutablePath: executable,
+    }), "find")
 
-    const longLine = textResult(await grep.execute(
-      { pattern: "longmatch", path: "long.txt" },
-      context(),
-    ))
-    expect([...longLine].length).toBe(2000)
-    expect(longLine).toEndWith("... [line truncated]")
-    await expect(grep.execute(
-      { pattern: "[" },
-      context(),
-    )).rejects.toThrow("Invalid regular expression")
-  } finally {
-    await removeWorkspace(workspace)
-  }
-})
-
-test("all tools reject canonical path escapes while accepting workspace paths", async () => {
-  const workspace = await temporaryWorkspace()
-  const outside = await temporaryWorkspace("buli-outside-")
-  try {
-    const insideFile = join(workspace, "inside.txt")
-    const outsideFile = join(outside, "outside.txt")
-    await Promise.all([
-      writeFile(insideFile, "inside"),
-      writeFile(outsideFile, "outside"),
-      writeFile(join(outside, "outside.ts"), "needle"),
+    await expect(find.execute({
+      pattern: "src/*.ts",
+      path: relative(workspace, outside),
+      limit: 2,
+    }, context())).resolves.toBe([
+      "src/alpha.ts",
+      "src/beta.ts",
+      "",
+      "[2 results limit reached. Use limit=4 for more, or refine pattern]",
+    ].join("\n"))
+    expect(await readArguments(argsLog)).toEqual([
+      "--glob",
+      "--color=never",
+      "--hidden",
+      "--no-require-git",
+      "--max-results",
+      "2",
+      "--full-path",
+      "--",
+      "**/src/*.ts",
+      outside,
     ])
-    await Promise.all([
-      symlink(insideFile, join(workspace, "inside-link.txt")),
-      symlink(outsideFile, join(workspace, "outside-link.txt")),
-      symlink(outside, join(workspace, "outside-directory")),
+  })
+})
+
+test("grep uses the injected ripgrep executable and truncates lines to 500 chars", async () => {
+  await withFixture(async ({ root, workspace }) => {
+    const target = join(root, "long.txt")
+    const longLine = `needle [${"x".repeat(600)}`
+    await writeFile(target, `before\n${longLine}\nafter`)
+
+    const executable = join(root, "rg-fixture")
+    const argsLog = join(root, "rg-args.txt")
+    const event = JSON.stringify({
+      type: "match",
+      data: {
+        path: { text: target },
+        lines: { text: `${longLine}\n` },
+        line_number: 2,
+      },
+    })
+    await writeExecutable(executable, [
+      "#!/bin/sh",
+      `printf '%s\\n' "$@" > ${shellLiteral(argsLog)}`,
+      `printf '%s\\n' ${shellLiteral(event)}`,
+      "",
+    ].join("\n"))
+    const grep = getTool(createWorkspaceTools(workspace, {
+      ripgrepExecutablePath: executable,
+    }), "grep")
+
+    await expect(grep.execute({
+      pattern: "NEEDLE [",
+      path: target,
+      glob: "*.txt",
+      ignoreCase: true,
+      literal: true,
+      context: 1,
+      limit: 1,
+    }, context())).resolves.toBe([
+      "long.txt-1- before",
+      `long.txt:2: ${longLine.slice(0, 500)}... [truncated]`,
+      "long.txt-3- after",
+      "",
+      "[1 matches limit reached. Use limit=2 for more, or refine pattern. Some lines truncated to 500 chars. Use read tool to see full lines]",
+    ].join("\n"))
+    expect(await readArguments(argsLog)).toEqual([
+      "--json",
+      "--line-number",
+      "--color=never",
+      "--hidden",
+      "--ignore-case",
+      "--fixed-strings",
+      "--glob",
+      "*.txt",
+      "--",
+      "NEEDLE [",
+      target,
     ])
-
-    const canonicalWorkspace = await realpath(workspace)
-    const tools = createWorkspaceTools(canonicalWorkspace)
-    const read = getTool(tools, "read")
-    const glob = getTool(tools, "glob")
-    const grep = getTool(tools, "grep")
-
-    await expect(read.execute({ path: insideFile }, context())).resolves.toBe("1: inside")
-    await expect(read.execute(
-      { path: "inside-link.txt" },
-      context(),
-    )).resolves.toBe("1: inside")
-    await expect(read.execute(
-      { path: relative(workspace, outsideFile) },
-      context(),
-    )).rejects.toThrow("Path is outside the workspace")
-    await expect(read.execute(
-      { path: "outside-link.txt" },
-      context(),
-    )).rejects.toThrow("Path is outside the workspace")
-    await expect(glob.execute(
-      { pattern: "**/*", path: "outside-directory" },
-      context(),
-    )).rejects.toThrow("Path is outside the workspace")
-    await expect(grep.execute(
-      { pattern: "needle", path: outsideFile },
-      context(),
-    )).rejects.toThrow("Path is outside the workspace")
-    await expect(read.execute(
-      { path: "missing.txt" },
-      context(),
-    )).rejects.toThrow("Path does not exist")
-  } finally {
-    await Promise.all([removeWorkspace(workspace), removeWorkspace(outside)])
-  }
+  })
 })
 
-test("read and glob honor selected external paths without widening grep", async () => {
-  const workspace = await temporaryWorkspace()
-  const outside = await temporaryWorkspace("buli-selected-outside-")
-  try {
-    const selectedFile = join(outside, "selected.txt")
-    await Promise.all([
-      writeFile(selectedFile, "selected"),
-      writeFile(join(outside, "sibling.txt"), "sibling"),
-      mkdir(join(outside, "directory")),
+test("edit applies fuzzy, disjoint edits while preserving BOM and CRLF", async () => {
+  await withFixture(async ({ root, workspace }) => {
+    const target = join(root, "outside.txt")
+    await writeFile(
+      target,
+      "\uFEFFalpha  \r\nuntouched  \u201Ccurly\u201D  \r\nmiddle \u201Cquote\u201D\r\nomega\r\n",
+    )
+    const edit = getTool(createWorkspaceTools(workspace), "edit")
+
+    await expect(edit.execute({
+      path: target,
+      edits: [
+        { oldText: "alpha\n", newText: "ALPHA\n" },
+        { oldText: "middle \"quote\"", newText: "CENTER" },
+        { oldText: "omega", newText: "OMEGA" },
+      ],
+    }, context())).resolves.toBe(
+      `Successfully replaced 3 block(s) in ${target}.`,
+    )
+    expect(await readFile(target, "utf8")).toBe(
+      "\uFEFFALPHA\r\nuntouched  \u201Ccurly\u201D  \r\nCENTER\r\nOMEGA\r\n",
+    )
+  })
+})
+
+test("agent execution prepares legacy and serialized edit arguments", async () => {
+  await withFixture(async ({ workspace }) => {
+    const target = join(workspace, "compat.txt")
+    await writeFile(target, "first\nsecond\n")
+    const edit = getTool(createWorkspaceTools(workspace), "edit")
+    let resultId = 0
+
+    const results = await executeToolCallsSequentially([
+      {
+        type: "toolCall",
+        toolCallId: "legacy-edit",
+        toolName: "edit",
+        input: {
+          path: "compat.txt",
+          oldText: "first",
+          newText: "FIRST",
+        },
+      },
+      {
+        type: "toolCall",
+        toolCallId: "serialized-edit",
+        toolName: "edit",
+        input: {
+          path: "compat.txt",
+          edits: JSON.stringify({ oldText: "second", newText: "SECOND" }),
+        },
+      },
+    ], indexAgentTools([edit]), {
+      sessionId: "session-workspace-tools",
+      runId: "run-workspace-tools",
+      messages: [],
+      signal: new AbortController().signal,
+      emit: () => {},
+      now: () => 1,
+      generateId: () => `result-${resultId += 1}`,
+    })
+
+    expect(results.map(({ content, isError }) => ({ content, isError }))).toEqual([
+      {
+        content: "Successfully replaced 1 block(s) in compat.txt.",
+        isError: false,
+      },
+      {
+        content: "Successfully replaced 1 block(s) in compat.txt.",
+        isError: false,
+      },
     ])
-    await writeFile(join(outside, "directory", "child.ts"), "needle")
-
-    const tools = createWorkspaceTools(workspace)
-    const read = getTool(tools, "read")
-    const glob = getTool(tools, "glob")
-    const grep = getTool(tools, "grep")
-    const fileReference = pathReference(await realpath(selectedFile), "file")
-    const directoryPath = await realpath(join(outside, "directory"))
-    const directoryReference = pathReference(directoryPath, "directory")
-
-    await expect(read.execute(
-      { path: selectedFile },
-      context(undefined, [fileReference]),
-    )).resolves.toBe("1: selected")
-    await expect(read.execute(
-      { path: join(outside, "sibling.txt") },
-      context(undefined, [fileReference]),
-    )).rejects.toThrow("was not selected with @")
-    await expect(glob.execute(
-      { pattern: "**/*.ts", path: directoryPath },
-      context(undefined, [directoryReference]),
-    )).resolves.toBe(join(directoryPath, "child.ts"))
-    await expect(grep.execute(
-      { pattern: "needle", path: directoryPath },
-      context(undefined, [directoryReference]),
-    )).rejects.toThrow("Path is outside the workspace")
-  } finally {
-    await Promise.all([removeWorkspace(workspace), removeWorkspace(outside)])
-  }
+    expect(await readFile(target, "utf8")).toBe("FIRST\nSECOND\n")
+  })
 })
 
-test("tools reject invalid direct inputs cleanly", async () => {
-  const workspace = await temporaryWorkspace()
-  try {
-    await writeFile(join(workspace, "file.txt"), "text")
-    const tools = createWorkspaceTools(workspace)
-    const read = getTool(tools, "read")
-    const glob = getTool(tools, "glob")
-    const grep = getTool(tools, "grep")
+test("write creates parents and overwrites absolute and parent-relative paths", async () => {
+  await withFixture(async ({ root, workspace }) => {
+    const target = join(root, "outside", "nested", "value.txt")
+    const write = getTool(createWorkspaceTools(workspace), "write")
 
-    await expect(read.execute(
-      { path: "file.txt", offset: 0 },
-      context(),
-    )).rejects.toThrow("offset must be an integer of at least 1")
-    await expect(read.execute(
-      { path: "file.txt", limit: 2001 },
-      context(),
-    )).rejects.toThrow("limit must be at most 2000")
-    await expect(glob.execute(
-      { pattern: join(workspace, "*.ts") },
-      context(),
-    )).rejects.toThrow("must be relative")
-    await expect(glob.execute(
-      { pattern: "../*.ts" },
-      context(),
-    )).rejects.toThrow("parent segments")
-    await expect(glob.execute(
-      { pattern: "bad\0pattern" },
-      context(),
-    )).rejects.toThrow("NUL byte")
-    await expect(glob.execute(
-      { pattern: "**/*", limit: 0 },
-      context(),
-    )).rejects.toThrow("limit must be an integer of at least 1")
-    await expect(grep.execute(
-      { pattern: "" },
-      context(),
-    )).rejects.toThrow("pattern cannot be empty")
-    await expect(grep.execute(
-      { pattern: "text", context: 11 },
-      context(),
-    )).rejects.toThrow("context must be at most 10")
-    await expect(grep.execute(
-      { pattern: "text", include: "bad\0glob" },
-      context(),
-    )).rejects.toThrow("NUL byte")
-  } finally {
-    await removeWorkspace(workspace)
-  }
+    await expect(write.execute({
+      path: relative(workspace, target),
+      content: "first",
+    }, context())).resolves.toContain("Successfully wrote 5 bytes")
+    expect(await readFile(target, "utf8")).toBe("first")
+
+    await expect(write.execute({
+      path: target,
+      content: "replacement",
+    }, context())).resolves.toContain("Successfully wrote 11 bytes")
+    expect(await readFile(target, "utf8")).toBe("replacement")
+  })
 })
 
-test("tools stop before work when already aborted", async () => {
-  const workspace = await temporaryWorkspace()
-  try {
-    await writeFile(join(workspace, "file.txt"), "needle")
-    const tools = createWorkspaceTools(workspace)
-    const controller = new AbortController()
-    controller.abort(new DOMException("Stopped by test", "AbortError"))
-    const abortedContext = context(controller.signal)
-
-    for (const [name, input] of [
-      ["read", { path: "file.txt" }],
-      ["glob", { pattern: "**/*" }],
-      ["grep", { pattern: "needle" }],
-    ] as const) {
-      await expect(getTool(tools, name).execute(
-        input,
-        abortedContext,
-      )).rejects.toMatchObject({ name: "AbortError", message: "Stopped by test" })
-    }
-  } finally {
-    await removeWorkspace(workspace)
-  }
-})
-
-function getTool(tools: readonly AgentTool[], name: string): AgentTool {
+function getTool(tools: readonly IAgentTool[], name: string): IAgentTool {
   const tool = tools.find((candidate) => candidate.name === name)
   if (!tool) throw new Error(`Expected ${name} tool`)
   return tool
 }
 
-function textResult(
-  result: Awaited<ReturnType<AgentTool["execute"]>>,
-): string {
-  if (typeof result !== "string") return result.content
-  return result
-}
-
-function context(
-  signal: AbortSignal = new AbortController().signal,
-  selectedPathReferences?: AgentToolContext["selectedPathReferences"],
-): AgentToolContext {
+function context(): IAgentToolContext {
   return {
-    sessionId: "session-workspace-tool",
-    toolCallId: "call-workspace-tool",
-    runId: "run-workspace-tool",
+    sessionId: "session-workspace-tools",
+    toolCallId: "call-workspace-tools",
+    runId: "run-workspace-tools",
     messages: [],
-    ...(selectedPathReferences?.length ? { selectedPathReferences } : {}),
-    signal,
+    signal: new AbortController().signal,
   }
 }
 
-function pathReference(path: string, kind: "file" | "directory") {
-  return {
-    type: "path" as const,
-    kind,
-    path,
-    source: { value: `@${path}`, start: 0, end: path.length + 1 },
+function textResult(result: string | { content: string }): string {
+  return typeof result === "string" ? result : result.content
+}
+
+async function withFixture(
+  run: (fixture: { root: string; workspace: string }) => Promise<void>,
+): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), "buli-workspace-tools-"))
+  const workspace = join(root, "workspace")
+  await mkdir(workspace)
+  try {
+    await run({ root, workspace })
+  } finally {
+    await rm(root, { recursive: true, force: true })
   }
-}
-
-async function temporaryWorkspace(prefix = "buli-workspace-"): Promise<string> {
-  return await mkdtemp(join(tmpdir(), prefix))
-}
-
-async function removeWorkspace(path: string): Promise<void> {
-  await rm(path, { recursive: true, force: true })
 }
 
 async function writeExecutable(path: string, contents: string): Promise<void> {
   await writeFile(path, contents)
   await chmod(path, 0o755)
+}
+
+async function readArguments(path: string): Promise<string[]> {
+  return (await readFile(path, "utf8")).trimEnd().split("\n")
+}
+
+function shellLiteral(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`
 }

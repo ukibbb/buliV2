@@ -15,12 +15,12 @@ import {
 } from "ai"
 
 import type {
-    AgentMessage,
-    AgentModel,
-    AgentModelEvent,
-    AgentModelRequest,
-    AgentToolDescriptor,
-    ModelUsage,
+    TAgentMessage,
+    IAgentModel,
+    TAgentModelEvent,
+    IAgentModelRequest,
+    IAgentToolDescriptor,
+    IModelUsage,
 } from "@/agent"
 import {
     isModelContextOverflowError,
@@ -73,7 +73,7 @@ type AIStreamEvent = ReturnType<typeof streamText<ToolSet>>["stream"] extends
 type AIAssistantPart = Exclude<AssistantContent, string>[number]
 
 /** Translates one Buli model turn to and from the OpenAI AI SDK protocol. */
-export class OpenAiAgentModel implements AgentModel {
+export class OpenAiAgentModel implements IAgentModel {
     private readonly auth: IOpenAiModelTransport
     private readonly modelId: string
     private readonly expectedAccountId: string | undefined
@@ -87,8 +87,8 @@ export class OpenAiAgentModel implements AgentModel {
     }
 
     async *stream(
-        request: AgentModelRequest,
-    ): AsyncIterable<AgentModelEvent> {
+        request: IAgentModelRequest,
+    ): AsyncIterable<TAgentModelEvent> {
         request.signal.throwIfAborted()
         const credential = await this.auth.requireCredential(request.signal)
         if (
@@ -191,7 +191,7 @@ function withServiceTier(
 }
 
 function toAiTools(
-    descriptors: readonly AgentToolDescriptor[],
+    descriptors: readonly IAgentToolDescriptor[],
 ): ToolSet {
     return Object.fromEntries(descriptors.map((descriptor) => [
         descriptor.name,
@@ -206,7 +206,7 @@ function toAiTools(
 }
 
 function toModelMessages(
-    messages: readonly AgentMessage[],
+    messages: readonly TAgentMessage[],
     contextSummary?: string,
 ): ModelMessage[] {
     const projected = messages.flatMap((message): ModelMessage[] => {
@@ -276,7 +276,7 @@ function toModelMessages(
 
 function toAgentModelEvent(
     event: AIStreamEvent,
-): AgentModelEvent | undefined {
+): TAgentModelEvent | undefined {
     switch (event.type) {
         case "text-start":
             return { type: "text-start", id: event.id }
@@ -319,8 +319,8 @@ function toAgentModelEvent(
     }
 }
 
-function toModelUsage(usage: LanguageModelUsage): ModelUsage | undefined {
-    const result: ModelUsage = {
+function toModelUsage(usage: LanguageModelUsage): IModelUsage | undefined {
+    const result: IModelUsage = {
         ...(usage.inputTokens === undefined
             ? {}
             : { inputTokens: usage.inputTokens }),

@@ -1,6 +1,6 @@
 import type { IBuliApplication } from "@/app/contracts"
 import { BuliUiStateStore } from "@/app/ui/controller/state"
-import type { ToolApprovalDecision } from "@/agent"
+import type { TToolApprovalDecision } from "@/agent"
 
 interface IBuliToolApprovalOptions {
     readonly application: IBuliApplication
@@ -23,7 +23,7 @@ export class BuliToolApproval {
 
     readonly resolve = (
         approvalId: string,
-        decision: ToolApprovalDecision,
+        decision: TToolApprovalDecision,
         beforeResolve?: () => boolean,
     ): void => {
         if (this.store.isDisposed || this.resolutionPending) return
@@ -48,9 +48,6 @@ export class BuliToolApproval {
                 throw new Error(
                     `Tool approval session mismatch: expected "${sessionId}", received "${request.sessionId}"`,
                 )
-            }
-            if (request.kind === "patch" && decision === "copy") {
-                throw new Error('Decision "copy" is not allowed for patch approval')
             }
             if (beforeResolve && !beforeResolve()) return
 

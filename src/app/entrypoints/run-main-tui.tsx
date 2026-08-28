@@ -19,8 +19,6 @@ export async function runMainTui(): Promise<void> {
         void runtimeTask.catch(() => { })
         lifetime.addCleanup(async () => {
             const startup = await runtimeTask.catch(() => undefined)
-            // Startup jest jedynym ownerem złożonych zasobów. Entrypoint nie musi
-            // znać ani powielać kolejności shutdownu runtime i authentication.
             await startup?.dispose(lifetime.signal.reason)
         })
 

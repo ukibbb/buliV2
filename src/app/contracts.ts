@@ -1,7 +1,7 @@
 import type {
-    ReasoningEffort,
-    ToolApprovalDecision,
-    UserInputContent,
+    TReasoningEffort,
+    TToolApprovalDecision,
+    IUserInputContent,
 } from "@/agent"
 import type { IFdPathSuggestion } from "@/tools"
 import type {
@@ -15,7 +15,7 @@ export interface ISnapshotSource<Snapshot> {
     readonly getSnapshot: () => Snapshot
 }
 
-export interface IBuliPromptInput extends UserInputContent {
+export interface IBuliPromptInput extends IUserInputContent {
     readonly sessionId?: string
 }
 
@@ -29,8 +29,8 @@ export interface IBuliPromptSubmission {
 }
 
 export interface IBuliQueuedMessages {
-    readonly steering: readonly (string | UserInputContent)[]
-    readonly followUp: readonly (string | UserInputContent)[]
+    readonly steering: readonly (string | IUserInputContent)[]
+    readonly followUp: readonly (string | IUserInputContent)[]
 }
 
 export interface IBuliAgentDisplayInfo {
@@ -41,14 +41,14 @@ export interface IBuliAgentDisplayInfo {
 // select model and it's effort
 export interface IBuliModelSelection {
     readonly modelId: string
-    readonly reasoningEffort: ReasoningEffort
+    readonly reasoningEffort: TReasoningEffort
 }
 
 // bezpieczne dane dla ui i pickerow
 export interface IBuliModelDisplayInfo {
     readonly id: string
     readonly name: string
-    readonly reasoningEfforts: readonly ReasoningEffort[]
+    readonly reasoningEfforts: readonly TReasoningEffort[]
 }
 
 export interface IBuliApplicationSnapshot {
@@ -71,19 +71,19 @@ export interface IBuliApplication
     readonly refreshModels: (signal?: AbortSignal) => Promise<void>
     readonly selectModel: (modelId: string) => void
     readonly selectReasoningEffort: (
-        reasoningEffort: ReasoningEffort,
+        reasoningEffort: TReasoningEffort,
     ) => void
 
     readonly submitPrompt: (prompt: IBuliPromptInput) => IBuliPromptSubmission
     readonly steer: (
         sessionId: string,
         text: string,
-        resources?: Omit<UserInputContent, "text">,
+        resources?: Omit<IUserInputContent, "text">,
     ) => void
     readonly followUp: (
         sessionId: string,
         text: string,
-        resources?: Omit<UserInputContent, "text">,
+        resources?: Omit<IUserInputContent, "text">,
     ) => void
     readonly clearQueuedMessages: (sessionId: string) => IBuliQueuedMessages
     readonly searchPaths?: (
@@ -93,7 +93,7 @@ export interface IBuliApplication
     readonly resolveToolApproval: (
         sessionId: string,
         approvalId: string,
-        decision: ToolApprovalDecision,
+        decision: TToolApprovalDecision,
     ) => void
     readonly compactSession: (
         sessionId: string,

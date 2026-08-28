@@ -37,7 +37,7 @@ export async function runTuiRenderer(
             useMouse: true,
             clearOnShutdown: true,
             onDestroy: () => {
-                void lifetime.close().catch(() => {})
+                void lifetime.close().catch(() => { })
             },
             consoleOptions: {
                 sizePercent: 100,

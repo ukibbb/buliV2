@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer"
 
-import type { UserImageAttachment } from "@/agent"
+import type { IUserImageAttachment } from "@/agent"
 import {
     isValidUserImage,
     USER_IMAGE_MAX_BYTES,
@@ -15,7 +15,7 @@ const IMAGE_EXTENSIONS: Readonly<Record<string, string>> = {
 
 export interface IPreparedImageAttachment {
     readonly value: string
-    readonly attachment: Omit<UserImageAttachment, "source">
+    readonly attachment: Omit<IUserImageAttachment, "source">
 }
 
 export function prepareClipboardImage(

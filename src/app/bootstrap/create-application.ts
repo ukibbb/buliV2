@@ -1,7 +1,7 @@
 import { realpath } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
 
-import { systemPrompt, type AgentModel, type AgentTool } from "@/agent"
+import { systemPrompt, type IAgentModel, type IAgentTool } from "@/agent"
 import type { IAuthenticationService } from "@/authentication"
 import { createAuthentication } from "@/app/bootstrap/create-authentication"
 import { loadWorkspaceInstructions } from "@/app/bootstrap/load-workspace-instructions"
@@ -24,22 +24,37 @@ import {
     type ISessionManager,
     JsonlSessionManager,
 } from "@/sessions"
-import { createFdPathSearcher, createWorkspaceTools } from "@/tools"
+import {
+    createFdPathSearcher,
+    createToolOutputTool,
+    createWorkspaceTools,
+    EphemeralToolOutputStore,
+} from "@/tools"
 
 const BULI_AGENT_ID = "buli"
 
-function defaultWorkspaceTools(workspaceRoot: string): readonly AgentTool[] {
+function defaultWorkspaceTools(
+    workspaceRoot: string,
+    toolOutputStore: EphemeralToolOutputStore,
+): readonly IAgentTool[] {
     if (process.env.BULI_DEVELOPMENT === "1") {
-        return createWorkspaceTools(workspaceRoot)
+        return createWorkspaceTools(workspaceRoot, { toolOutputStore })
     }
-    const executableName = process.platform === "win32" ? "rg.exe" : "rg"
+    const executableDirectory = resolve(
+        dirname(process.execPath),
+        "..",
+        "lib",
+        "buli",
+    )
     return createWorkspaceTools(workspaceRoot, {
+        toolOutputStore,
+        fdExecutablePath: resolve(
+            executableDirectory,
+            process.platform === "win32" ? "fd.exe" : "fd",
+        ),
         ripgrepExecutablePath: resolve(
-            dirname(process.execPath),
-            "..",
-            "lib",
-            "buli",
-            executableName,
+            executableDirectory,
+            process.platform === "win32" ? "rg.exe" : "rg",
         ),
     })
 }
@@ -71,8 +86,8 @@ export interface IBuliApplicationOptions {
     readonly signal: AbortSignal
     readonly workspaceRoot?: string
     readonly manager?: ISessionManager
-    readonly model?: AgentModel
-    readonly tools?: readonly AgentTool[]
+    readonly model?: IAgentModel
+    readonly tools?: readonly IAgentTool[]
 }
 
 /** Composes provider, tools, persistence, sessions, and the UI boundary. */
@@ -94,6 +109,7 @@ export async function createBuliApplication(
 
     const auth = createAuthentication()
     const authentication = auth.service
+    const toolOutputStore = new EphemeralToolOutputStore()
     // Od tego miejsca startup posiada auth. Jeśli późniejszy etap rzuci, rollback
     // nie zostawi częściowo utworzonej usługi bez właściciela.
     let runtime: BuliApplicationRuntime | undefined
@@ -102,7 +118,7 @@ export async function createBuliApplication(
         manager = options.manager ?? new JsonlSessionManager({
             filePath: defaultSessionFilePath(workspaceRoot),
         })
-        const model: AgentModel = options.model ?? new OpenAiAgentModel({
+        const model: IAgentModel = options.model ?? new OpenAiAgentModel({
             auth: auth.openAi,
         })
         const modelCatalog = createOpenAiModelCatalog({ auth: auth.openAi })
@@ -132,13 +148,20 @@ export async function createBuliApplication(
             modelId: DEFAULT_OPENAI_MODEL_ID,
             reasoningEffort: "medium",
         }
-        const tools: readonly AgentTool[] = options.tools
+        const baseTools: readonly IAgentTool[] = options.tools
             ?? [
-                ...defaultWorkspaceTools(workspaceRoot),
+                ...defaultWorkspaceTools(workspaceRoot, toolOutputStore),
                 ...(options.model === undefined
                     ? [createOpenAiWebSearchTool({ search: auth.openAi.search })]
                     : []),
             ]
+        if (baseTools.some((tool) => tool.name === "tool_output")) {
+            throw new Error("The tool name \"tool_output\" is reserved by Buli")
+        }
+        const tools: readonly IAgentTool[] = [
+            ...baseTools,
+            createToolOutputTool(toolOutputStore),
+        ]
 
         const agents: readonly IBuliAgentRuntimeConfig[] = [{
             id: BULI_AGENT_ID,
@@ -151,7 +174,6 @@ export async function createBuliApplication(
             tools,
         }]
 
-        //
         const applicationRuntime = new BuliApplicationRuntime({
             workspaceRoot,
             manager,
@@ -160,6 +182,7 @@ export async function createBuliApplication(
             models,
             selection,
             searchPaths: defaultPathSearcher(workspaceRoot),
+            toolOutputStore,
             ...(options.model === undefined
                 ? {
                     loadModels: async (signal: AbortSignal) => (
@@ -242,7 +265,10 @@ export async function createBuliApplication(
     } catch (startupError) {
         const rollbackResults = await Promise.allSettled([
 
-            runtime?.dispose() ?? manager?.dispose?.(),
+            runtime?.dispose() ?? Promise.all([
+                manager?.dispose?.(),
+                toolOutputStore.dispose(),
+            ]).then(() => undefined),
             authentication.dispose(startupError),
         ])
         const rollbackErrors = rollbackResults.flatMap((result) =>

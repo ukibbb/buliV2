@@ -5,7 +5,6 @@ import { join } from "node:path"
 import {
   BoxRenderable,
   CodeRenderable,
-  DiffRenderable,
   parseKeypress,
   type Renderable,
   ScrollBoxRenderable,
@@ -26,12 +25,11 @@ import type { IAuthenticationService } from "@/authentication/contracts"
 import { BuliApplicationRuntime } from "@/app/runtime"
 import { BuliRuntimeProvider } from "@/app/ui/context/application-context"
 import type {
-  AgentModel,
-  CommandToolApprovalRequest,
-  PatchToolApprovalRequest,
-  ToolApprovalDecision,
-  ToolApprovalRequest,
-  UserMessage,
+  IAgentModel,
+  ICommandToolApprovalRequest,
+  TToolApprovalDecision,
+  TToolApprovalRequest,
+  IUserMessage,
 } from "@/agent"
 import type { ISessionSnapshot } from "@/sessions"
 import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
@@ -77,13 +75,6 @@ function codeRenderables(root: Renderable): CodeRenderable[] {
   return root.getChildren().flatMap((child) => [
     ...(child instanceof CodeRenderable ? [child] : []),
     ...codeRenderables(child),
-  ])
-}
-
-function diffRenderables(root: Renderable): DiffRenderable[] {
-  return root.getChildren().flatMap((child) => [
-    ...(child instanceof DiffRenderable ? [child] : []),
-    ...diffRenderables(child),
   ])
 }
 
@@ -144,7 +135,7 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
   const resolvedApprovals: Array<{
     sessionId: string
     approvalId: string
-    decision: ToolApprovalDecision
+    decision: TToolApprovalDecision
   }> = []
   const aborted: string[] = []
   const sessionListeners = new Set<() => void>()
@@ -228,32 +219,7 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
   }
 }
 
-function patchApproval(): PatchToolApprovalRequest {
-  return {
-    kind: "patch",
-    id: "patch-approval",
-    sessionId: "default",
-    runId: "run-1",
-    toolCallId: "patch-call",
-    title: "Update greeting",
-    explanation: "Replace the old greeting while preserving the fallback.",
-    paths: ["src/greeting.ts", "test/greeting.test.ts"],
-    diff: [
-      "--- a/src/greeting.ts",
-      "+++ b/src/greeting.ts",
-      "@@ -1 +1 @@",
-      "-export const greeting = 'old'",
-      "+export const greeting = 'new'",
-      "--- a/test/greeting.test.ts",
-      "+++ b/test/greeting.test.ts",
-      "@@ -1 +1 @@",
-      "-expect(greeting).toBe('old')",
-      "+expect(greeting).toBe('new')",
-    ].join("\n"),
-  }
-}
-
-function commandApproval(): CommandToolApprovalRequest {
+function commandApproval(): ICommandToolApprovalRequest {
   return {
     kind: "command",
     id: "command-approval",
@@ -273,7 +239,7 @@ function commandApproval(): CommandToolApprovalRequest {
 }
 
 function approvalSessionSnapshot(
-  pendingToolApproval: ToolApprovalRequest,
+  pendingToolApproval: TToolApprovalRequest,
 ): ISessionSnapshot {
   return {
     messages: [],
@@ -973,112 +939,6 @@ test("renders running and failed session status", async () => {
   }
 })
 
-test("renders complete patch approval details and patch-only actions", async () => {
-  const approval = patchApproval()
-  const fake = fakeApplication({
-    sessionSnapshot: approvalSessionSnapshot(approval),
-  })
-  const setup = await testRender(
-    buliElement(fake.application, "default"),
-    { width: 100, height: 48 },
-  )
-
-  try {
-    await act(async () => {
-      await setup.renderOnce()
-    })
-
-    const frame = setup.captureCharFrame()
-    const renderedText = textRenderables(setup.renderer.root).map(
-      (renderable) => renderable.plainText,
-    )
-    const renderedDiffs = diffRenderables(setup.renderer.root)
-    expect(frame).toContain("Patch approval")
-    expect(frame).toContain(approval.title)
-    expect(frame).toContain(approval.explanation)
-    expect(frame).toContain("Affected paths")
-    expect(frame).toContain("src/greeting.ts")
-    expect(frame).toContain("test/greeting.test.ts")
-    expect(frame).toContain("export const greeting")
-    expect(frame).toContain("expect(greeting)")
-    expect(renderedDiffs).toHaveLength(2)
-    expect(renderedDiffs.map((renderable) => renderable.diff).join(""))
-      .toBe(approval.diff)
-    expect(renderedDiffs.every((renderable) => renderable.view === "unified"))
-      .toBe(true)
-    expect(renderedDiffs.every((renderable) =>
-      renderable.filetype === "typescript"
-    )).toBe(true)
-    expect(renderedDiffs.every((renderable) =>
-      renderable.syntaxStyle === syntax
-    )).toBe(true)
-    expect(renderedDiffs.every((renderable) => renderable.showLineNumbers))
-      .toBe(true)
-    expect(renderedDiffs.every((renderable) => renderable.wrapMode === "word"))
-      .toBe(true)
-    expect(renderedText).toContain("> Reject")
-    expect(renderedText).toContain("  Apply")
-    expect(renderedText.indexOf("> Reject")).toBeLessThan(
-      renderedText.indexOf("  Apply"),
-    )
-    expect(renderedText).not.toContain("  Copy")
-    expect(frame).toContain(
-      "PageUp/PageDown review | Arrows select | Enter confirm | Esc stop",
-    )
-    expect(frame).toContain("Waiting for your decision")
-    expect(frame).not.toContain("Enter steer | Alt+Enter follow-up")
-    expect(frame).not.toContain(glyphs.snakeHead)
-  } finally {
-    act(() => {
-      setup.renderer.destroy()
-    })
-  }
-})
-
-test("keeps exact raw metadata beside every rendered file diff", async () => {
-  const noNewlineDiff = [
-    "--- a/src/no-newline.ts",
-    "+++ b/src/no-newline.ts",
-    "@@ -1,1 +1,1 @@",
-    "-old",
-    "\\ No newline at end of file",
-    "+new",
-    "\\ No newline at end of file",
-    "",
-  ].join("\n")
-  const emptyDeletion = "--- a/src/empty.ts\n+++ /dev/null"
-  const approval: PatchToolApprovalRequest = {
-    ...patchApproval(),
-    paths: ["src/no-newline.ts", "src/empty.ts"],
-    diff: noNewlineDiff + emptyDeletion,
-  }
-  const fake = fakeApplication({
-    sessionSnapshot: approvalSessionSnapshot(approval),
-  })
-  const setup = await testRender(
-    buliElement(fake.application, "default"),
-    { width: 100, height: 64 },
-  )
-
-  try {
-    await act(async () => {
-      await setup.renderOnce()
-    })
-
-    const renderedText = textRenderables(setup.renderer.root).map(
-      (renderable) => renderable.plainText,
-    )
-    expect(diffRenderables(setup.renderer.root)).toHaveLength(2)
-    expect(renderedText).toContain(noNewlineDiff)
-    expect(renderedText).toContain(emptyDeletion)
-    expect(setup.captureCharFrame()).toContain("No newline at end of file")
-  } finally {
-    act(() => {
-      setup.renderer.destroy()
-    })
-  }
-})
-
 test("renders complete command approval details and command actions", async () => {
   const approval = commandApproval()
   const fake = fakeApplication({
@@ -1181,20 +1041,17 @@ test("keeps approval reviewable with many queued messages on a short terminal", 
   }
 })
 
-test("reviews a tall patch from the top without changing its action", async () => {
-  const approval: PatchToolApprovalRequest = {
-    ...patchApproval(),
-    diff: [
-      "--- a/src/long.ts",
-      "+++ b/src/long.ts",
-      "@@ -1,1 +1,82 @@",
-      "-old review",
-      "+REVIEW TOP",
+test("reviews a tall command from the top without changing its action", async () => {
+  const approval: ICommandToolApprovalRequest = {
+    ...commandApproval(),
+    command: [
+      "printf 'REVIEW TOP\\n'",
       ...Array.from(
         { length: 80 },
-        (_, index) => `+review-line-${String(index).padStart(3, "0")}`,
+        (_, index) =>
+          `printf 'review-line-${String(index).padStart(3, "0")}\\n'`,
       ),
-      "+REVIEW END",
+      "printf 'REVIEW END\\n'",
     ].join("\n"),
   }
   const fake = fakeApplication({
@@ -1208,9 +1065,9 @@ test("reviews a tall patch from the top without changing its action", async () =
   const pageUp = parseKeypress("\u001b[5~")
   const end = parseKeypress("\u001b[F")
   const home = parseKeypress("\u001b[H")
-  const right = parseKeypress("\u001b[C")
+  const down = parseKeypress("\u001b[B")
   const enter = parseKeypress("\r")
-  if (!pageDown || !pageUp || !end || !home || !right || !enter) {
+  if (!pageDown || !pageUp || !end || !home || !down || !enter) {
     throw new Error("Expected approval keys to parse")
   }
 
@@ -1224,13 +1081,15 @@ test("reviews a tall patch from the top without changing its action", async () =
       "tool-approval-details",
     )
     const initialFrame = setup.captureCharFrame()
-    expect(diffRenderables(setup.renderer.root)).toHaveLength(1)
+    expect(codeRenderables(setup.renderer.root).some(
+      (renderable) => renderable.content === approval.command,
+    )).toBe(true)
     expect(details.scrollTop).toBe(0)
-    expect(initialFrame).toContain("Patch approval")
+    expect(initialFrame).toContain("Command approval")
     expect(initialFrame).toContain(approval.title)
     expect(initialFrame).toContain("REVIEW TOP")
     expect(initialFrame).not.toContain("REVIEW END")
-    expect(initialFrame).toContain("> Reject")
+    expect(initialFrame).toContain("> Copy")
     expect(initialFrame).toContain("PageUp/PageDown review")
     expect(setup.renderer.currentFocusedRenderable?.id).toBe(
       "tool-approval-panel",
@@ -1248,7 +1107,7 @@ test("reviews a tall patch from the top without changing its action", async () =
     if (!laterLine) throw new Error("Expected later diff content")
     expect(Number(laterLine[1])).toBeGreaterThan(0)
     expect(initialFrame).not.toContain(laterLine[0])
-    expect(scrolledFrame).toContain("> Reject")
+    expect(scrolledFrame).toContain("> Copy")
     expect(scrolledFrame).toContain("PageUp/PageDown review")
     expect(fake.resolvedApprovals).toEqual([])
     expect(setup.renderer.currentFocusedRenderable?.id).toBe(
@@ -1262,9 +1121,9 @@ test("reviews a tall patch from the top without changing its action", async () =
 
     const returnedFrame = setup.captureCharFrame()
     expect(details.scrollTop).toBe(0)
-    expect(returnedFrame).toContain("Patch approval")
+    expect(returnedFrame).toContain("Command approval")
     expect(returnedFrame).toContain("REVIEW TOP")
-    expect(returnedFrame).toContain("> Reject")
+    expect(returnedFrame).toContain("> Copy")
     expect(fake.resolvedApprovals).toEqual([])
     expect(setup.renderer.currentFocusedRenderable?.id).toBe(
       "tool-approval-panel",
@@ -1276,7 +1135,7 @@ test("reviews a tall patch from the top without changing its action", async () =
     })
     expect(details.scrollTop).toBeGreaterThan(0)
     expect(setup.captureCharFrame()).toContain("REVIEW END")
-    expect(setup.captureCharFrame()).toContain("> Reject")
+    expect(setup.captureCharFrame()).toContain("> Copy")
     expect(fake.resolvedApprovals).toEqual([])
 
     await act(async () => {
@@ -1287,12 +1146,12 @@ test("reviews a tall patch from the top without changing its action", async () =
     expect(setup.captureCharFrame()).toContain("REVIEW TOP")
 
     act(() => {
-      setup.renderer.keyInput.processParsedKey(right)
+      setup.renderer.keyInput.processParsedKey(down)
     })
     await act(async () => {
       await setup.renderOnce()
     })
-    expect(setup.captureCharFrame()).toContain("> Apply")
+    expect(setup.captureCharFrame()).toContain("> Run once")
     expect(fake.resolvedApprovals).toEqual([])
 
     await act(async () => {
@@ -1313,7 +1172,7 @@ test("reviews a tall patch from the top without changing its action", async () =
 
 test("focuses approval and ignores printable keys and chat submission", async () => {
   const approval = commandApproval()
-  const transcriptMessage: UserMessage = {
+  const transcriptMessage: IUserMessage = {
     id: "transcript-message",
     sessionId: "default",
     runId: "run-1",
@@ -1392,43 +1251,6 @@ test("focuses approval and ignores printable keys and chat submission", async ()
   }
 })
 
-test("defaults patch Enter to Reject without consuming the draft", async () => {
-  const approval = patchApproval()
-  const fake = fakeApplication({
-    sessionSnapshot: approvalSessionSnapshot(approval),
-  })
-  const controller = new BuliUiController({ application: fake.application })
-  controller.activateSession("default")
-  controller.updateInput("Patch draft remains")
-  const setup = await testRender(
-    buliElementWithController(fake.application, controller),
-    { width: 80, height: 42 },
-  )
-
-  try {
-    await act(async () => {
-      await setup.renderOnce()
-      setup.mockInput.pressEnter()
-      await setup.renderOnce()
-    })
-
-    expect(fake.resolvedApprovals).toEqual([{
-      sessionId: "default",
-      approvalId: approval.id,
-      decision: "reject",
-    }])
-    expect(fake.steering).toEqual([])
-    expect(controller.getSnapshot().input).toBe("Patch draft remains")
-    expect(textareaRenderable(setup.renderer.root).plainText).toBe(
-      "Patch draft remains",
-    )
-  } finally {
-    act(() => {
-      setup.renderer.destroy()
-    })
-  }
-})
-
 test("defaults command Enter to Copy and resolves only after clipboard success", async () => {
   const approval = commandApproval()
   const fake = fakeApplication({
@@ -1473,13 +1295,6 @@ test("defaults command Enter to Copy and resolves only after clipboard success",
 })
 
 for (const approvalCase of [
-  {
-    name: "Right then Enter applies a patch",
-    approval: patchApproval(),
-    direction: "right",
-    selectedLabel: "> Apply",
-    decision: "approve",
-  },
   {
     name: "Down then Enter runs a command once",
     approval: commandApproval(),
@@ -1547,7 +1362,7 @@ for (const approvalCase of [
 
 test("resets command selection to Copy when the approval ID changes", async () => {
   const firstApproval = commandApproval()
-  const secondApproval: CommandToolApprovalRequest = {
+  const secondApproval: ICommandToolApprovalRequest = {
     ...commandApproval(),
     id: "command-approval-2",
     toolCallId: "command-call-2",
@@ -1711,7 +1526,7 @@ test("shows slash commands and executes the selected new command", async () => {
 })
 
 test("selects a model from the picker and updates the status row", async () => {
-  const model: AgentModel = { async *stream() {} }
+  const model: IAgentModel = { async *stream() {} }
   const runtime = new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,
     manager: new InMemorySessionManager(),
@@ -1790,7 +1605,7 @@ test("selects a model from the picker and updates the status row", async () => {
 })
 
 test("renders a submitted prompt and streamed response", async () => {
-  const model: AgentModel = {
+  const model: IAgentModel = {
     async *stream() {
       yield { type: "text-start", id: "answer" }
       yield { type: "text-delta", id: "answer", delta: "Rendered response" }

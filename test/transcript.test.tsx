@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import {
     CodeRenderable,
+    DiffRenderable,
     LineNumberRenderable,
     MarkdownRenderable,
     RGBA,
@@ -12,7 +13,7 @@ import {
 import { testRender } from "@opentui/react/test-utils"
 import { act, useState } from "react"
 
-import type { AgentMessage, AssistantMessage } from "@/agent"
+import type { TAgentMessage, IAssistantMessage } from "@/agent"
 import { Transcript } from "@/sessions/ui"
 import { syntax, theme } from "@/terminal/theme"
 
@@ -20,6 +21,13 @@ function codeRenderables(root: Renderable): CodeRenderable[] {
     return root.getChildren().flatMap((child) => [
         ...(child instanceof CodeRenderable ? [child] : []),
         ...codeRenderables(child),
+    ])
+}
+
+function diffRenderables(root: Renderable): DiffRenderable[] {
+    return root.getChildren().flatMap((child) => [
+        ...(child instanceof DiffRenderable ? [child] : []),
+        ...diffRenderables(child),
     ])
 }
 
@@ -51,8 +59,9 @@ function tableRenderables(root: Renderable): TextTableRenderable[] {
     ])
 }
 
-test("renders direct, streaming, and tool messages", async () => {
-    const messages: AgentMessage[] = [
+test("renders direct, streaming, and persisted legacy tool messages", async () => {
+    // Durable history can contain tool names removed from the active catalog.
+    const messages: TAgentMessage[] = [
         {
             id: "user-message",
             sessionId: "default",
@@ -90,7 +99,10 @@ test("renders direct, streaming, and tool messages", async () => {
                     type: "toolCall",
                     toolCallId: "call-patch-rejected",
                     toolName: "apply_patch",
-                    input: { patchText: "*** Begin Patch", explanation: "Test rejection" },
+                    input: {
+                        explanation: "Test rejection",
+                        changes: [{ kind: "delete", path: "rejected.txt" }],
+                    },
                 },
                 {
                     type: "toolCall",
@@ -102,7 +114,10 @@ test("renders direct, streaming, and tool messages", async () => {
                     type: "toolCall",
                     toolCallId: "call-patch-committed",
                     toolName: "apply_patch",
-                    input: { patchText: "*** Begin Patch", explanation: "Test abort" },
+                    input: {
+                        explanation: "Test abort",
+                        changes: [{ kind: "delete", path: "aborted.txt" }],
+                    },
                 },
                 {
                     type: "toolCall",
@@ -222,7 +237,7 @@ test("renders direct, streaming, and tool messages", async () => {
             errorMessage: "TypeError: Invalid OpenAI authentication",
         },
     ]
-    const streamingMessage: AssistantMessage = {
+    const streamingMessage: IAssistantMessage = {
         id: "streaming-assistant-message",
         sessionId: "default",
         runId: "run-3",
@@ -234,8 +249,8 @@ test("renders direct, streaming, and tool messages", async () => {
             { type: "text", text: "Streaming answer" },
             {
                 type: "toolCall",
-                toolCallId: "call-glob",
-                toolName: "glob",
+                toolCallId: "call-find",
+                toolName: "find",
                 input: { pattern: "**/*.ts" },
             },
         ],
@@ -270,7 +285,7 @@ test("renders direct, streaming, and tool messages", async () => {
         expect(frame).toContain("User rejected the workspace patch")
         expect(frame).toContain("Run the copied command manually")
         expect(frame).toContain("Streaming answer")
-        expect(frame).toContain("Glob [**/*.ts]")
+        expect(frame).toContain("Find [**/*.ts]")
         expect(frame).toContain("TypeError: Invalid OpenAI authentication")
         expect(frame).toContain("Thought: Released reasoning summary")
         expect(frame).toContain("Thinking: Streaming reasoning summary")
@@ -305,7 +320,7 @@ test("renders direct, streaming, and tool messages", async () => {
 })
 
 test("renders technical tool parameters without text statuses", async () => {
-    const message: AssistantMessage = {
+    const message: IAssistantMessage = {
         id: "active-tools",
         sessionId: "default",
         runId: "run-active",
@@ -319,8 +334,6 @@ test("renders technical tool parameters without text statuses", async () => {
                 toolName: "bash",
                 input: {
                     command: "bun test",
-                    purpose: "Verify the project",
-                    cwd: "src",
                     timeout: 30,
                 },
             },
@@ -332,9 +345,9 @@ test("renders technical tool parameters without text statuses", async () => {
             },
             {
                 type: "toolCall",
-                toolCallId: "call-glob",
-                toolName: "glob",
-                input: { pattern: "**/*.ts", path: "src", hidden: true, limit: 25 },
+                toolCallId: "call-find",
+                toolName: "find",
+                input: { pattern: "**/*.ts", path: "src", limit: 25 },
             },
             {
                 type: "toolCall",
@@ -343,12 +356,27 @@ test("renders technical tool parameters without text statuses", async () => {
                 input: {
                     pattern: "AgentSession",
                     path: "src",
-                    include: "*.ts",
+                    glob: "*.ts",
+                    ignoreCase: true,
                     literal: true,
-                    caseSensitive: false,
                     context: 2,
                     limit: 25,
                 },
+            },
+            {
+                type: "toolCall",
+                toolCallId: "call-edit",
+                toolName: "edit",
+                input: {
+                    path: "src/app.ts",
+                    edits: [{ oldText: "before", newText: "after" }],
+                },
+            },
+            {
+                type: "toolCall",
+                toolCallId: "call-write",
+                toolName: "write",
+                input: { path: "src/new.ts", content: "export {}\n" },
             },
         ],
     }
@@ -368,10 +396,12 @@ test("renders technical tool parameters without text statuses", async () => {
 
         const lines = textRenderables(setup.renderer.root)
         expect(lines.map((line) => line.plainText)).toEqual([
-            "Bash [bun test] cwd=src timeout=30",
+            "Bash [bun test] timeout=30",
             "Read [src/app.ts] offset=20 limit=40",
-            "Glob [**/*.ts] path=src hidden=true limit=25",
-            "Grep [AgentSession] path=src include=*.ts literal=true caseSensitive=false context=2 limit=25",
+            "Find [**/*.ts] path=src limit=25",
+            "Grep [AgentSession] path=src glob=*.ts ignoreCase=true literal=true context=2 limit=25",
+            'Edit [src/app.ts] edits=[{"oldText":"before","newText":"after"}]',
+            "Write [src/new.ts]",
         ])
         expect(lines.every((line) => line.fg.equals(RGBA.fromHex(theme.amber)))).toBe(true)
     } finally {
@@ -387,7 +417,7 @@ test("updates one tool activity line from active to completed", async () => {
     function EvolvingToolTranscript(): React.ReactNode {
         const [completed, setCompleted] = useState(false)
         completeTool = () => setCompleted(true)
-        const messages: AgentMessage[] = [
+        const messages: TAgentMessage[] = [
             {
                 id: "assistant-tool",
                 sessionId: "default",
@@ -459,7 +489,7 @@ test("keeps one tool activity line across the streaming message boundary", async
     function StreamingToolTranscript(): React.ReactNode {
         const [persisted, setPersisted] = useState(false)
         persistAssistant = () => setPersisted(true)
-        const assistant: AssistantMessage = {
+        const assistant: IAssistantMessage = {
             id: "streaming-tool",
             sessionId: "default",
             runId: "run-streaming-tool",
@@ -468,8 +498,8 @@ test("keeps one tool activity line across the streaming message boundary", async
             stopReason: persisted ? "tool-use" : "pending",
             content: [{
                 type: "toolCall",
-                toolCallId: "call-glob",
-                toolName: "glob",
+                toolCallId: "call-find",
+                toolName: "find",
                 input: { pattern: "**/*.tsx" },
             }],
         }
@@ -490,7 +520,7 @@ test("keeps one tool activity line across the streaming message boundary", async
             await setup.renderOnce()
         })
         const lineBefore = textRenderables(setup.renderer.root)[0]
-        expect(lineBefore?.plainText).toBe("Glob [**/*.tsx]")
+        expect(lineBefore?.plainText).toBe("Find [**/*.tsx]")
 
         act(() => {
             persistAssistant?.()
@@ -502,7 +532,7 @@ test("keeps one tool activity line across the streaming message boundary", async
         const linesAfter = textRenderables(setup.renderer.root)
         expect(linesAfter).toHaveLength(1)
         expect(linesAfter[0]).toBe(lineBefore)
-        expect(linesAfter[0]?.plainText).toBe("Glob [**/*.tsx]")
+        expect(linesAfter[0]?.plainText).toBe("Find [**/*.tsx]")
     } finally {
         act(() => {
             setup.renderer.destroy()
@@ -512,7 +542,7 @@ test("keeps one tool activity line across the streaming message boundary", async
 
 test("truncates tool targets without splitting Unicode code points", async () => {
     const path = `${"a".repeat(92)}😀tail`
-    const message: AssistantMessage = {
+    const message: IAssistantMessage = {
         id: "unicode-tool",
         sessionId: "default",
         runId: "run-unicode",
@@ -550,7 +580,7 @@ test("truncates tool targets without splitting Unicode code points", async () =>
 })
 
 test("pairs out-of-order results and preserves orphan results", async () => {
-    const assistant: AssistantMessage = {
+    const assistant: IAssistantMessage = {
         id: "tool-batch",
         sessionId: "default",
         runId: "run-tools",
@@ -572,7 +602,7 @@ test("pairs out-of-order results and preserves orphan results", async () => {
             },
         ],
     }
-    const messages: AgentMessage[] = [
+    const messages: TAgentMessage[] = [
         assistant,
         {
             id: "bash-result",
@@ -638,7 +668,7 @@ test("pairs out-of-order results and preserves orphan results", async () => {
 })
 
 test("does not pair results to calls from a failed assistant turn", async () => {
-    const messages: AgentMessage[] = [
+    const messages: TAgentMessage[] = [
         {
             id: "failed-tool-turn",
             sessionId: "default",
@@ -687,7 +717,7 @@ test("does not pair results to calls from a failed assistant turn", async () => 
 })
 
 test("scopes an active reused tool call id to its current run", async () => {
-    const messages: AgentMessage[] = [
+    const messages: TAgentMessage[] = [
         {
             id: "old-assistant",
             sessionId: "default",
@@ -761,7 +791,7 @@ test("renders full reasoning summaries as plain text in content order", async ()
         "**literal Markdown syntax**",
         "Final summary line remains available without truncation.",
     ].join("\n")
-    const completedMessage: AssistantMessage = {
+    const completedMessage: IAssistantMessage = {
         id: "completed-reasoning",
         sessionId: "default",
         runId: "run-completed-reasoning",
@@ -774,7 +804,7 @@ test("renders full reasoning summaries as plain text in content order", async ()
             { type: "text", text: "After summary" },
         ],
     }
-    const streamingMessage: AssistantMessage = {
+    const streamingMessage: IAssistantMessage = {
         id: "streaming-reasoning",
         sessionId: "default",
         runId: "run-streaming-reasoning",
@@ -831,7 +861,7 @@ test("renders full reasoning summaries as plain text in content order", async ()
 })
 
 test("shows work for empty streaming reasoning and hides empty completed reasoning", async () => {
-    const completedMessage: AssistantMessage = {
+    const completedMessage: IAssistantMessage = {
         id: "empty-completed-reasoning",
         sessionId: "default",
         runId: "run-empty-completed-reasoning",
@@ -840,7 +870,7 @@ test("shows work for empty streaming reasoning and hides empty completed reasoni
         stopReason: "stop",
         content: [{ type: "reasoning", text: "" }],
     }
-    const streamingMessage: AssistantMessage = {
+    const streamingMessage: IAssistantMessage = {
         id: "empty-streaming-reasoning",
         sessionId: "default",
         runId: "run-empty-streaming-reasoning",
@@ -881,7 +911,7 @@ test("keeps completed headings stable while streaming markdown grows", async () 
     function StreamingTranscript(): React.ReactNode {
         const [text, setText] = useState("# Stable heading\n\nPartial paragraph")
         updateText = setText
-        const streamingMessage: AssistantMessage = {
+        const streamingMessage: IAssistantMessage = {
             id: "streaming-markdown",
             sessionId: "default",
             runId: "run-streaming-markdown",
@@ -906,7 +936,7 @@ test("keeps completed headings stable while streaming markdown grows", async () 
         expect(markdownBefore).toBeDefined()
         expect(markdownBefore?.streaming).toBe(true)
         expect(markdownBefore?.internalBlockMode).toBe("top-level")
-        expect(markdownBefore?.renderNode).toBeUndefined()
+        expect(markdownBefore?.renderNode).toBeFunction()
         expect(markdownBefore?.tableOptions).toEqual({
             style: "grid",
             widthMode: "full",
@@ -1002,9 +1032,70 @@ test("updates streaming code without replacing its renderable", async () => {
     }
 })
 
+test("replaces a completed streaming diff block with the diff viewer", async () => {
+    let finishDiff: (() => void) | undefined
+    const patch = [
+        "--- a/example.ts",
+        "+++ b/example.ts",
+        "@@ -1 +1 @@",
+        "-const answer = 1",
+        "+const answer = 2",
+    ].join("\n")
+
+    function StreamingDiffTranscript(): React.ReactNode {
+        const [closed, setClosed] = useState(false)
+        finishDiff = () => setClosed(true)
+        const text = `\`\`\`diff\n${patch}${closed ? "\n```" : ""}`
+
+        return <Transcript
+            messages={[]}
+            streamingMessage={{
+                id: "streaming-diff",
+                sessionId: "default",
+                runId: "run-streaming-diff",
+                role: "assistant",
+                createdAt: 1,
+                stopReason: "pending",
+                content: [{ type: "text", text }],
+            }}
+        />
+    }
+
+    const setup = await testRender(<StreamingDiffTranscript />, {
+        width: 80,
+        height: 12,
+    })
+
+    try {
+        await act(async () => {
+            await setup.renderOnce()
+        })
+
+        expect(diffRenderables(setup.renderer.root)).toHaveLength(0)
+        expect(codeRenderables(setup.renderer.root).some(
+            (renderable) => renderable.filetype === "diff",
+        )).toBe(true)
+
+        act(() => {
+            finishDiff?.()
+        })
+        await act(async () => {
+            await setup.renderOnce()
+        })
+
+        const diffs = diffRenderables(setup.renderer.root)
+        expect(diffs).toHaveLength(1)
+        expect(diffs[0]?.diff).toBe(patch)
+    } finally {
+        act(() => {
+            setup.renderer.destroy()
+        })
+    }
+})
+
 test("keeps completed history renderables stable across streaming text updates", async () => {
     let updateText: ((text: string) => void) | undefined
-    const messages: AgentMessage[] = [
+    const messages: TAgentMessage[] = [
         {
             id: "durable-assistant",
             sessionId: "default",
@@ -1104,7 +1195,7 @@ test("keeps completed history renderables stable across streaming text updates",
 })
 
 test("styles rich Markdown and renders code without line numbers", async () => {
-    const message: AssistantMessage = {
+    const message: IAssistantMessage = {
         id: "styled-markdown",
         sessionId: "default",
         runId: "run-styled-markdown",
@@ -1168,7 +1259,7 @@ test("styles rich Markdown and renders code without line numbers", async () => {
         expect(markdown?.conceal).toBe(true)
         expect(markdown?.concealCode).toBe(false)
         expect(markdown?.internalBlockMode).toBe("top-level")
-        expect(markdown?.renderNode).toBeUndefined()
+        expect(markdown?.renderNode).toBeFunction()
 
         const tables = tableRenderables(setup.renderer.root)
         expect(tables).toHaveLength(1)
@@ -1214,7 +1305,7 @@ test("styles rich Markdown and renders code without line numbers", async () => {
 })
 
 test("keeps unnumbered code readable in a narrow transcript", async () => {
-    const message: AssistantMessage = {
+    const message: IAssistantMessage = {
         id: "narrow-code",
         sessionId: "default",
         runId: "run-narrow-code",

@@ -1,26 +1,27 @@
-import type { AgentEvent } from "@/agent/events"
+import type { TAgentEvent } from "@/agent/events"
 import type {
-    AgentMessage,
-    AssistantMessage,
-    ToolCallContent,
-    UserMessage,
-    UserPathReference,
+    TAgentMessage,
+    IAssistantMessage,
+    IToolCallContent,
+    IUserMessage,
+    IUserPathReference,
 } from "@/agent/messages"
 import { USER_PATH_REFERENCES_PER_SESSION_MAX } from "@/agent/messages"
-import type { AgentModel } from "@/agent/model"
+import type { IAgentModel } from "@/agent/model"
 import { streamModelTurn } from "@/agent/model-turn"
 import type {
-    ModelProfile,
-    ReasoningEffort,
+    IModelProfile,
+    TReasoningEffort,
 } from "@/agent/model-values"
 import type {
-    AgentLoopResult,
-    AgentRunEndReason,
+    IAgentLoopResult,
+    TAgentRunEndReason,
 } from "@/agent/state"
-import type { AgentTool } from "@/agent/tool"
+import type { IAgentTool } from "@/agent/tool"
+import type { IToolOutputStore } from "@/agent/tool-output-store"
 import type {
-    ToolApprovalDecision,
-    ToolApprovalDraft,
+    TToolApprovalDecision,
+    TToolApprovalDraft,
 } from "@/agent/tool-approval"
 import {
     executeToolCallsSequentially,
@@ -31,65 +32,66 @@ import {
 const TRUNCATED_TOOL_CALL_MESSAGE =
     "Tool call was not executed because the model response reached its output token limit and its arguments may be incomplete. Re-issue the tool call with complete arguments."
 
-export type AgentEventSink = (event: AgentEvent) => void | Promise<void>
+export type TAgentEventSink = (event: TAgentEvent) => void | Promise<void>
 
-export interface AgentApprovalContext {
+export interface IAgentApprovalContext {
     readonly sessionId: string
     readonly runId: string
     readonly toolCallId: string
     readonly signal: AbortSignal
 }
 
-export type AgentApprovalHandler = (
-    draft: ToolApprovalDraft,
-    context: AgentApprovalContext,
-) => Promise<ToolApprovalDecision>
+export type TAgentApprovalHandler = (
+    draft: TToolApprovalDraft,
+    context: IAgentApprovalContext,
+) => Promise<TToolApprovalDecision>
 
-export interface AgentInputQueue {
+export interface IAgentInputQueue {
     hasSteering(): boolean
-    takeSteering(): UserMessage | undefined
+    takeSteering(): IUserMessage | undefined
     hasFollowUp(): boolean
-    takeFollowUp(): UserMessage | undefined
-    restore(message: UserMessage): void
+    takeFollowUp(): IUserMessage | undefined
+    restore(message: IUserMessage): void
     close(): void
 }
 
-export interface AgentContext {
+export interface IAgentContext {
     readonly systemPrompt: string
-    readonly messages: readonly AgentMessage[]
+    readonly messages: readonly TAgentMessage[]
     readonly contextSummary?: string
-    readonly tools: readonly AgentTool[]
-    readonly selectedPathReferences?: readonly UserPathReference[]
+    readonly tools: readonly IAgentTool[]
+    readonly selectedPathReferences?: readonly IUserPathReference[]
 }
 
-export interface AgentLoopConfig {
+export interface IAgentLoopConfig {
     readonly sessionId: string
     readonly runId: string
-    readonly model: AgentModel
-    readonly modelProfile?: ModelProfile
+    readonly model: IAgentModel
+    readonly modelProfile?: IModelProfile
     readonly providerAccountId?: string
-    readonly reasoningEffort: ReasoningEffort
+    readonly reasoningEffort: TReasoningEffort
     readonly signal: AbortSignal
-    readonly emit: AgentEventSink
-    readonly requestApproval?: AgentApprovalHandler
-    readonly inputQueue?: AgentInputQueue
+    readonly emit: TAgentEventSink
+    readonly requestApproval?: TAgentApprovalHandler
+    readonly inputQueue?: IAgentInputQueue
     readonly now?: () => number
     readonly generateId?: () => string
+    readonly toolOutputStore?: IToolOutputStore
 }
 
 /** Orchestrates provider turns, queued input, and sequential local tool batches. */
 export async function runAgentLoop(
-    prompt: UserMessage,
-    context: AgentContext,
-    config: AgentLoopConfig,
-): Promise<AgentLoopResult> {
+    prompt: IUserMessage,
+    context: IAgentContext,
+    config: IAgentLoopConfig,
+): Promise<IAgentLoopResult> {
     const now = config.now ?? Date.now
     const generateId = config.generateId ?? (() => crypto.randomUUID())
     // One registry keeps model descriptors and local executors in sync.
     const toolsByName = indexAgentTools(context.tools)
     const activeTools = [...toolsByName.values()]
     const messages = structuredClone([...context.messages, prompt])
-    const newMessages: AgentMessage[] = [structuredClone(prompt)]
+    const newMessages: TAgentMessage[] = [structuredClone(prompt)]
     const selectedPathReferences = mergePathReferences(
         [],
         context.selectedPathReferences ?? [],
@@ -101,7 +103,7 @@ export async function runAgentLoop(
     await emitCompletedMessage(prompt, config.runId, config.emit)
 
     let iteration = 0
-    let pendingMessage: UserMessage | undefined
+    let pendingMessage: IUserMessage | undefined
 
     // The outer loop resumes completed agent work when a follow-up arrives.
     while (true) {
@@ -192,7 +194,7 @@ export async function runAgentLoop(
             }
 
             const toolCalls = assistant.content.filter(
-                (content): content is ToolCallContent => content.type === "toolCall",
+                (content): content is IToolCallContent => content.type === "toolCall",
             )
             const toolExecutionOptions = {
                 sessionId: config.sessionId,
@@ -212,6 +214,9 @@ export async function runAgentLoop(
                     : { requestApproval: config.requestApproval }),
                 now,
                 generateId,
+                ...(config.toolOutputStore === undefined
+                    ? {}
+                    : { toolOutputStore: config.toolOutputStore }),
             }
             const toolResults = assistant.stopReason === "length"
                 ? await failToolCallsWithoutExecution(
@@ -286,9 +291,9 @@ export async function runAgentLoop(
 }
 
 function mergePathReferences(
-    target: UserPathReference[],
-    additions: readonly UserPathReference[],
-): UserPathReference[] {
+    target: IUserPathReference[],
+    additions: readonly IUserPathReference[],
+): IUserPathReference[] {
     for (const reference of additions) {
         const key = `${reference.kind}\0${reference.path}`
         const existingIndex = target.findIndex((candidate) => (
@@ -302,28 +307,28 @@ function mergePathReferences(
 }
 
 async function emitCompletedMessage(
-    message: AgentMessage,
+    message: TAgentMessage,
     runId: string,
-    emit: AgentEventSink,
+    emit: TAgentEventSink,
 ): Promise<void> {
     await emit({ type: "message_start", runId, message })
     await emit({ type: "message_end", runId, message })
 }
 
 function runReasonForAssistant(
-    message: AssistantMessage,
-): AgentRunEndReason | undefined {
+    message: IAssistantMessage,
+): TAgentRunEndReason | undefined {
     if (message.stopReason === "aborted") return "aborted"
     if (message.stopReason === "error") return "error"
     return undefined
 }
 
 async function finishRun(
-    reason: AgentRunEndReason,
-    messages: readonly AgentMessage[],
+    reason: TAgentRunEndReason,
+    messages: readonly TAgentMessage[],
     runId: string,
-    emit: AgentEventSink,
-): Promise<AgentLoopResult> {
+    emit: TAgentEventSink,
+): Promise<IAgentLoopResult> {
     const result = { reason, messages: structuredClone(messages) }
     await emit({ type: "agent_end", runId, ...result })
     return result

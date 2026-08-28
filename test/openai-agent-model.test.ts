@@ -4,11 +4,11 @@ import { realpathSync } from "node:fs"
 import {
     isModelContextOverflowError,
     runAgentLoop,
-    type AgentMessage,
-    type AgentModelEvent,
-    type AgentTool,
-    type AgentToolDescriptor,
-    type UserMessage,
+    type TAgentMessage,
+    type TAgentModelEvent,
+    type IAgentTool,
+    type IAgentToolDescriptor,
+    type IUserMessage,
 } from "@/agent"
 import { systemPrompt } from "@/agent/system-prompt"
 import type {
@@ -33,7 +33,7 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
   const captureFetch = fetchImplementation(async (...args) => {
     capturedRequests.push(new Request(...args))
     if (capturedRequests.length === 1) {
-      return toolCallResponse("glob", { pattern: "package.json" })
+      return toolCallResponse("find", { pattern: "package.json" })
     }
     if (capturedRequests.length === 2) {
       return toolCallResponse("grep", { pattern: "packageManager" })
@@ -58,7 +58,7 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
     auth,
     modelId: "gpt-5.6-sol",
   })
-  const messages: AgentMessage[] = [
+  const messages: TAgentMessage[] = [
     {
       id: "previous-user",
       sessionId: "session-1",
@@ -119,14 +119,146 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
   expect(body.instructions).toContain(
     `Aktualny katalog roboczy i root workspace: ${WORKSPACE_ROOT}.`,
   )
-  expect(body.tools).toEqual(expect.arrayContaining([
-    expect.objectContaining({ type: "function", name: "read" }),
-    expect.objectContaining({ type: "function", name: "glob" }),
-    expect.objectContaining({ type: "function", name: "grep" }),
-    expect.objectContaining({ type: "function", name: "apply_patch" }),
-    expect.objectContaining({ type: "function", name: "bash" }),
-  ]))
-  expect(JSON.stringify(body.tools)).not.toContain("write_file")
+  const tools = body.tools as Array<{
+    type: string
+    name: string
+    parameters: unknown
+  }>
+  const toolNames = tools.map((tool) => tool.name)
+  const parametersFor = (name: string): unknown =>
+    tools.find((tool) => tool.name === name)?.parameters
+
+  expect(tools.every((tool) => tool.type === "function")).toBe(true)
+  expect(toolNames).toEqual(["read", "find", "grep", "edit", "write", "bash"])
+  expect(toolNames).not.toContain("glob")
+  expect(toolNames).not.toContain("apply_patch")
+  expect(toolNames).not.toContain("write_file")
+  expect(parametersFor("read")).toEqual({
+    type: "object",
+    properties: {
+      path: {
+        type: "string",
+        description: "Path to the file to read (relative or absolute)",
+      },
+      offset: {
+        type: "number",
+        description: "Line number to start reading from (1-indexed)",
+      },
+      limit: {
+        type: "number",
+        description: "Maximum number of lines to read",
+      },
+    },
+    required: ["path"],
+  })
+  expect(parametersFor("find")).toEqual({
+    type: "object",
+    properties: {
+      pattern: {
+        type: "string",
+        description: "Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'",
+      },
+      path: {
+        type: "string",
+        description: "Directory to search in (default: current directory)",
+      },
+      limit: {
+        type: "number",
+        description: "Maximum number of results (default: 1000)",
+      },
+    },
+    required: ["pattern"],
+  })
+  expect(parametersFor("grep")).toEqual({
+    type: "object",
+    properties: {
+      pattern: {
+        type: "string",
+        description: "Search pattern (regex or literal string)",
+      },
+      path: {
+        type: "string",
+        description: "Directory or file to search (default: current directory)",
+      },
+      glob: {
+        type: "string",
+        description: "Filter files by glob pattern, e.g. '*.ts' or '**/*.spec.ts'",
+      },
+      ignoreCase: {
+        type: "boolean",
+        description: "Case-insensitive search (default: false)",
+      },
+      literal: {
+        type: "boolean",
+        description: "Treat pattern as literal string instead of regex (default: false)",
+      },
+      context: {
+        type: "number",
+        description: "Number of lines to show before and after each match (default: 0)",
+      },
+      limit: {
+        type: "number",
+        description: "Maximum number of matches to return (default: 100)",
+      },
+    },
+    required: ["pattern"],
+  })
+  expect(parametersFor("edit")).toEqual({
+    type: "object",
+    properties: {
+      path: {
+        type: "string",
+        description: "Path to the file to edit (relative or absolute)",
+      },
+      edits: {
+        type: "array",
+        description: "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+        items: {
+          type: "object",
+          properties: {
+            oldText: {
+              type: "string",
+              description: "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
+            },
+            newText: {
+              type: "string",
+              description: "Replacement text for this targeted edit.",
+            },
+          },
+          required: ["oldText", "newText"],
+        },
+      },
+    },
+    required: ["path", "edits"],
+  })
+  expect(parametersFor("write")).toEqual({
+    type: "object",
+    properties: {
+      path: {
+        type: "string",
+        description: "Path to the file to write (relative or absolute)",
+      },
+      content: {
+        type: "string",
+        description: "Content to write to the file",
+      },
+    },
+    required: ["path", "content"],
+  })
+  expect(parametersFor("bash")).toEqual({
+    type: "object",
+    properties: {
+      command: {
+        type: "string",
+        description: "Shell command to execute",
+      },
+      timeout: {
+        type: "number",
+        description: "Timeout in seconds (optional, no default timeout)",
+      },
+    },
+    required: ["command"],
+  })
 
   expect(body.input).toEqual([
     {
@@ -144,18 +276,18 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
   ])
   expect(JSON.stringify(body.input)).not.toContain("Do not send this")
 
-  const globContinuation = (await secondRequest.json()) as Record<string, unknown>
-  expect(globContinuation.input).toEqual(expect.arrayContaining([
+  const findContinuation = (await secondRequest.json()) as Record<string, unknown>
+  expect(findContinuation.input).toEqual(expect.arrayContaining([
     {
       type: "function_call",
-      call_id: "call-glob",
-      name: "glob",
+      call_id: "call-find",
+      name: "find",
       arguments: JSON.stringify({ pattern: "package.json" }),
     },
     {
       type: "function_call_output",
-      call_id: "call-glob",
-      output: "package.json",
+      call_id: "call-find",
+      output: expect.stringContaining("package.json"),
     },
   ]))
 
@@ -174,8 +306,8 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
   expect(toolCalls).toEqual([
     {
       type: "toolCall",
-      toolCallId: "call-glob",
-      toolName: "glob",
+      toolCallId: "call-find",
+      toolName: "find",
       input: { pattern: "package.json" },
     },
     {
@@ -194,9 +326,9 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
   expect(toolResults).toEqual([
     expect.objectContaining({
       role: "toolResult",
-      toolCallId: "call-glob",
-      toolName: "glob",
-      content: "package.json",
+      toolCallId: "call-find",
+      toolName: "find",
+      content: expect.stringContaining("package.json"),
       isError: false,
     }),
     expect.objectContaining({
@@ -337,7 +469,7 @@ test("lowers direct assistant and text-only toolResult messages", async () => {
       isError: false,
       createdAt: 3,
     },
-  ], [toolDescriptor("read_file")])
+  ], [toolDescriptor("read")])
 
   expect(events).toContainEqual({
     type: "finish",
@@ -477,7 +609,7 @@ test("sends cumulative checkpoints without unsupported Codex limits", async () =
     capturedRequest = new Request(...args)
     return streamResponse()
   })
-  const events: AgentModelEvent[] = []
+  const events: TAgentModelEvent[] = []
 
   for await (const event of model.stream({
     sessionId: "session-1",
@@ -719,8 +851,8 @@ test("binds a fallback model request to its preflight account", async () => {
 test("emits every tool call from one provider response for the host loop", async () => {
   const model = createModel(async () => multiToolCallResponse([
     {
-      toolCallId: "call-glob",
-      toolName: "glob",
+      toolCallId: "call-find",
+      toolName: "find",
       input: { pattern: "*.ts" },
     },
     {
@@ -733,14 +865,14 @@ test("emits every tool call from one provider response for the host loop", async
   const events = await collectEvents(
     model,
     [userMessage("Inspect the workspace")],
-    [toolDescriptor("glob"), toolDescriptor("grep")],
+    [toolDescriptor("find"), toolDescriptor("grep")],
   )
 
   expect(events.filter((event) => event.type === "tool-call")).toEqual([
     {
       type: "tool-call",
-      toolCallId: "call-glob",
-      toolName: "glob",
+      toolCallId: "call-find",
+      toolName: "find",
       input: { pattern: "*.ts" },
     },
     {
@@ -766,7 +898,7 @@ test("does not execute an OpenAI tool call from an output-limited response", asy
       ? incompleteToolCallResponse("dangerous_action", { value: "partial" })
       : streamResponse()
   })
-  const tool: AgentTool = {
+  const tool: IAgentTool = {
     name: "dangerous_action",
     description: "Perform a local side effect",
     inputSchema: { type: "object" },
@@ -1084,11 +1216,11 @@ function createModel(
 
 async function collectEvents(
   model: OpenAiAgentModel,
-  messages: readonly AgentMessage[],
-  tools: readonly AgentToolDescriptor[],
+  messages: readonly TAgentMessage[],
+  tools: readonly IAgentToolDescriptor[],
   reportProviderAccountId?: (accountId: string) => void,
-): Promise<AgentModelEvent[]> {
-  const events: AgentModelEvent[] = []
+): Promise<TAgentModelEvent[]> {
+  const events: TAgentModelEvent[] = []
   for await (const event of model.stream({
     sessionId: "session-1",
     runId: "run-1",
@@ -1106,7 +1238,7 @@ async function collectEvents(
   return events
 }
 
-function userMessage(content: string): UserMessage {
+function userMessage(content: string): IUserMessage {
   return {
     id: "user-message",
     sessionId: "session-1",
@@ -1128,7 +1260,7 @@ function testSessionInfo() {
   }
 }
 
-function toolDescriptor(name: string): AgentToolDescriptor {
+function toolDescriptor(name: string): IAgentToolDescriptor {
   return {
     name,
     description: `Run ${name}`,

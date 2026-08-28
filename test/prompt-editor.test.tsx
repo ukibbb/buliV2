@@ -10,10 +10,10 @@ import { act, useRef, useState } from "react"
 
 import { PromptEditor } from "@/app/ui/chat/PromptEditor"
 import type { IPathCompletion } from "@/app/ui/controller/path-menu"
-import type { UserInputContent } from "@/agent"
+import type { IUserInputContent } from "@/agent"
 
 test("selected path completion becomes a structured reference", async () => {
-  const submitted: UserInputContent[] = []
+  const submitted: IUserInputContent[] = []
   const path = "/workspace/src/main.ts"
   const setup = await testRender(
     <PromptHarness
@@ -56,7 +56,7 @@ test("selected path completion becomes a structured reference", async () => {
 })
 
 test("selected path source uses terminal offsets after wide text", async () => {
-  const submitted: UserInputContent[] = []
+  const submitted: IUserInputContent[] = []
   const setup = await testRender(
     <PromptHarness
       completion={{
@@ -97,7 +97,7 @@ test("selected path source uses terminal offsets after wide text", async () => {
 })
 
 test("Ctrl+V inserts a validated clipboard image attachment", async () => {
-  const submitted: UserInputContent[] = []
+  const submitted: IUserInputContent[] = []
   const png = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlL8AAAAASUVORK5CYII=",
     "base64",
@@ -197,7 +197,7 @@ test("uses boundary occupancy for conventional keyboard selection", async () => 
 })
 
 test("undo restores capability metadata with an extmark", async () => {
-  const submitted: UserInputContent[] = []
+  const submitted: IUserInputContent[] = []
   const setup = await testRender(
     <PromptHarness
       completion={{
@@ -242,7 +242,7 @@ test("undo restores capability metadata with an extmark", async () => {
 })
 
 test("an extmark ID reused after undo does not reuse an old capability", async () => {
-  const drafts: UserInputContent[] = []
+  const drafts: IUserInputContent[] = []
   const setup = await testRender(
     <PromptHarness
       keepMenuOpen
@@ -305,11 +305,11 @@ function PromptHarness(props: {
   readonly completion?: IPathCompletion | readonly IPathCompletion[]
   readonly keepMenuOpen?: boolean
   readonly clipboardRead?: Pick<ClipboardService, "read">["read"]
-  readonly onValueChange?: (input: UserInputContent) => void
-  readonly onSubmit: (input: UserInputContent) => void
+  readonly onValueChange?: (input: IUserInputContent) => void
+  readonly onSubmit: (input: IUserInputContent) => void
 }) {
-  const valueRef = useRef<UserInputContent>({ text: "" })
-  const initialValueRef = useRef<UserInputContent>({ text: "" })
+  const valueRef = useRef<IUserInputContent>({ text: "" })
+  const initialValueRef = useRef<IUserInputContent>({ text: "" })
   const [menuOpen, setMenuOpen] = useState(props.completion !== undefined)
   const completionIndexRef = useRef(0)
   const completions = props.completion === undefined

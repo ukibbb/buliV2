@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test"
 
 import type {
-  AgentMessage,
-  AgentToolContext,
-  AssistantMessage,
-  UserMessage,
+  TAgentMessage,
+  IAgentToolContext,
+  IAssistantMessage,
+  IUserMessage,
 } from "@/agent"
 import { OPENAI_PROVIDER_ID } from "@/providers/openai"
 import { createOpenAiWebSearchTool } from "@/providers/openai/search/openai-web-search-tool"
@@ -28,7 +28,7 @@ test("exposes the standalone web commands and sends bounded conversation context
   }
   const tool = createOpenAiWebSearchTool({ search })
   const controller = new AbortController()
-  const messages: readonly AgentMessage[] = [
+  const messages: readonly TAgentMessage[] = [
     userMessage("Old user", 1),
     assistantMessage("Old assistant", 2),
     userMessage("Previous user", 3),
@@ -134,14 +134,14 @@ test("rejects invalid commands and model context before starting search", async 
 })
 
 function context(options: {
-  readonly messages?: readonly AgentMessage[]
+  readonly messages?: readonly TAgentMessage[]
   readonly modelProfile?: {
     readonly providerId: string
     readonly modelId: string
   }
   readonly providerAccountId?: string
   readonly signal?: AbortSignal
-} = {}): AgentToolContext {
+} = {}): IAgentToolContext {
   return {
     sessionId: "session-web",
     toolCallId: "call-web",
@@ -156,7 +156,7 @@ function context(options: {
   }
 }
 
-function userMessage(content: string, createdAt: number): UserMessage {
+function userMessage(content: string, createdAt: number): IUserMessage {
   return {
     id: `user-${createdAt}`,
     sessionId: "session-web",
@@ -168,7 +168,7 @@ function userMessage(content: string, createdAt: number): UserMessage {
   }
 }
 
-function assistantMessage(text: string, createdAt: number): AssistantMessage {
+function assistantMessage(text: string, createdAt: number): IAssistantMessage {
   return {
     id: `assistant-${createdAt}`,
     sessionId: "session-web",

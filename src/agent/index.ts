@@ -1,38 +1,38 @@
 /** Public agent feature API used by sessions, adapters and application composition. */
 export { Agent } from "@/agent/agent"
-export type { AgentOptions } from "@/agent/agent"
+export type { IAgentOptions } from "@/agent/agent"
 export { runAgentLoop } from "@/agent/agent-loop"
 export type {
-    AgentApprovalContext,
-    AgentApprovalHandler,
-    AgentContext,
-    AgentEventSink,
-    AgentInputQueue,
-    AgentLoopConfig,
+    IAgentApprovalContext,
+    TAgentApprovalHandler,
+    IAgentContext,
+    TAgentEventSink,
+    IAgentInputQueue,
+    IAgentLoopConfig,
 } from "@/agent/agent-loop"
 export { isImmutableAssistantSnapshot } from "@/agent/assistant-message-builder"
 export { systemPrompt } from "@/agent/system-prompt"
-export type { WorkspaceInstructions } from "@/agent/system-prompt"
+export type { IWorkspaceInstructions } from "@/agent/system-prompt"
 export type {
-    AgentCriticalEventSink,
-    AgentEvent,
-    AgentEventListener,
+    TAgentCriticalEventSink,
+    TAgentEvent,
+    TAgentEventListener,
 } from "@/agent/events"
 export type {
-    AgentMessage,
-    AssistantContent,
-    AssistantMessage,
-    ReasoningContent,
-    TextContent,
-    ToolCallContent,
-    ToolResultMessage,
-    UserImageAttachment,
-    UserInput,
-    UserInputContent,
-    UserMessage,
-    UserMessageSource,
-    UserPathReference,
-    UserSourceText,
+    TAgentMessage,
+    TAssistantContent,
+    IAssistantMessage,
+    IReasoningContent,
+    ITextContent,
+    IToolCallContent,
+    IToolResultMessage,
+    IUserImageAttachment,
+    TUserInput,
+    IUserInputContent,
+    IUserMessage,
+    TUserMessageSource,
+    IUserPathReference,
+    IUserSourceText,
 } from "@/agent/messages"
 export {
     USER_IMAGE_ATTACHMENTS_MAX,
@@ -43,43 +43,55 @@ export {
 } from "@/agent/messages"
 export { isValidUserImage } from "@/agent/user-image"
 export type {
-    AgentModel,
-    AgentModelEvent,
-    AgentModelRequest,
-    AgentRunConfiguration,
-    AgentRunConfigurationResolver,
+    IAgentModel,
+    TAgentModelEvent,
+    IAgentModelRequest,
+    IAgentRunConfiguration,
+    TAgentRunConfigurationResolver,
 } from "@/agent/model"
 export {
     isModelContextOverflowError,
     ModelContextOverflowError,
 } from "@/agent/model"
 export type {
-    ModelProfile,
-    ModelUsage,
-    ReasoningEffort,
+    IModelProfile,
+    IModelUsage,
+    TReasoningEffort,
 } from "@/agent/model-values"
 export type {
-    AgentContextProjection,
-    AgentContextProjector,
-    AgentLoopResult,
-    AgentRunEndReason,
-    AgentRunHandle,
-    AgentState,
+    IAgentContextProjection,
+    TAgentContextProjector,
+    IAgentLoopResult,
+    TAgentRunEndReason,
+    IAgentRunHandle,
+    IAgentState,
 } from "@/agent/state"
 export type {
-    AgentTool,
-    AgentToolContext,
-    AgentToolDescriptor,
-    AgentToolResult,
-    ToolApprovalKind,
-    ToolExecutionOutcome,
+    IAgentTool,
+    IAgentToolContext,
+    IAgentToolDescriptor,
+    IAgentToolResult,
+    TToolApprovalKind,
+    TToolExecutionOutcome,
 } from "@/agent/tool"
+export { TOOL_OUTPUT_PARTS } from "@/agent/tool-output-store"
+export {
+    MAX_TOOL_OUTPUT_BYTES,
+    MAX_TOOL_OUTPUT_LINES,
+} from "@/agent/tool-output"
 export type {
-    CommandToolApprovalDraft,
-    CommandToolApprovalRequest,
-    PatchToolApprovalDraft,
-    PatchToolApprovalRequest,
-    ToolApprovalDecision,
-    ToolApprovalDraft,
-    ToolApprovalRequest,
+    IStoredToolOutput,
+    IToolOutputIdentity,
+    IToolOutputPage,
+    IToolOutputStore,
+    IToolOutputWriter,
+    TToolOutputEncoding,
+    TToolOutputPart,
+} from "@/agent/tool-output-store"
+export type {
+    ICommandToolApprovalDraft,
+    ICommandToolApprovalRequest,
+    TToolApprovalDecision,
+    TToolApprovalDraft,
+    TToolApprovalRequest,
 } from "@/agent/tool-approval"

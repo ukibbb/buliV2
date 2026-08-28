@@ -2,13 +2,13 @@ import { expect, test } from "bun:test"
 
 import {
   Agent,
-  type AgentEvent,
-  type AgentModel,
-  type AgentModelRequest,
-  type AgentTool,
-  type ToolApprovalDecision,
-  type ToolApprovalDraft,
-  type ToolApprovalRequest,
+  type TAgentEvent,
+  type IAgentModel,
+  type IAgentModelRequest,
+  type IAgentTool,
+  type TToolApprovalDecision,
+  type TToolApprovalDraft,
+  type TToolApprovalRequest,
 } from "@/agent"
 
 test("Agent.prompt returns a synchronous handle and Agent owns live state", async () => {
@@ -205,7 +205,7 @@ test("public observer exceptions do not fail the run", async () => {
 })
 
 test("agent_settled appears exactly once and all events carry the runId", async () => {
-  const events: AgentEvent[] = []
+  const events: TAgentEvent[] = []
   const agent = new Agent({
     sessionId: "session-1",
     systemPrompt: "System",
@@ -267,8 +267,8 @@ test("Agent delivers queued steering FIFO one message per response", async () =>
   const secondStarted = Promise.withResolvers<void>()
   const releaseFirst = Promise.withResolvers<void>()
   const releaseSecond = Promise.withResolvers<void>()
-  const requests: AgentModelRequest[] = []
-  const model: AgentModel = {
+  const requests: IAgentModelRequest[] = []
+  const model: IAgentModel = {
     async *stream(request) {
       const index = requests.length
       requests.push({
@@ -347,7 +347,7 @@ test("Agent delivers queued steering FIFO one message per response", async () =>
 test("Agent delivers follow-ups FIFO only after it would otherwise stop", async () => {
   const firstStarted = Promise.withResolvers<void>()
   const releaseFirst = Promise.withResolvers<void>()
-  const requests: AgentModelRequest[] = []
+  const requests: IAgentModelRequest[] = []
   const agent = new Agent({
     sessionId: "session-1",
     systemPrompt: "System",
@@ -414,7 +414,7 @@ test("Agent rejects steering until the initial prompt is durable", async () => {
   const releasePromptPersistence = Promise.withResolvers<void>()
   const firstRequestStarted = Promise.withResolvers<void>()
   const releaseFirstRequest = Promise.withResolvers<void>()
-  const requests: AgentModelRequest[] = []
+  const requests: IAgentModelRequest[] = []
   const agent = new Agent({
     sessionId: "session-1",
     systemPrompt: "System",
@@ -472,17 +472,21 @@ test("Agent rejects steering until the initial prompt is durable", async () => {
 })
 
 test("Agent publishes an immutable approval and approve resumes the pending run", async () => {
-  const draftPaths = ["src/domain.ts"]
-  const decisions: ToolApprovalDecision[] = []
-  const agent = approvalAgent({
-    kind: "patch",
-    title: "Apply domain types",
-    explanation: "Add approval contracts",
-    diff: "--- a/src/domain.ts\n+++ b/src/domain.ts",
-    paths: draftPaths,
-  }, decisions)
-  const requested = Promise.withResolvers<ToolApprovalRequest>()
-  const events: AgentEvent[] = []
+  const draft = {
+    kind: "command" as const,
+    title: "Verify domain types",
+    explanation: "Run the focused domain checks",
+    command: "bun test test/domain.test.ts",
+    cwd: "/workspace",
+    purpose: "Verify the domain type changes",
+    expectedOutcome: "The domain tests pass",
+    sideEffects: "May write temporary test caches",
+    timeoutSeconds: 30,
+  }
+  const decisions: TToolApprovalDecision[] = []
+  const agent = approvalAgent(draft, decisions)
+  const requested = Promise.withResolvers<TToolApprovalRequest>()
+  const events: TAgentEvent[] = []
   agent.subscribe((event) => {
     events.push(event)
     if (event.type === "tool_approval_requested") {
@@ -507,24 +511,28 @@ test("Agent publishes an immutable approval and approve resumes the pending run"
     sessionId: "session-1",
     runId: run.runId,
     toolCallId: "approval-call",
-    kind: "patch",
-    title: "Apply domain types",
-    explanation: "Add approval contracts",
-    diff: "--- a/src/domain.ts\n+++ b/src/domain.ts",
-    paths: ["src/domain.ts"],
+    kind: "command",
+    title: "Verify domain types",
+    explanation: "Run the focused domain checks",
+    command: "bun test test/domain.test.ts",
+    cwd: "/workspace",
+    purpose: "Verify the domain type changes",
+    expectedOutcome: "The domain tests pass",
+    sideEffects: "May write temporary test caches",
+    timeoutSeconds: 30,
   })
   expect(typeof request.id).toBe("string")
   expect(agent.state.pendingToolApproval).toBe(request)
   expect(Object.isFrozen(request)).toBe(true)
-  expect(request.kind).toBe("patch")
-  if (request.kind !== "patch") throw new Error("Expected patch approval")
-  expect(Object.isFrozen(request.paths)).toBe(true)
-  expect(() => (request.paths as string[]).push("src/agent/agent.ts")).toThrow()
-  draftPaths.push("src/application/runtime.ts")
-  expect(request.paths).toEqual(["src/domain.ts"])
+  expect(request.kind).toBe("command")
+  expect(() => {
+    (request as { command: string }).command = "bun test test/other.test.ts"
+  }).toThrow()
+  draft.command = "bun test test/other.test.ts"
+  expect(request.command).toBe("bun test test/domain.test.ts")
   expect(() => {
     (agent.state as {
-      pendingToolApproval: ToolApprovalRequest | undefined
+      pendingToolApproval: TToolApprovalRequest | undefined
     }).pendingToolApproval = undefined
   }).toThrow()
   expect(agent.state.pendingToolApproval).toBe(request)
@@ -564,10 +572,10 @@ test("Agent publishes an immutable approval and approve resumes the pending run"
   )
 })
 
-test("Agent keeps invalid patch decisions and mismatched IDs pending", async () => {
-  const decisions: ToolApprovalDecision[] = []
-  const agent = approvalAgent(patchApprovalDraft(), decisions)
-  const requested = Promise.withResolvers<ToolApprovalRequest>()
+test("Agent keeps mismatched approval IDs pending", async () => {
+  const decisions: TToolApprovalDecision[] = []
+  const agent = approvalAgent(commandApprovalDraft(), decisions)
+  const requested = Promise.withResolvers<TToolApprovalRequest>()
   agent.subscribe((event) => {
     if (event.type === "tool_approval_requested") {
       requested.resolve(event.request)
@@ -580,9 +588,6 @@ test("Agent keeps invalid patch decisions and mismatched IDs pending", async () 
   expect(() => agent.resolveToolApproval("other-approval", "approve")).toThrow(
     "Tool approval ID mismatch",
   )
-  expect(() => agent.resolveToolApproval(request.id, "copy")).toThrow(
-    'Decision "copy" is not allowed for patch approval',
-  )
   expect(agent.state.pendingToolApproval).toBe(request)
 
   agent.resolveToolApproval(request.id, "reject")
@@ -592,22 +597,22 @@ test("Agent keeps invalid patch decisions and mismatched IDs pending", async () 
   expect(agent.state.pendingToolApproval).toBeUndefined()
 })
 
-test("Agent handles sequential patch approvals and keeps the tool available", async () => {
-  const requests: AgentModelRequest[] = []
-  const decisions: ToolApprovalDecision[] = []
-  const patchTool: AgentTool = {
-    name: "apply_patch",
-    approvalKind: "patch",
-    description: "Prepare a patch",
+test("Agent handles sequential command approvals and keeps the tool available", async () => {
+  const requests: IAgentModelRequest[] = []
+  const decisions: TToolApprovalDecision[] = []
+  const commandTool: IAgentTool = {
+    name: "bash",
+    approvalKind: "command",
+    description: "Run a command",
     inputSchema: { type: "object", additionalProperties: false },
     async execute(_input, context) {
       if (!context.requestApproval) throw new Error("Missing approval bridge")
-      const decision = await context.requestApproval(patchApprovalDraft())
+      const decision = await context.requestApproval(commandApprovalDraft())
       decisions.push(decision)
       return decision
     },
   }
-  const model: AgentModel = {
+  const model: IAgentModel = {
     async *stream(request) {
       const index = requests.length
       requests.push({
@@ -618,14 +623,14 @@ test("Agent handles sequential patch approvals and keeps the tool available", as
       if (index === 0) {
         yield {
           type: "tool-call",
-          toolCallId: "first-patch-call",
-          toolName: patchTool.name,
+          toolCallId: "first-command-call",
+          toolName: commandTool.name,
           input: {},
         }
         yield {
           type: "tool-call",
-          toolCallId: "second-patch-call",
-          toolName: patchTool.name,
+          toolCallId: "second-command-call",
+          toolName: commandTool.name,
           input: {},
         }
         yield { type: "finish", reason: "tool-calls" }
@@ -641,10 +646,10 @@ test("Agent handles sequential patch approvals and keeps the tool available", as
       model,
       reasoningEffort: "medium",
     }),
-    tools: [patchTool],
+    tools: [commandTool],
   })
-  const firstRequested = Promise.withResolvers<ToolApprovalRequest>()
-  const secondRequested = Promise.withResolvers<ToolApprovalRequest>()
+  const firstRequested = Promise.withResolvers<TToolApprovalRequest>()
+  const secondRequested = Promise.withResolvers<TToolApprovalRequest>()
   const requested = [firstRequested, secondRequested] as const
   let requestIndex = 0
   agent.subscribe((event) => {
@@ -654,23 +659,23 @@ test("Agent handles sequential patch approvals and keeps the tool available", as
     }
   })
 
-  const patchRun = agent.prompt("Przejmij proszę implementację parsera")
+  const commandRun = agent.prompt("Uruchom proszę testy parsera")
   const firstApproval = await firstRequested.promise
 
   expect(requests[0]?.tools.map((tool) => tool.name)).toEqual([
-    "apply_patch",
+    "bash",
   ])
-  expect(firstApproval.toolCallId).toBe("first-patch-call")
+  expect(firstApproval.toolCallId).toBe("first-command-call")
   agent.resolveToolApproval(firstApproval.id, "reject")
 
   const secondApproval = await secondRequested.promise
-  expect(secondApproval.toolCallId).toBe("second-patch-call")
+  expect(secondApproval.toolCallId).toBe("second-command-call")
   agent.resolveToolApproval(secondApproval.id, "reject")
-  await patchRun.settled
+  await commandRun.settled
 
   expect(decisions).toEqual(["reject", "reject"])
   expect(requests[1]?.tools.map((tool) => tool.name)).toEqual([
-    "apply_patch",
+    "bash",
   ])
   expect(agent.state.messages.map((message) => message.role)).toEqual([
     "user",
@@ -682,9 +687,9 @@ test("Agent handles sequential patch approvals and keeps the tool available", as
 })
 
 test("Agent rejects unknown command decisions and delivers copy", async () => {
-  const decisions: ToolApprovalDecision[] = []
+  const decisions: TToolApprovalDecision[] = []
   const agent = approvalAgent(commandApprovalDraft(), decisions)
-  const requested = Promise.withResolvers<ToolApprovalRequest>()
+  const requested = Promise.withResolvers<TToolApprovalRequest>()
   agent.subscribe((event) => {
     if (event.type === "tool_approval_requested") {
       requested.resolve(event.request)
@@ -696,7 +701,7 @@ test("Agent rejects unknown command decisions and delivers copy", async () => {
 
   expect(() => agent.resolveToolApproval(
     request.id,
-    "later" as ToolApprovalDecision,
+    "later" as TToolApprovalDecision,
   )).toThrow("Invalid tool approval decision: later")
   expect(agent.state.pendingToolApproval).toBe(request)
 
@@ -707,10 +712,10 @@ test("Agent rejects unknown command decisions and delivers copy", async () => {
 })
 
 test("Agent abort settles a waiting approval and clears pending state", async () => {
-  const decisions: ToolApprovalDecision[] = []
-  const events: AgentEvent[] = []
+  const decisions: TToolApprovalDecision[] = []
+  const events: TAgentEvent[] = []
   const agent = approvalAgent(commandApprovalDraft(), decisions)
-  const requested = Promise.withResolvers<ToolApprovalRequest>()
+  const requested = Promise.withResolvers<TToolApprovalRequest>()
   agent.subscribe((event) => {
     events.push(event)
     if (event.type === "tool_approval_requested") {
@@ -741,9 +746,9 @@ test("Agent abort settles a waiting approval and clears pending state", async ()
   })
 })
 
-test("Agent rejects overlap, abort settles the active run, and can clear when idle", async () => {
+test("Agent rejects overlap, abort settles the active run, and can reset when idle", async () => {
   const started = Promise.withResolvers<void>()
-  const model: AgentModel = {
+  const model: IAgentModel = {
     async *stream(request) {
       started.resolve()
       await new Promise<void>((resolve) => {
@@ -769,14 +774,14 @@ test("Agent rejects overlap, abort settles the active run, and can clear when id
   expect(() => agent.prompt("Second")).toThrow(
     "Agent is already processing a prompt",
   )
-  expect(() => agent.clear()).toThrow("Cannot clear while Agent is running")
+  expect(() => agent.reset()).toThrow("Cannot reset while Agent is running")
 
   await Promise.all([agent.abort(), first.settled])
 
   expect(agent.state.isRunning).toBe(false)
   expect(agent.state.lastRunReason).toBe("aborted")
 
-  agent.clear()
+  agent.reset()
 
   expect(agent.state.messages).toEqual([])
   await expect(agent.abort()).resolves.toBeUndefined()
@@ -785,7 +790,7 @@ test("Agent rejects overlap, abort settles the active run, and can clear when id
 test("selected path capabilities survive projection and reach only opted-in tools", async () => {
   const received: unknown[] = []
   const ordinary: unknown[] = []
-  const selectedTool: AgentTool = {
+  const selectedTool: IAgentTool = {
     name: "selected_read",
     description: "Read selected paths",
     inputSchema: { type: "object", additionalProperties: false },
@@ -795,7 +800,7 @@ test("selected path capabilities survive projection and reach only opted-in tool
       return "selected"
     },
   }
-  const ordinaryTool: AgentTool = {
+  const ordinaryTool: IAgentTool = {
     name: "ordinary",
     description: "Ordinary tool",
     inputSchema: { type: "object", additionalProperties: false },
@@ -805,7 +810,7 @@ test("selected path capabilities survive projection and reach only opted-in tool
     },
   }
   let turn = 0
-  const model: AgentModel = {
+  const model: IAgentModel = {
     async *stream() {
       if (turn++ === 0) {
         yield {
@@ -857,7 +862,7 @@ test("selected path capabilities survive projection and reach only opted-in tool
 
 test("selected path capability limit retains the newest prompt", async () => {
   const received: unknown[] = []
-  const selectedTool: AgentTool = {
+  const selectedTool: IAgentTool = {
     name: "selected_read",
     description: "Read selected paths",
     inputSchema: { type: "object", additionalProperties: false },
@@ -868,7 +873,7 @@ test("selected path capability limit retains the newest prompt", async () => {
     },
   }
   let turn = 0
-  const model: AgentModel = {
+  const model: IAgentModel = {
     async *stream() {
       if (turn++ === 0) {
         yield {
@@ -912,7 +917,7 @@ test("selected path capability limit retains the newest prompt", async () => {
   expect(references.at(-1)?.path).toBe("/outside/current.ts")
 })
 
-function completedModel(): AgentModel {
+function completedModel(): IAgentModel {
   return {
     async *stream() {
       yield { type: "text-start", id: "answer" }
@@ -933,10 +938,10 @@ function pathReference(path: string) {
 }
 
 function approvalAgent(
-  draft: ToolApprovalDraft,
-  decisions: ToolApprovalDecision[],
+  draft: TToolApprovalDraft,
+  decisions: TToolApprovalDecision[],
 ): Agent {
-  const tool: AgentTool = {
+  const tool: IAgentTool = {
     name: "approval_tool",
     approvalKind: draft.kind,
     description: "Request approval",
@@ -949,7 +954,7 @@ function approvalAgent(
     },
   }
   let requestCount = 0
-  const model: AgentModel = {
+  const model: IAgentModel = {
     async *stream() {
       if (requestCount++ === 0) {
         yield {
@@ -975,17 +980,7 @@ function approvalAgent(
   })
 }
 
-function patchApprovalDraft(): ToolApprovalDraft {
-  return {
-    kind: "patch",
-    title: "Apply patch",
-    explanation: "Update a file",
-    diff: "--- a/file.ts\n+++ b/file.ts",
-    paths: ["file.ts"],
-  }
-}
-
-function commandApprovalDraft(): ToolApprovalDraft {
+function commandApprovalDraft(): TToolApprovalDraft {
   return {
     kind: "command",
     title: "Run tests",

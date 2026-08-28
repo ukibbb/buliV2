@@ -5,7 +5,7 @@ import {
     BuliUiStateStore,
     errorMessage,
 } from "@/app/ui/controller/state"
-import type { UserInputContent } from "@/agent"
+import type { IUserInputContent } from "@/agent"
 
 export type TBuliInputSubmitResult = "consumed" | "retained"
 export type TBuliInputDelivery = "auto" | "followUp"
@@ -16,7 +16,7 @@ interface IBuliInputSubmissionOptions {
     readonly commands: readonly IBuliCommandInfo[]
     readonly activeSessionId: () => string | null
     readonly executeCommand: (name: string, args: string) => Promise<boolean>
-    readonly consumeInput: (input: UserInputContent) => void
+    readonly consumeInput: (input: IUserInputContent) => void
 }
 
 /** Parses and delivers commands, prompts, steering, and follow-up input. */
@@ -29,7 +29,7 @@ export class BuliInputSubmission {
         name: string,
         args: string,
     ) => Promise<boolean>
-    private readonly consumeInput: (input: UserInputContent) => void
+    private readonly consumeInput: (input: IUserInputContent) => void
     private submissionPending = false
 
     constructor(options: IBuliInputSubmissionOptions) {
@@ -42,7 +42,7 @@ export class BuliInputSubmission {
     }
 
     readonly submit = async (
-        input: UserInputContent,
+        input: IUserInputContent,
         delivery: TBuliInputDelivery = "auto",
     ): Promise<TBuliInputSubmitResult> => {
         if (this.store.isDisposed) return "retained"
@@ -62,8 +62,8 @@ export class BuliInputSubmission {
     }
 
     private async submitOnce(
-        input: UserInputContent,
-        normalized: UserInputContent,
+        input: IUserInputContent,
+        normalized: IUserInputContent,
         delivery: TBuliInputDelivery,
     ): Promise<TBuliInputSubmitResult> {
         this.store.setSnapshot({

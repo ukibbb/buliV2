@@ -1,9 +1,9 @@
 import type {
-    UserImageAttachment,
-    UserInput,
-    UserInputContent,
-    UserPathReference,
-    UserSourceText,
+    IUserImageAttachment,
+    TUserInput,
+    IUserInputContent,
+    IUserPathReference,
+    IUserSourceText,
 } from "@/agent"
 import { displayTextWidth } from "@/common/display-text"
 
@@ -13,7 +13,7 @@ export interface IPathMention {
     readonly end: number
 }
 
-export function cloneUserInput(input: UserInputContent): UserInputContent {
+export function cloneUserInput(input: IUserInputContent): IUserInputContent {
     return {
         text: input.text,
         ...(input.references?.length
@@ -25,18 +25,18 @@ export function cloneUserInput(input: UserInputContent): UserInputContent {
     }
 }
 
-export function sameUserInput(left: UserInputContent, right: UserInputContent): boolean {
+export function sameUserInput(left: IUserInputContent, right: IUserInputContent): boolean {
     return left.text === right.text
         && sameResources(left.references ?? [], right.references ?? [])
         && sameResources(left.attachments ?? [], right.attachments ?? [])
 }
 
-export function trimUserInput(input: UserInputContent): UserInputContent {
+export function trimUserInput(input: IUserInputContent): IUserInputContent {
     const leading = input.text.match(/^\s*/)?.[0] ?? ""
     const text = input.text.trim()
     const leadingWidth = promptOffsetWidth(leading)
     const textWidth = promptOffsetWidth(text)
-    const adjustSource = (source: UserSourceText): UserSourceText | undefined => {
+    const adjustSource = (source: IUserSourceText): IUserSourceText | undefined => {
         const start = source.start - leadingWidth
         const end = source.end - leadingWidth
         if (start < 0 || end > textWidth || end <= start) return undefined
@@ -57,10 +57,10 @@ export function trimUserInput(input: UserInputContent): UserInputContent {
     }
 }
 
-export function mergeUserInputs(inputs: readonly UserInput[]): UserInputContent {
+export function mergeUserInputs(inputs: readonly TUserInput[]): IUserInputContent {
     let text = ""
-    const references: UserPathReference[] = []
-    const attachments: UserImageAttachment[] = []
+    const references: IUserPathReference[] = []
+    const attachments: IUserImageAttachment[] = []
     for (const value of inputs) {
         const input = typeof value === "string" ? { text: value } : value
         if (!input.text.trim() && !input.attachments?.length) continue
@@ -113,7 +113,7 @@ export function promptOffsetWidth(value: string): number {
     return displayTextWidth(value)
 }
 
-function shiftSource(source: UserSourceText, shift: number): UserSourceText {
+function shiftSource(source: IUserSourceText, shift: number): IUserSourceText {
     return {
         ...source,
         start: source.start + shift,
@@ -122,8 +122,8 @@ function shiftSource(source: UserSourceText, shift: number): UserSourceText {
 }
 
 function sameResources(
-    left: readonly (UserPathReference | UserImageAttachment)[],
-    right: readonly (UserPathReference | UserImageAttachment)[],
+    left: readonly (IUserPathReference | IUserImageAttachment)[],
+    right: readonly (IUserPathReference | IUserImageAttachment)[],
 ): boolean {
     if (left.length !== right.length) return false
     return left.every((resource, index) => {

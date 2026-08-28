@@ -2,8 +2,8 @@ import { Type } from "typebox"
 import { Value } from "typebox/value"
 
 import type {
-    AgentMessage,
-    AgentTool,
+    TAgentMessage,
+    IAgentTool,
 } from "@/agent"
 import { OPENAI_PROVIDER_ID } from "@/providers/openai/auth/openai-auth"
 import type { TOpenAiCodexSearch } from "@/providers/openai/transport/codex-fetch"
@@ -109,7 +109,7 @@ export interface IOpenAiWebSearchToolOptions {
 /** Creates the host-owned standalone web search tool backed by ChatGPT OAuth. */
 export function createOpenAiWebSearchTool(
     options: IOpenAiWebSearchToolOptions,
-): AgentTool<typeof WEB_SEARCH_INPUT_SCHEMA> {
+): IAgentTool<typeof WEB_SEARCH_INPUT_SCHEMA> {
     return {
         name: "web_search",
         description: WEB_SEARCH_DESCRIPTION,
@@ -178,7 +178,7 @@ interface ISearchMessage {
 }
 
 function recentSearchInput(
-    messages: readonly AgentMessage[],
+    messages: readonly TAgentMessage[],
 ): readonly ISearchMessage[] {
     const userIndexes = messages.flatMap((message, index) => (
         message.role === "user" ? [index] : []

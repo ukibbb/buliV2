@@ -1,30 +1,33 @@
 import { expect, test } from "bun:test"
 import { Buffer } from "node:buffer"
+import { Type } from "typebox"
 
 import type {
-  AgentEvent,
-  AgentInputQueue,
-  AgentModel,
-  AgentModelEvent,
-  AgentModelRequest,
-  AgentTool,
-  AgentToolContext,
-  UserMessage,
+  TAgentEvent,
+  IAgentInputQueue,
+  IAgentModel,
+  TAgentModelEvent,
+  IAgentModelRequest,
+  IAgentTool,
+  IAgentToolContext,
+  IToolOutputStore,
+  IUserMessage,
 } from "@/agent"
 import { runAgentLoop } from "@/agent"
+import { EphemeralToolOutputStore } from "@/tools"
 
 const RUN_ID = "run-1"
 
-class ScriptedModel implements AgentModel {
-  readonly requests: AgentModelRequest[] = []
+class ScriptedModel implements IAgentModel {
+  readonly requests: IAgentModelRequest[] = []
 
   constructor(
     private readonly script:
-      | readonly AgentModelEvent[]
-      | ((iteration: number) => readonly AgentModelEvent[]),
+      | readonly TAgentModelEvent[]
+      | ((iteration: number) => readonly TAgentModelEvent[]),
   ) {}
 
-  async *stream(request: AgentModelRequest): AsyncIterable<AgentModelEvent> {
+  async *stream(request: IAgentModelRequest): AsyncIterable<TAgentModelEvent> {
     const iteration = this.requests.length
     this.requests.push({
       ...request,
@@ -47,7 +50,7 @@ test("emits an explicit lifecycle for a text response", async () => {
     { type: "text-end", id: "answer" },
     { type: "finish", reason: "stop" },
   ])
-  const events: AgentEvent[] = []
+  const events: TAgentEvent[] = []
 
   const result = await runAgentLoop(
     userMessage("Question"),
@@ -128,7 +131,7 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
   let maximumActiveToolCalls = 0
   const executionRunIds: string[] = []
   const executionMessages: Array<readonly unknown[] | undefined> = []
-  const readFileTool: AgentTool = {
+  const readFileTool: IAgentTool = {
     name: "read_file",
     description: "Read a file",
     inputSchema: { type: "object" },
@@ -144,7 +147,7 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
       return `contents:${String(input.path)}`
     },
   }
-  const events: AgentEvent[] = []
+  const events: TAgentEvent[] = []
 
   const result = await runAgentLoop(
     userMessage("Read"),
@@ -293,7 +296,7 @@ test("does not execute tool calls from an output-limited response", async () => 
       ]
     : [{ type: "finish", reason: "stop" }])
   let executions = 0
-  const tool: AgentTool = {
+  const tool: IAgentTool = {
     name: "write_something",
     description: "Mutate external state",
     inputSchema: { type: "object" },
@@ -334,10 +337,10 @@ test("does not execute tool calls from an output-limited response", async () => 
 
 test("supplies session, model, and conversation context to host tools", async () => {
   let iteration = 0
-  const model: AgentModel = {
+  const model: IAgentModel = {
     async *stream(request) {
       request.reportProviderAccountId?.("account-context")
-      const events: readonly AgentModelEvent[] = iteration++ === 0
+      const events: readonly TAgentModelEvent[] = iteration++ === 0
         ? [
             {
               type: "tool-call",
@@ -351,8 +354,8 @@ test("supplies session, model, and conversation context to host tools", async ()
       for (const event of events) yield event
     },
   }
-  let observedContext: AgentToolContext | undefined
-  const tool: AgentTool = {
+  let observedContext: IAgentToolContext | undefined
+  const tool: IAgentTool = {
     name: "inspect_context",
     description: "Inspect host context",
     inputSchema: { type: "object", additionalProperties: false },
@@ -493,7 +496,7 @@ test("turns invalid structured tool results into errors", async () => {
   ]
 
   for (const testCase of cases) {
-    const execute = (async () => testCase.value) as unknown as AgentTool["execute"]
+    const execute = (async () => testCase.value) as unknown as IAgentTool["execute"]
     const { toolResult } = await executeSingleTool(execute)
     expect(toolResult).toMatchObject({
       content: testCase.error,
@@ -508,12 +511,14 @@ test("preserves a committed error when cancellation races with a tool", async ()
   const controller = new AbortController()
   const { result, toolResult } = await executeSingleTool(async () => {
     controller.abort("Stopped by test")
-    throw Object.assign(new Error("Patch commit completed"), { committed: true })
+    throw Object.assign(new Error("Command completed after cancellation"), {
+      committed: true,
+    })
   }, controller.signal)
 
   expect(result.reason).toBe("aborted")
   expect(toolResult).toMatchObject({
-    content: "Patch commit completed",
+    content: "Command completed after cancellation",
     isError: true,
     outcome: "committed-after-abort",
     summary: expect.stringMatching(/workspace changes were committed despite cancellation/i),
@@ -603,7 +608,7 @@ test("always gives tools an approval bridge with exact execution context", async
       ]
     : [{ type: "finish", reason: "stop" }])
   const decisions: string[] = []
-  const tool: AgentTool = {
+  const tool: IAgentTool = {
     name: "run_command",
     approvalKind: "command",
     description: "Run a command",
@@ -680,25 +685,19 @@ test("allows one approval request per tool call", async () => {
     ? [
         {
           type: "tool-call",
-          toolCallId: "call-patch",
-          toolName: "apply_patch",
+          toolCallId: "call-command",
+          toolName: "run_command",
           input: {},
         },
         { type: "finish", reason: "tool-calls" },
       ]
     : [{ type: "finish", reason: "stop" }])
   let approvals = 0
-  const draft = {
-    kind: "patch" as const,
-    title: "Apply patch",
-    explanation: "Update a file",
-    diff: "--- a/file.ts\n+++ b/file.ts",
-    paths: ["file.ts"],
-  }
-  const tool: AgentTool = {
-    name: "apply_patch",
-    approvalKind: "patch",
-    description: "Apply a patch",
+  const draft = commandApprovalDraft()
+  const tool: IAgentTool = {
+    name: "run_command",
+    approvalKind: "command",
+    description: "Run a command",
     inputSchema: { type: "object", additionalProperties: false },
     async execute(_input, context) {
       if (!context.requestApproval) throw new Error("Missing approval bridge")
@@ -709,7 +708,7 @@ test("allows one approval request per tool call", async () => {
   }
 
   const result = await runAgentLoop(
-    userMessage("Apply the patch"),
+    userMessage("Run the command"),
     {
       systemPrompt: "System",
       messages: [],
@@ -740,20 +739,19 @@ test("allows one approval request per tool call", async () => {
 })
 
 test("exposes every registered tool for every prompt", async () => {
-  const readTool: AgentTool = {
+  const readTool: IAgentTool = {
     name: "read",
     description: "Read",
     inputSchema: { type: "object" },
     execute: async () => "read",
   }
-  const patchTool: AgentTool = {
-    name: "apply_patch",
-    approvalKind: "patch",
-    description: "Patch",
+  const editTool: IAgentTool = {
+    name: "edit_file",
+    description: "Edit",
     inputSchema: { type: "object" },
-    execute: async () => "patch",
+    execute: async () => "edit",
   }
-  const commandTool: AgentTool = {
+  const commandTool: IAgentTool = {
     name: "bash",
     approvalKind: "command",
     description: "Command",
@@ -774,7 +772,7 @@ test("exposes every registered tool for every prompt", async () => {
       {
         systemPrompt: "System",
         messages: [],
-        tools: [readTool, patchTool, commandTool],
+        tools: [readTool, editTool, commandTool],
       },
       {
         sessionId: "session-1",
@@ -788,7 +786,7 @@ test("exposes every registered tool for every prompt", async () => {
 
     expect(model.requests[0]?.tools.map((tool) => tool.name)).toEqual([
       "read",
-      "apply_patch",
+      "edit_file",
       "bash",
     ])
   }
@@ -796,12 +794,11 @@ test("exposes every registered tool for every prompt", async () => {
 
 test("exposes action tools independently of message history", async () => {
   const model = new ScriptedModel([{ type: "finish", reason: "stop" }])
-  const patchTool: AgentTool = {
-    name: "apply_patch",
-    approvalKind: "patch",
-    description: "Patch",
+  const editTool: IAgentTool = {
+    name: "edit_file",
+    description: "Edit",
     inputSchema: { type: "object" },
-    execute: async () => "patch",
+    execute: async () => "edit",
   }
   const previousRequest = {
     ...userMessage("Please handle the old task"),
@@ -814,7 +811,7 @@ test("exposes action tools independently of message history", async () => {
     {
       systemPrompt: "System",
       messages: [previousRequest],
-      tools: [patchTool],
+      tools: [editTool],
     },
     {
       sessionId: "session-1",
@@ -827,7 +824,7 @@ test("exposes action tools independently of message history", async () => {
   )
 
   expect(model.requests[0]?.tools.map((tool) => tool.name)).toEqual([
-    "apply_patch",
+    "edit_file",
   ])
 })
 
@@ -848,8 +845,8 @@ test("keeps all tools available across read and approval continuations", async (
       return [
         {
           type: "tool-call",
-          toolCallId: "patch-after-read",
-          toolName: "apply_patch",
+          toolCallId: "command-after-read",
+          toolName: "bash",
           input: {},
         },
         { type: "finish", reason: "tool-calls" },
@@ -858,26 +855,20 @@ test("keeps all tools available across read and approval continuations", async (
     return [{ type: "finish", reason: "stop" }]
   })
   let approvals = 0
-  const readTool: AgentTool = {
+  const readTool: IAgentTool = {
     name: "read",
     description: "Read",
     inputSchema: { type: "object", additionalProperties: false },
     execute: async () => "contents",
   }
-  const patchTool: AgentTool = {
-    name: "apply_patch",
-    approvalKind: "patch",
-    description: "Patch",
+  const commandTool: IAgentTool = {
+    name: "bash",
+    approvalKind: "command",
+    description: "Run a command",
     inputSchema: { type: "object", additionalProperties: false },
     async execute(_input, context) {
       if (!context.requestApproval) throw new Error("Missing approval bridge")
-      return await context.requestApproval({
-        kind: "patch",
-        title: "Patch",
-        explanation: "Test",
-        diff: "--- a/file\n+++ b/file",
-        paths: ["file"],
-      })
+      return await context.requestApproval(commandApprovalDraft())
     },
   }
 
@@ -886,7 +877,7 @@ test("keeps all tools available across read and approval continuations", async (
     {
       systemPrompt: "System",
       messages: [],
-      tools: [readTool, patchTool],
+      tools: [readTool, commandTool],
     },
     {
       sessionId: "session-1",
@@ -907,15 +898,15 @@ test("keeps all tools available across read and approval continuations", async (
   expect(approvals).toBe(1)
   expect(model.requests[0]?.tools.map((tool) => tool.name)).toEqual([
     "read",
-    "apply_patch",
+    "bash",
   ])
   expect(model.requests[1]?.tools.map((tool) => tool.name)).toEqual([
     "read",
-    "apply_patch",
+    "bash",
   ])
   expect(model.requests[2]?.tools.map((tool) => tool.name)).toEqual([
     "read",
-    "apply_patch",
+    "bash",
   ])
 })
 
@@ -924,14 +915,14 @@ test("lets each action call request its own approval", async () => {
     ? [
         {
           type: "tool-call",
-          toolCallId: "first-patch",
-          toolName: "apply_patch",
+          toolCallId: "first-command",
+          toolName: "bash",
           input: {},
         },
         {
           type: "tool-call",
-          toolCallId: "second-patch",
-          toolName: "apply_patch",
+          toolCallId: "second-command",
+          toolName: "bash",
           input: {},
         },
         { type: "finish", reason: "tool-calls" },
@@ -939,26 +930,20 @@ test("lets each action call request its own approval", async () => {
     : [{ type: "finish", reason: "stop" }])
   let executions = 0
   let approvals = 0
-  const tool: AgentTool = {
-    name: "apply_patch",
-    approvalKind: "patch",
-    description: "Patch",
+  const tool: IAgentTool = {
+    name: "bash",
+    approvalKind: "command",
+    description: "Run a command",
     inputSchema: { type: "object", additionalProperties: false },
     async execute(_input, context) {
       executions += 1
       if (!context.requestApproval) throw new Error("Missing approval bridge")
-      return await context.requestApproval({
-        kind: "patch",
-        title: "Patch",
-        explanation: "Test",
-        diff: "--- a/file\n+++ b/file",
-        paths: ["file"],
-      })
+      return await context.requestApproval(commandApprovalDraft())
     },
   }
 
   const result = await runAgentLoop(
-    userMessage("Prepare both patches"),
+    userMessage("Run both commands"),
     {
       systemPrompt: "System",
       messages: [],
@@ -983,10 +968,10 @@ test("lets each action call request its own approval", async () => {
   expect(executions).toBe(2)
   expect(approvals).toBe(2)
   expect(model.requests[0]?.tools.map((entry) => entry.name)).toEqual([
-    "apply_patch",
+    "bash",
   ])
   expect(model.requests[1]?.tools.map((entry) => entry.name)).toEqual([
-    "apply_patch",
+    "bash",
   ])
   expect(result.messages.filter((message) => message.role === "toolResult"))
     .toHaveLength(2)
@@ -996,7 +981,7 @@ test("lets each action call request its own approval", async () => {
 
 test("injects steering only after the complete tool batch", async () => {
   const order: string[] = []
-  const steering: UserMessage[] = []
+  const steering: IUserMessage[] = []
   const model = new ScriptedModel((iteration) => {
     order.push(`model:${iteration}`)
     return iteration === 0
@@ -1017,7 +1002,7 @@ test("injects steering only after the complete tool batch", async () => {
         ]
       : [{ type: "finish", reason: "stop" }]
   })
-  const tool: AgentTool = {
+  const tool: IAgentTool = {
     name: "read_file",
     description: "Read a file",
     inputSchema: { type: "object" },
@@ -1026,7 +1011,7 @@ test("injects steering only after the complete tool batch", async () => {
       return String(input.path)
     },
   }
-  const events: AgentEvent[] = []
+  const events: TAgentEvent[] = []
 
   const result = await runAgentLoop(
     userMessage("Read both files"),
@@ -1093,8 +1078,8 @@ test("injects steering only after the complete tool batch", async () => {
 })
 
 test("delivers follow-up only after tool continuation and steering", async () => {
-  const steering: UserMessage[] = []
-  const followUps: UserMessage[] = []
+  const steering: IUserMessage[] = []
+  const followUps: IUserMessage[] = []
   const model = new ScriptedModel((iteration) => iteration === 0
     ? [
         {
@@ -1106,7 +1091,7 @@ test("delivers follow-up only after tool continuation and steering", async () =>
         { type: "finish", reason: "tool-calls" },
       ]
     : [{ type: "finish", reason: "stop" }])
-  const tool: AgentTool = {
+  const tool: IAgentTool = {
     name: "read_file",
     description: "Read a file",
     inputSchema: { type: "object" },
@@ -1223,7 +1208,7 @@ test("turns an unknown local tool into a model-visible error", async () => {
 
 test("gives abort precedence over a racing provider finish", async () => {
   const controller = new AbortController()
-  const model: AgentModel = {
+  const model: IAgentModel = {
     async *stream() {
       yield {
         type: "tool-call",
@@ -1290,7 +1275,7 @@ test("stops a tool continuation when aborted during turn_end", async () => {
     },
     { type: "finish", reason: "tool-calls" },
   ])
-  const tool: AgentTool = {
+  const tool: IAgentTool = {
     name: "read_file",
     description: "Read a file",
     inputSchema: { type: "object" },
@@ -1354,13 +1339,13 @@ test("gives abort precedence over a provider error during turn_end", async () =>
 
 test("rejects duplicate tool names before starting the model", async () => {
   const model = new ScriptedModel([{ type: "finish", reason: "stop" }])
-  const duplicate: AgentTool = {
+  const duplicate: IAgentTool = {
     name: "read_file",
     description: "Read",
     inputSchema: { type: "object" },
     execute: async () => "unused",
   }
-  const events: AgentEvent[] = []
+  const events: TAgentEvent[] = []
 
   await expect(runAgentLoop(
     userMessage("Question"),
@@ -1398,7 +1383,7 @@ test("turns invalid tool input into a model-visible result without executing", a
       ]
     : [{ type: "finish", reason: "stop" }])
   let executionCount = 0
-  const tool: AgentTool = {
+  const tool: IAgentTool = {
     name: "read_file",
     description: "Read",
     inputSchema: {
@@ -1443,6 +1428,59 @@ test("turns invalid tool input into a model-visible result without executing", a
   expect(model.requests[1]?.messages).toContainEqual(toolResult)
 })
 
+test("prepares arguments before normalizing optional nulls and converting values", async () => {
+  const model = new ScriptedModel((iteration) => iteration === 0
+    ? [
+        {
+          type: "tool-call",
+          toolCallId: "converted-call",
+          toolName: "converted",
+          input: {
+            count: "2",
+            label: null,
+            nested: { enabled: null },
+          },
+        },
+        { type: "finish", reason: "tool-calls" },
+      ]
+    : [{ type: "finish", reason: "stop" }])
+  let receivedInput: Record<string, unknown> | undefined
+  const tool: IAgentTool = {
+    name: "converted",
+    description: "Convert arguments",
+    inputSchema: Type.Object({
+      count: Type.Number(),
+      label: Type.Optional(Type.String()),
+      nested: Type.Object({ enabled: Type.Optional(Type.Boolean()) }),
+    }),
+    prepareArguments: (input) => {
+      const args = input as Record<string, unknown>
+      return args.label === null ? { ...args, label: "prepared" } : args
+    },
+    execute: async (input) => {
+      receivedInput = input
+      return "converted"
+    },
+  }
+
+  await runAgentLoop(
+    userMessage("Convert"),
+    { systemPrompt: "System", messages: [], tools: [tool] },
+    {
+      sessionId: "session-1",
+      runId: RUN_ID,
+      model,
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+      emit: () => {},
+      now: timeGenerator(),
+      generateId: idGenerator(),
+    },
+  )
+
+  expect(receivedInput).toEqual({ count: 2, label: "prepared", nested: {} })
+})
+
 test("serializes tool progress before the final result and ignores late updates", async () => {
   const model = new ScriptedModel((iteration) => iteration === 0
     ? [
@@ -1456,7 +1494,7 @@ test("serializes tool progress before the final result and ignores late updates"
       ]
     : [{ type: "finish", reason: "stop" }])
   let lateProgress: ((progress: string) => void) | undefined
-  const tool: AgentTool = {
+  const tool: IAgentTool = {
     name: "scan",
     description: "Scan",
     inputSchema: { type: "object", additionalProperties: false },
@@ -1468,7 +1506,7 @@ test("serializes tool progress before the final result and ignores late updates"
       return "complete"
     },
   }
-  const events: AgentEvent[] = []
+  const events: TAgentEvent[] = []
 
   await runAgentLoop(
     userMessage("Scan"),
@@ -1524,7 +1562,7 @@ test("serializes tool progress before the final result and ignores late updates"
     ])
 })
 
-test("truncates custom tool content and summary before persistence and continuation", async () => {
+test("retains complete custom tool output before bounded persistence and continuation", async () => {
   const model = new ScriptedModel((iteration) => iteration === 0
     ? [
         {
@@ -1536,7 +1574,7 @@ test("truncates custom tool content and summary before persistence and continuat
         { type: "finish", reason: "tool-calls" },
       ]
     : [{ type: "finish", reason: "stop" }])
-  const tool: AgentTool = {
+  const tool: IAgentTool = {
     name: "large",
     description: "Large output",
     inputSchema: { type: "object", additionalProperties: false },
@@ -1547,6 +1585,7 @@ test("truncates custom tool content and summary before persistence and continuat
     }),
   }
 
+  const store = new EphemeralToolOutputStore()
   const result = await runAgentLoop(
     userMessage("Run"),
     {
@@ -1563,6 +1602,7 @@ test("truncates custom tool content and summary before persistence and continuat
       emit: () => {},
       now: timeGenerator(),
       generateId: idGenerator(),
+      toolOutputStore: store,
     },
   )
 
@@ -1574,18 +1614,185 @@ test("truncates custom tool content and summary before persistence and continuat
   if (continued?.role !== "toolResult") throw new Error("Expected continued result")
   expect(persisted).toEqual(continued)
   expect(persisted.outcome).toBe("manual")
-  expect(persisted.content).toEndWith("... output truncated")
+  expect(persisted.content).toContain("Complete tool result stored as outputId=")
+  expect(persisted.content).toEndWith("... output preview ended")
   expect(Buffer.byteLength(persisted.content, "utf8")).toBeLessThanOrEqual(
     100_000,
   )
-  expect(persisted.summary).toEndWith("... output truncated")
+  expect(persisted.summary).toContain("Complete summary stored as outputId=")
   expect(Buffer.byteLength(persisted.summary ?? "", "utf8")).toBeLessThanOrEqual(
     100_000,
   )
+  const outputId = /outputId="([^"]+)"/.exec(persisted.content)?.[1]
+  expect(outputId).toBeString()
+  expect((await store.readPage({
+    sessionId: "session-1",
+    outputId: outputId!,
+    part: "content",
+    encoding: "text",
+    offset: 0,
+    maxBytes: 200_000,
+    maxLines: 2_000,
+  })).content).toBe("x".repeat(100_001))
+  expect((await store.readPage({
+    sessionId: "session-1",
+    outputId: outputId!,
+    part: "summary",
+    encoding: "text",
+    offset: 0,
+    maxBytes: 200_000,
+    maxLines: 2_000,
+  })).content).toBe("y".repeat(100_001))
+  await store.dispose()
+})
+
+test("returns a durable failure when oversized manual output cannot be stored", async () => {
+  const model = new ScriptedModel((iteration) => iteration === 0
+    ? [
+        {
+          type: "tool-call",
+          toolCallId: "large-manual-call",
+          toolName: "large-manual",
+          input: {},
+        },
+        { type: "finish", reason: "tool-calls" },
+      ]
+    : [{ type: "finish", reason: "stop" }])
+  const tool: IAgentTool = {
+    name: "large-manual",
+    description: "Large manual output",
+    inputSchema: { type: "object", additionalProperties: false },
+    execute: async () => ({
+      content: "x".repeat(100_001),
+      outcome: "manual",
+    }),
+  }
+
+  const result = await runAgentLoop(
+    userMessage("Run"),
+    { systemPrompt: "System", messages: [], tools: [tool] },
+    {
+      sessionId: "session-1",
+      runId: RUN_ID,
+      model,
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+      emit: () => {},
+      now: timeGenerator(),
+      generateId: idGenerator(),
+    },
+  )
+
+  expect(result.messages.find((message) => message.role === "toolResult"))
+    .toMatchObject({
+      role: "toolResult",
+      isError: true,
+      outcome: "failed",
+      summary: "Complete tool output unavailable",
+    })
+})
+
+test("bounds storage failure details and marks completed side effects unknown", async () => {
+  const model = new ScriptedModel((iteration) => iteration === 0
+    ? [
+        {
+          type: "tool-call",
+          toolCallId: "failed-store-call",
+          toolName: "failed-store",
+          input: {},
+        },
+        { type: "finish", reason: "tool-calls" },
+      ]
+    : [{ type: "finish", reason: "stop" }])
+  const tool: IAgentTool = {
+    name: "failed-store",
+    description: "Fail output storage",
+    inputSchema: { type: "object", additionalProperties: false },
+    execute: async () => "x".repeat(100_001),
+  }
+  const store: IToolOutputStore = {
+    store: async () => {
+      throw new Error("storage failure ".repeat(20_000))
+    },
+    createWriter: async () => {
+      throw new Error("unused")
+    },
+    readPage: async () => {
+      throw new Error("unused")
+    },
+    dispose: async () => {},
+  }
+
+  const result = await runAgentLoop(
+    userMessage("Run"),
+    { systemPrompt: "System", messages: [], tools: [tool] },
+    {
+      sessionId: "session-1",
+      runId: RUN_ID,
+      model,
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+      emit: () => {},
+      now: timeGenerator(),
+      generateId: idGenerator(),
+      toolOutputStore: store,
+    },
+  )
+
+  const toolResult = result.messages.find((message) => message.role === "toolResult")
+  expect(toolResult).toMatchObject({
+    role: "toolResult",
+    isError: true,
+    outcome: "effects-unknown",
+    summary: "Complete tool output unavailable",
+  })
+  if (toolResult?.role !== "toolResult") throw new Error("Expected tool result")
+  expect(toolResult.content).toStartWith("The complete result is unavailable")
+  expect(Buffer.byteLength(toolResult.content, "utf8")).toBeLessThanOrEqual(100_000)
+})
+
+test("keeps output from tools that declare their own truncation", async () => {
+  const content = "x".repeat(100_001)
+  const model = new ScriptedModel((iteration) => iteration === 0
+    ? [
+        {
+          type: "tool-call",
+          toolCallId: "self-truncated-call",
+          toolName: "self-truncated",
+          input: {},
+        },
+        { type: "finish", reason: "tool-calls" },
+      ]
+    : [{ type: "finish", reason: "stop" }])
+  const tool: IAgentTool = {
+    name: "self-truncated",
+    description: "Self-truncated output",
+    inputSchema: { type: "object", additionalProperties: false },
+    selfTruncatesOutput: true,
+    execute: async () => content,
+  }
+
+  const result = await runAgentLoop(
+    userMessage("Run"),
+    { systemPrompt: "System", messages: [], tools: [tool] },
+    {
+      sessionId: "session-1",
+      runId: RUN_ID,
+      model,
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+      emit: () => {},
+      now: timeGenerator(),
+      generateId: idGenerator(),
+    },
+  )
+
+  expect(result.messages.find((message) => message.role === "toolResult"))
+    .toMatchObject({ content, isError: false, outcome: "completed" })
 })
 
 async function executeSingleTool(
-  execute: AgentTool["execute"],
+  execute: IAgentTool["execute"],
   signal: AbortSignal = new AbortController().signal,
 ) {
   const model = new ScriptedModel((iteration) => iteration === 0
@@ -1628,8 +1835,8 @@ async function executeSingleTool(
 }
 
 function testInputQueue(
-  overrides: Partial<AgentInputQueue>,
-): AgentInputQueue {
+  overrides: Partial<IAgentInputQueue>,
+): IAgentInputQueue {
   return {
     hasSteering: () => false,
     takeSteering: () => undefined,
@@ -1661,4 +1868,18 @@ function timeGenerator(): () => number {
 function idGenerator(): () => string {
   let value = 0
   return () => `generated-${++value}`
+}
+
+function commandApprovalDraft() {
+  return {
+    kind: "command" as const,
+    title: "Run focused tests",
+    explanation: "Execute the requested verification command",
+    command: "bun test test/agent-loop.test.ts",
+    cwd: "/workspace",
+    purpose: "Verify agent behavior",
+    expectedOutcome: "The focused tests pass",
+    sideEffects: "May write temporary test caches",
+    timeoutSeconds: 30,
+  }
 }

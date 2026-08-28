@@ -1,18 +1,18 @@
 import type {
-    ToolApprovalDecision,
-    ToolApprovalDraft,
+    TToolApprovalDecision,
+    TToolApprovalDraft,
 } from "@/agent/tool-approval"
 import type {
-    AgentMessage,
-    UserPathReference,
+    TAgentMessage,
+    IUserPathReference,
 } from "@/agent/messages"
-import type { ModelProfile } from "@/agent/model-values"
+import type { IModelProfile } from "@/agent/model-values"
 import type { Static, TSchema } from "typebox"
 
-export type ToolApprovalKind = ToolApprovalDraft["kind"]
+export type TToolApprovalKind = TToolApprovalDraft["kind"]
 
 /** Final outcome of a local tool execution stored in conversation history. */
-export type ToolExecutionOutcome =
+export type TToolExecutionOutcome =
     | "completed"
     | "rejected"
     | "manual"
@@ -21,7 +21,7 @@ export type ToolExecutionOutcome =
     | "effects-unknown"
 
 /** Model-visible tool definition without local execution code. */
-export interface AgentToolDescriptor<
+export interface IAgentToolDescriptor<
     TInputSchema extends TSchema = TSchema,
 > {
     readonly name: string
@@ -30,33 +30,35 @@ export interface AgentToolDescriptor<
 }
 
 /** Host-owned context supplied to one local tool invocation. */
-export interface AgentToolContext {
+export interface IAgentToolContext {
     readonly sessionId: string
     readonly toolCallId: string
     readonly runId: string
-    readonly modelProfile?: ModelProfile
+    readonly modelProfile?: IModelProfile
     readonly providerAccountId?: string
-    readonly messages?: readonly AgentMessage[]
-    readonly selectedPathReferences?: readonly UserPathReference[]
+    readonly messages?: readonly TAgentMessage[]
+    readonly selectedPathReferences?: readonly IUserPathReference[]
     readonly signal: AbortSignal
     readonly reportProgress?: (progress: string) => void
     readonly requestApproval?: (
-        draft: ToolApprovalDraft,
-    ) => Promise<ToolApprovalDecision>
+        draft: TToolApprovalDraft,
+    ) => Promise<TToolApprovalDecision>
 }
 
-export interface AgentToolResult {
+export interface IAgentToolResult {
     readonly content: string
-    readonly outcome?: ToolExecutionOutcome
+    readonly outcome?: TToolExecutionOutcome
     readonly summary?: string
 }
 
 /** Executable host tool paired with the descriptor exposed to a model. */
-export interface AgentTool<
+export interface IAgentTool<
     // `any` is the schema-erased form used by heterogeneous tool registries.
     TInputSchema extends TSchema = any,
-> extends AgentToolDescriptor<TInputSchema> {
-    readonly approvalKind?: ToolApprovalKind
+> extends IAgentToolDescriptor<TInputSchema> {
+    readonly approvalKind?: TToolApprovalKind
+    readonly prepareArguments?: (input: unknown) => unknown
+    readonly selfTruncatesOutput?: boolean
     readonly requiresConversationContext?: boolean
     readonly acceptsSelectedPathReferences?: boolean
     readonly execute: {
@@ -64,7 +66,7 @@ export interface AgentTool<
             input: TSchema extends TInputSchema
                 ? Record<string, unknown>
                 : Static<TInputSchema>,
-            context: AgentToolContext,
-        ): Promise<string | AgentToolResult>
+            context: IAgentToolContext,
+        ): Promise<string | IAgentToolResult>
     }["bivarianceHack"]
 }

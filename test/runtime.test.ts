@@ -5,11 +5,11 @@ import {
   type IBuliAgentRuntimeConfig,
 } from "@/app/runtime"
 import type {
-  AgentModel,
-  AgentModelEvent,
-  AgentModelRequest,
+  IAgentModel,
+  TAgentModelEvent,
+  IAgentModelRequest,
 } from "@/agent/model"
-import type { AgentTool } from "@/agent/tool"
+import type { IAgentTool } from "@/agent/tool"
 import {
   InMemorySessionManager,
   type ISessionManager,
@@ -18,7 +18,7 @@ import {
 const WORKSPACE_ROOT = "/workspace"
 const TEST_AGENT_ID = "test-agent"
 
-const model: AgentModel = {
+const model: IAgentModel = {
   async *stream() {},
 }
 
@@ -30,7 +30,7 @@ const TEST_AGENTS: readonly IBuliAgentRuntimeConfig[] = [{
 }]
 
 function runtimeWith(
-  modelOverride: AgentModel = model,
+  modelOverride: IAgentModel = model,
   agents: readonly IBuliAgentRuntimeConfig[] = TEST_AGENTS,
   manager: ISessionManager = new InMemorySessionManager(),
 ): BuliApplicationRuntime {
@@ -67,7 +67,7 @@ function createSession(
 }
 
 test("application runtime submits prompts into its session view", async () => {
-  const events: AgentModelEvent[] = [
+  const events: TAgentModelEvent[] = [
     { type: "text-start", id: "answer" },
     { type: "text-delta", id: "answer", delta: "Hello from Buli" },
     { type: "text-end", id: "answer" },
@@ -109,7 +109,7 @@ test("application runtime submits prompts into its session view", async () => {
 test("application runtime queues and clears steering and follow-up", async () => {
   const firstStarted = Promise.withResolvers<void>()
   const releaseFirst = Promise.withResolvers<void>()
-  const requests: AgentModelRequest[] = []
+  const requests: IAgentModelRequest[] = []
   const runtime = runtimeWith({
     async *stream(request) {
       requests.push({
@@ -255,8 +255,8 @@ test("application runtime auto-opens persisted history when submitting", async (
 })
 
 test("application runtime resolves fixed prompt and tools from an agent", async () => {
-  const requests: AgentModelRequest[] = []
-  const reviewTool: AgentTool = {
+  const requests: IAgentModelRequest[] = []
+  const reviewTool: IAgentTool = {
     name: "review",
     description: "Review code",
     inputSchema: {},
@@ -398,7 +398,7 @@ test("application runtime applies global selection to the next prompt", async ()
 })
 
 test("application runtime replaces models atomically and reconciles selection", async () => {
-  const loadedModel: AgentModel = {
+  const loadedModel: IAgentModel = {
     async *stream() {
       yield { type: "finish", reason: "stop" }
     },
@@ -697,7 +697,7 @@ test("model refresh keeps an active run on its captured adapter", async () => {
   const firstStarted = Promise.withResolvers<void>()
   const releaseFirst = Promise.withResolvers<void>()
   const runs: string[] = []
-  const initialModel: AgentModel = {
+  const initialModel: IAgentModel = {
     async *stream() {
       runs.push("initial")
       firstStarted.resolve()
@@ -705,7 +705,7 @@ test("model refresh keeps an active run on its captured adapter", async () => {
       yield { type: "finish", reason: "stop" }
     },
   }
-  const loadedModel: AgentModel = {
+  const loadedModel: IAgentModel = {
     async *stream() {
       runs.push("loaded")
       yield { type: "finish", reason: "stop" }
@@ -809,6 +809,51 @@ test("runtime disposal aborts a model refresh before it can commit", async () =>
   )
   await disposal
 
+  expect(runtime.getSnapshot()).toBe(previous)
+})
+
+test("runtime disposal does not wait for a model loader that ignores cancellation", async () => {
+  const started = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const runtime = new BuliApplicationRuntime({
+    workspaceRoot: WORKSPACE_ROOT,
+    manager: new InMemorySessionManager(),
+    agents: TEST_AGENTS,
+    defaultAgentId: TEST_AGENT_ID,
+    models: [{
+      id: "initial",
+      name: "Initial",
+      model,
+      reasoningEfforts: ["medium"],
+      defaultReasoningEffort: "medium",
+    }],
+    selection: { modelId: "initial", reasoningEffort: "medium" },
+    loadModels: async () => {
+      started.resolve()
+      await release.promise
+      return [{
+        id: "late",
+        name: "Late",
+        model,
+        reasoningEfforts: ["high"],
+        defaultReasoningEffort: "high",
+      }]
+    },
+  })
+  const previous = runtime.getSnapshot()
+  const refresh = runtime.refreshModels()
+  await started.promise
+
+  const disposal = runtime.dispose()
+  const disposedPromptly = await Promise.race([
+    disposal.then(() => true),
+    Bun.sleep(50).then(() => false),
+  ])
+  release.resolve()
+  await disposal
+  await expect(refresh).rejects.toThrow("Buli runtime is shutting down")
+
+  expect(disposedPromptly).toBe(true)
   expect(runtime.getSnapshot()).toBe(previous)
 })
 
@@ -1030,7 +1075,7 @@ test("runtime resolves approval only in the addressed session and dispose releas
   const secondApprovalStarted = Promise.withResolvers<void>()
   const decisions: string[] = []
   let approvalCount = 0
-  const tool: AgentTool = {
+  const tool: IAgentTool = {
     name: "run_command",
     approvalKind: "command",
     description: "Run a command",

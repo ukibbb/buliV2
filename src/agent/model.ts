@@ -1,10 +1,10 @@
-import type { AgentMessage } from "@/agent/messages"
+import type { TAgentMessage } from "@/agent/messages"
 import type {
-    ModelProfile,
-    ModelUsage,
-    ReasoningEffort,
+    IModelProfile,
+    IModelUsage,
+    TReasoningEffort,
 } from "@/agent/model-values"
-import type { AgentToolDescriptor } from "@/agent/tool"
+import type { IAgentToolDescriptor } from "@/agent/tool"
 
 /** Provider-neutral signal that a model request exceeded its context window. */
 export class ModelContextOverflowError extends Error {
@@ -21,21 +21,20 @@ export function isModelContextOverflowError(
 }
 
 /** Complete provider-neutral input for one model stream request. */
-export interface AgentModelRequest {
+export interface IAgentModelRequest {
     readonly sessionId: string
     readonly runId: string
     readonly systemPrompt: string
     readonly contextSummary?: string
-    readonly messages: readonly AgentMessage[]
-    readonly tools: readonly AgentToolDescriptor[]
+    readonly messages: readonly TAgentMessage[]
+    readonly tools: readonly IAgentToolDescriptor[]
     readonly signal: AbortSignal
-    readonly reasoningEffort: ReasoningEffort
-    readonly maxOutputTokens?: number
+    readonly reasoningEffort: TReasoningEffort
     readonly reportProviderAccountId?: (accountId: string) => void
 }
 
 /** Normalized stream protocol emitted by every model adapter. */
-export type AgentModelEvent =
+export type TAgentModelEvent =
     | { readonly type: "text-start"; readonly id: string }
     | { readonly type: "text-delta"; readonly id: string; readonly delta: string }
     | { readonly type: "text-end"; readonly id: string }
@@ -55,23 +54,23 @@ export type AgentModelEvent =
     | {
         readonly type: "finish"
         readonly reason: string
-        readonly usage?: ModelUsage
+        readonly usage?: IModelUsage
     }
     | { readonly type: "abort"; readonly reason?: string }
     | { readonly type: "error"; readonly error: unknown }
 
 /** Provider adapter consumed by the agent run loop. */
-export interface AgentModel {
+export interface IAgentModel {
     readonly stream: (
-        request: AgentModelRequest,
-    ) => AsyncIterable<AgentModelEvent>
+        request: IAgentModelRequest,
+    ) => AsyncIterable<TAgentModelEvent>
 }
 
-export interface AgentRunConfiguration {
-    readonly model: AgentModel
-    readonly modelProfile?: ModelProfile
+export interface IAgentRunConfiguration {
+    readonly model: IAgentModel
+    readonly modelProfile?: IModelProfile
     readonly providerAccountId?: string
-    readonly reasoningEffort: ReasoningEffort
+    readonly reasoningEffort: TReasoningEffort
 }
 
-export type AgentRunConfigurationResolver = () => AgentRunConfiguration
+export type TAgentRunConfigurationResolver = () => IAgentRunConfiguration

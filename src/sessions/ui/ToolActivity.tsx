@@ -1,8 +1,8 @@
 import type { ReactNode } from "react"
 
 import type {
-    ToolCallContent,
-    ToolResultMessage,
+    IToolCallContent,
+    IToolResultMessage,
 } from "@/agent"
 import { glyphs, theme } from "@/terminal/theme"
 
@@ -14,8 +14,8 @@ const TOOL_TARGET_MAX_CHARACTERS = 96
 const LEGACY_PATCH_HANDOFF_TOOL_NAME = "request_patch_handoff"
 
 interface IToolActivityLineProps {
-    readonly call?: ToolCallContent
-    readonly result?: ToolResultMessage
+    readonly call?: IToolCallContent
+    readonly result?: IToolResultMessage
     readonly phase?: "pending" | "running"
 }
 
@@ -72,12 +72,20 @@ interface IToolPresentation {
     readonly parameters?: string
 }
 
-function toolPresentation(call: ToolCallContent): IToolPresentation {
+function toolPresentation(call: IToolCallContent): IToolPresentation {
     switch (call.toolName) {
         case "bash":
-            return knownToolPresentation("Bash", call, "command", ["cwd", "timeout"])
+            return knownToolPresentation("Bash", call, "command", ["timeout"])
         case "read":
-            return knownToolPresentation("Read", call, "path", ["offset", "limit"])
+            return knownToolPresentation("Read", call, "path", [
+                "offset",
+                "limit",
+            ])
+        case "find":
+            return knownToolPresentation("Find", call, "pattern", [
+                "path",
+                "limit",
+            ])
         case "glob":
             return knownToolPresentation("Glob", call, "pattern", [
                 "path",
@@ -87,14 +95,26 @@ function toolPresentation(call: ToolCallContent): IToolPresentation {
         case "grep":
             return knownToolPresentation("Grep", call, "pattern", [
                 "path",
-                "include",
+                "glob",
+                "ignoreCase",
                 "literal",
-                "caseSensitive",
                 "context",
                 "limit",
             ])
+        case "edit":
+            return knownToolPresentation("Edit", call, "path", ["edits"])
+        case "write":
+            return knownToolPresentation("Write", call, "path", [])
         case "apply_patch":
-            return knownToolPresentation("Apply patch", call, "explanation", [])
+            return knownToolPresentation("Apply patch", call, "explanation", ["changes"])
+        case "tool_output":
+            return knownToolPresentation("Tool output", call, "outputId", [
+                "part",
+                "encoding",
+                "offset",
+                "maxBytes",
+                "maxLines",
+            ])
         default:
             return {
                 name: displayToolName(call.toolName),
@@ -105,7 +125,7 @@ function toolPresentation(call: ToolCallContent): IToolPresentation {
 
 function knownToolPresentation(
     name: string,
-    call: ToolCallContent,
+    call: IToolCallContent,
     targetKey: string,
     parameterKeys: readonly string[],
 ): IToolPresentation {
@@ -142,9 +162,13 @@ function displayToolName(toolName: string): string {
     switch (toolName) {
         case "bash": return "Bash"
         case "read": return "Read"
+        case "find": return "Find"
         case "glob": return "Glob"
         case "grep": return "Grep"
+        case "edit": return "Edit"
+        case "write": return "Write"
         case "apply_patch": return "Apply patch"
+        case "tool_output": return "Tool output"
         default: return toolName
     }
 }
@@ -158,7 +182,7 @@ interface IToolActivityState {
 }
 
 function activityState(
-    result: ToolResultMessage | undefined,
+    result: IToolResultMessage | undefined,
     phase: IToolActivityLineProps["phase"],
 ): IToolActivityState {
     if (!result) {
@@ -204,7 +228,7 @@ function activityState(
     }
 }
 
-function resultDetail(result: ToolResultMessage): string | undefined {
+function resultDetail(result: IToolResultMessage): string | undefined {
     const details = [
         result.summary,
         result.isError ? result.content : undefined,

@@ -1,29 +1,29 @@
 import { AssistantMessageBuilder } from "@/agent/assistant-message-builder"
-import type { AgentEvent } from "@/agent/events"
+import type { TAgentEvent } from "@/agent/events"
 import type {
-    AgentMessage,
-    AssistantMessage,
+    TAgentMessage,
+    IAssistantMessage,
 } from "@/agent/messages"
-import type { AgentModel } from "@/agent/model"
+import type { IAgentModel } from "@/agent/model"
 import type {
-    ModelProfile,
-    ReasoningEffort,
+    IModelProfile,
+    TReasoningEffort,
 } from "@/agent/model-values"
-import type { AgentToolDescriptor } from "@/agent/tool"
+import type { IAgentToolDescriptor } from "@/agent/tool"
 
 interface IStreamModelTurnOptions {
     readonly sessionId: string
     readonly runId: string
     readonly systemPrompt: string
     readonly contextSummary?: string
-    readonly messages: readonly AgentMessage[]
-    readonly model: AgentModel
-    readonly modelProfile?: ModelProfile
+    readonly messages: readonly TAgentMessage[]
+    readonly model: IAgentModel
+    readonly modelProfile?: IModelProfile
     readonly reportProviderAccountId?: (accountId: string) => void
-    readonly tools: readonly AgentToolDescriptor[]
-    readonly reasoningEffort: ReasoningEffort
+    readonly tools: readonly IAgentToolDescriptor[]
+    readonly reasoningEffort: TReasoningEffort
     readonly signal: AbortSignal
-    readonly emit: (event: AgentEvent) => void | Promise<void>
+    readonly emit: (event: TAgentEvent) => void | Promise<void>
     readonly now: () => number
     readonly generateId: () => string
 }
@@ -31,7 +31,7 @@ interface IStreamModelTurnOptions {
 /** Streams one provider turn and publishes its normalized assistant lifecycle. */
 export async function streamModelTurn(
     options: IStreamModelTurnOptions,
-): Promise<AssistantMessage> {
+): Promise<IAssistantMessage> {
     const builder = new AssistantMessageBuilder({
         sessionId: options.sessionId,
         runId: options.runId,

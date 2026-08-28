@@ -110,7 +110,7 @@ async function searchWithoutFd(
                 operationSignal.throwIfAborted()
                 visitedEntries += 1
                 if (visitedEntries > FALLBACK_MAX_ENTRIES) break search
-                if (entry.name === ".git") continue
+                if (entry.name.toLowerCase() === ".git") continue
                 const candidate = join(canonicalDirectory, entry.name)
                 let path: string
                 let candidateStat
@@ -157,7 +157,7 @@ async function searchWithFd(
         "--hidden",
         "--follow",
         "--exclude",
-        ".git",
+        ".[gG][iI][tT]",
         "--max-results",
         String(FD_MAX_RESULTS),
         "--type",

@@ -3,7 +3,7 @@ import { Buffer } from "node:buffer"
 export const MAX_TOOL_OUTPUT_BYTES = 100_000
 export const MAX_TOOL_OUTPUT_LINES = 2_000
 
-const TRUNCATION_MARKER = "... output truncated"
+const TRUNCATION_MARKER = "... output preview ended"
 
 interface IToolOutputLimits {
     readonly maxBytes?: number
@@ -58,6 +58,18 @@ export function truncateToolOutput(
     return selected.length > 0
         ? `${selected.join("\n")}\n${TRUNCATION_MARKER}`
         : TRUNCATION_MARKER
+}
+
+/** Reports whether a result can be exposed inline without discarding any content. */
+export function isToolOutputWithinLimits(
+    output: string,
+    limits: IToolOutputLimits = {},
+): boolean {
+    const maxBytes = limits.maxBytes ?? MAX_TOOL_OUTPUT_BYTES
+    const maxLines = limits.maxLines ?? MAX_TOOL_OUTPUT_LINES
+    validateLimits(maxBytes, maxLines)
+    return splitLines(output).length <= maxLines
+        && Buffer.byteLength(output, "utf8") <= maxBytes
 }
 
 function splitLines(output: string): string[] {

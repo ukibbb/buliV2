@@ -1,12 +1,12 @@
 import type { IOAuthCredential } from "@/authentication"
-import type { ReasoningEffort } from "@/agent"
+import type { TReasoningEffort } from "@/agent"
 import {
     MODELS_DEV_API_URL,
     OPENAI_MODEL_CATALOG_TIMEOUT_MS,
     OPENAI_MODEL_CATALOG_TTL_MS,
 } from "@/providers/openai/constants"
 
-const REASONING_EFFORTS: readonly ReasoningEffort[] = [
+const REASONING_EFFORTS: readonly TReasoningEffort[] = [
     "none",
     "minimal",
     "low",
@@ -29,8 +29,8 @@ export interface IOpenAiCatalogModel {
     readonly accountId: string
     readonly name: string
     readonly serviceTier?: "priority"
-    readonly reasoningEfforts: readonly ReasoningEffort[]
-    readonly defaultReasoningEffort: ReasoningEffort
+    readonly reasoningEfforts: readonly TReasoningEffort[]
+    readonly defaultReasoningEffort: TReasoningEffort
     readonly contextWindowTokens?: number
 }
 
@@ -66,8 +66,8 @@ interface ICachedCatalog {
 interface IAccountModel {
     readonly id: string
     readonly name?: string
-    readonly reasoningEfforts?: readonly ReasoningEffort[]
-    readonly defaultReasoningEffort?: ReasoningEffort
+    readonly reasoningEfforts?: readonly TReasoningEffort[]
+    readonly defaultReasoningEffort?: TReasoningEffort
     readonly contextWindowTokens?: number
     readonly fastServiceTier?: "priority"
     readonly priority: number
@@ -77,7 +77,7 @@ interface IAccountModel {
 interface IModelsDevMetadata {
     readonly id: string
     readonly name?: string
-    readonly reasoningEfforts?: readonly ReasoningEffort[]
+    readonly reasoningEfforts?: readonly TReasoningEffort[]
 }
 
 /** Loads the account-authoritative Codex catalog and enriches it with models.dev. */
@@ -452,7 +452,7 @@ function accountFastServiceTier(
 function mergedReasoningEfforts(
     account: IAccountModel,
     published: IModelsDevMetadata | undefined,
-): readonly ReasoningEffort[] | undefined {
+): readonly TReasoningEffort[] | undefined {
     if (account.reasoningEfforts !== undefined) {
         return account.reasoningEfforts.length > 0
             ? account.reasoningEfforts
@@ -480,9 +480,9 @@ function mergedReasoningEfforts(
 
 function accountReasoningEfforts(
     value: unknown,
-): readonly ReasoningEffort[] | undefined {
+): readonly TReasoningEffort[] | undefined {
     if (!Array.isArray(value)) return undefined
-    const found = new Set<ReasoningEffort>()
+    const found = new Set<TReasoningEffort>()
     for (const candidate of value) {
         const effort = reasoningEffort(
             isRecord(candidate) ? candidate.effort : candidate,
@@ -494,13 +494,13 @@ function accountReasoningEfforts(
 
 function modelsDevReasoningEfforts(
     model: Record<string, unknown>,
-): readonly ReasoningEffort[] | undefined {
+): readonly TReasoningEffort[] | undefined {
     if (Array.isArray(model.reasoning_options)) {
         const option = model.reasoning_options.find(
             (candidate) => isRecord(candidate) && candidate.type === "effort",
         )
         if (isRecord(option) && Array.isArray(option.values)) {
-            const found = new Set<ReasoningEffort>()
+            const found = new Set<TReasoningEffort>()
             for (const value of option.values) {
                 const effort = value === null ? "none" : reasoningEffort(value)
                 if (effort) found.add(effort)
@@ -511,7 +511,7 @@ function modelsDevReasoningEfforts(
     return model.reasoning === false ? ["none"] : undefined
 }
 
-function reasoningEffort(value: unknown): ReasoningEffort | undefined {
+function reasoningEffort(value: unknown): TReasoningEffort | undefined {
     const normalized = normalizedString(value)?.toLowerCase()
     return REASONING_EFFORTS.find((effort) => effort === normalized)
 }

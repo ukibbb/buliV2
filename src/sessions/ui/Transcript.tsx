@@ -1,10 +1,15 @@
+import {
+    createMarkdownCodeBlockRenderer,
+    DiffRenderable,
+} from "@opentui/core"
+import { useRenderer } from "@opentui/react"
 import { useMemo, type ReactNode } from "react"
 
 import type {
-    AgentMessage,
-    AssistantMessage,
-    ToolCallContent,
-    ToolResultMessage,
+    TAgentMessage,
+    IAssistantMessage,
+    IToolCallContent,
+    IToolResultMessage,
 } from "@/agent"
 import { ToolActivityLine } from "@/sessions/ui/ToolActivity"
 import { syntax, theme } from "@/terminal/theme"
@@ -23,20 +28,58 @@ const MARKDOWN_TABLE_OPTIONS = {
     selectable: true,
 } as const
 
+function isClosedFencedBlock(raw: string): boolean {
+    const lastLine = raw.trimEnd().split("\n").at(-1) ?? ""
+    return /^ {0,3}(`{3,}|~{3,})[ \t]*$/.test(lastLine)
+}
+
+function isUnifiedDiff(diff: string): boolean {
+    return /^--- .+\r?$/m.test(diff)
+        && /^\+\+\+ .+\r?$/m.test(diff)
+        && /^@@ .+ @@/m.test(diff)
+}
+
 export interface ITranscriptProps {
-    readonly messages: readonly AgentMessage[]
-    readonly streamingMessage?: AssistantMessage
+    readonly messages: readonly TAgentMessage[]
+    readonly streamingMessage?: IAssistantMessage
     readonly activeRunId?: string
     readonly pendingToolCallIds?: readonly string[]
 }
 
 function AssistantCard(props: {
-    readonly message: AssistantMessage
+    readonly message: IAssistantMessage
     readonly streaming: boolean
-    readonly toolResults: ReadonlyMap<string, ToolResultMessage>
+    readonly toolResults: ReadonlyMap<string, IToolResultMessage>
     readonly activeToolCallIds: ReadonlySet<string>
     readonly runningToolCallIds: ReadonlySet<string>
 }): ReactNode {
+    const renderer = useRenderer()
+    const renderNode = useMemo(
+        () => createMarkdownCodeBlockRenderer({
+            diff: (token, context) => {
+                if (!isUnifiedDiff(token.text)
+                    || (props.streaming && !isClosedFencedBlock(token.raw))) {
+                    return context.defaultRender()
+                }
+
+                return new DiffRenderable(renderer, {
+                    diff: token.text,
+                    width: "100%",
+                    view: "unified",
+                    fg: theme.text,
+                    syntaxStyle: context.syntaxStyle,
+                    ...(context.treeSitterClient === undefined
+                        ? {}
+                        : { treeSitterClient: context.treeSitterClient }),
+                    wrapMode: "word",
+                    conceal: context.concealCode,
+                    showLineNumbers: true,
+                })
+            },
+        }),
+        [renderer, props.streaming],
+    )
+
     return (
         <box width="100%" flexDirection="column">
             {props.message.content.map((content, index) => {
@@ -50,6 +93,7 @@ function AssistantCard(props: {
                         conceal
                         concealCode={false}
                         internalBlockMode="top-level"
+                        {...(renderNode === undefined ? {} : { renderNode })}
                         tableOptions={MARKDOWN_TABLE_OPTIONS}
                     />
                 }
@@ -143,7 +187,7 @@ export function Transcript(props: ITranscriptProps): ReactNode {
 }
 
 function renderDurableMessage(
-    message: AgentMessage,
+    message: TAgentMessage,
     projection: IToolActivityProjection,
     runningToolCallIds: ReadonlySet<string>,
 ): ReactNode {
@@ -171,13 +215,13 @@ function renderDurableMessage(
     }
 }
 
-const EMPTY_TOOL_RESULTS: ReadonlyMap<string, ToolResultMessage> = new Map()
+const EMPTY_TOOL_RESULTS: ReadonlyMap<string, IToolResultMessage> = new Map()
 const EMPTY_TOOL_CALL_IDS: ReadonlySet<string> = new Set()
 
 interface IToolActivityProjection {
     readonly resultsByAssistantMessageId: ReadonlyMap<
         string,
-        ReadonlyMap<string, ToolResultMessage>
+        ReadonlyMap<string, IToolResultMessage>
     >
     readonly matchedToolResultMessageIds: ReadonlySet<string>
     readonly activeAssistantMessageId?: string
@@ -185,17 +229,17 @@ interface IToolActivityProjection {
 }
 
 interface IOpenToolBatch {
-    readonly message: AssistantMessage
-    readonly callsById: Map<string, ToolCallContent>
+    readonly message: IAssistantMessage
+    readonly callsById: Map<string, IToolCallContent>
 }
 
 function projectToolActivities(
-    messages: readonly AgentMessage[],
+    messages: readonly TAgentMessage[],
     activeRunId: string | undefined,
 ): IToolActivityProjection {
     const resultsByAssistantMessageId = new Map<
         string,
-        Map<string, ToolResultMessage>
+        Map<string, IToolResultMessage>
     >()
     const matchedToolResultMessageIds = new Set<string>()
     let openBatch: IOpenToolBatch | undefined
@@ -221,7 +265,7 @@ function projectToolActivities(
         if (message.role !== "assistant") continue
         if (message.stopReason === "aborted" || message.stopReason === "error") continue
         const calls = message.content.filter(
-            (content): content is ToolCallContent => content.type === "toolCall",
+            (content): content is IToolCallContent => content.type === "toolCall",
         )
         if (calls.length === 0) continue
         openBatch = {
@@ -242,14 +286,14 @@ function projectToolActivities(
 }
 
 function belongsToBatch(
-    result: ToolResultMessage,
+    result: IToolResultMessage,
     batch: IOpenToolBatch,
 ): boolean {
     return result.sessionId === batch.message.sessionId
         && result.runId === batch.message.runId
 }
 
-function toolCallIds(message: AssistantMessage): ReadonlySet<string> {
+function toolCallIds(message: IAssistantMessage): ReadonlySet<string> {
     return new Set(message.content.flatMap((content) =>
         content.type === "toolCall" ? [content.toolCallId] : []
     ))

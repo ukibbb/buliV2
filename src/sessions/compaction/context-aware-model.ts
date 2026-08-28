@@ -1,8 +1,8 @@
 import {
-    type AgentModel,
-    type AgentModelEvent,
-    type AgentModelRequest,
-    type ModelProfile,
+    type IAgentModel,
+    type TAgentModelEvent,
+    type IAgentModelRequest,
+    type IModelProfile,
     isModelContextOverflowError,
 } from "@/agent"
 import {
@@ -13,22 +13,22 @@ import {
 const MAX_COMPACTION_PASSES = 64
 
 export interface IContextAwareModelOptions {
-    readonly model: AgentModel
-    readonly modelProfile?: ModelProfile
+    readonly model: IAgentModel
+    readonly modelProfile?: IModelProfile
     readonly contextWindowTokens: number | undefined
     readonly projectRequest: (
-        originalRequest: AgentModelRequest,
-    ) => AgentModelRequest
+        originalRequest: IAgentModelRequest,
+    ) => IAgentModelRequest
     readonly compactAndReproject: (
-        originalRequest: AgentModelRequest,
-    ) => Promise<AgentModelRequest | undefined>
+        originalRequest: IAgentModelRequest,
+    ) => Promise<IAgentModelRequest | undefined>
     readonly publishContextUsage: (usage: IContextUsage) => void
 }
 
 /** Adds bounded preflight compaction and one safe overflow retry to a model. */
 export function createContextAwareModel(
     options: IContextAwareModelOptions,
-): AgentModel {
+): IAgentModel {
     return {
         async *stream(originalRequest) {
             originalRequest.signal.throwIfAborted()
@@ -45,7 +45,7 @@ export function createContextAwareModel(
             for (;;) {
                 request.signal.throwIfAborted()
                 let interceptedOverflow:
-                    | { readonly kind: "emitted"; readonly event: AgentModelEvent }
+                    | { readonly kind: "emitted"; readonly event: TAgentModelEvent }
                     | { readonly kind: "thrown"; readonly error: unknown }
                     | undefined
 
@@ -108,9 +108,9 @@ export function createContextAwareModel(
 
 async function compactPreflightRequest(
     options: IContextAwareModelOptions,
-    originalRequest: AgentModelRequest,
-    initialRequest: AgentModelRequest,
-): Promise<AgentModelRequest> {
+    originalRequest: IAgentModelRequest,
+    initialRequest: IAgentModelRequest,
+): Promise<IAgentModelRequest> {
     let request = initialRequest
     for (let pass = 0; pass <= MAX_COMPACTION_PASSES; pass += 1) {
         originalRequest.signal.throwIfAborted()
@@ -134,8 +134,8 @@ async function compactPreflightRequest(
 
 async function compactOverflowRequest(
     options: IContextAwareModelOptions,
-    originalRequest: AgentModelRequest,
-): Promise<AgentModelRequest | undefined> {
+    originalRequest: IAgentModelRequest,
+): Promise<IAgentModelRequest | undefined> {
     let request = await options.compactAndReproject(originalRequest)
     if (!request) return undefined
 
@@ -169,9 +169,9 @@ function requestBudgetError(usage: IContextUsage): Error {
 }
 
 function estimateRequestUsage(
-    request: AgentModelRequest,
+    request: IAgentModelRequest,
     contextWindowTokens: number | undefined,
-    modelProfile?: ModelProfile,
+    modelProfile?: IModelProfile,
 ): IContextUsage {
     return estimateContextUsage({
         systemPrompt: request.systemPrompt,
@@ -184,7 +184,7 @@ function estimateRequestUsage(
     }, contextWindowTokens)
 }
 
-function isSemanticModelEvent(event: AgentModelEvent): boolean {
+function isSemanticModelEvent(event: TAgentModelEvent): boolean {
     return event.type === "text-start"
         || event.type === "text-delta"
         || event.type === "text-end"

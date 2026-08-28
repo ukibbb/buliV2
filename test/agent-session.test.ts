@@ -1,13 +1,13 @@
 import { expect, test } from "bun:test"
 
 import type {
-  AgentModel,
-  AgentModelRequest,
-  AgentTool,
-  AssistantMessage,
-  ToolApprovalDecision,
-  ToolResultMessage,
-  UserMessage,
+  IAgentModel,
+  IAgentModelRequest,
+  IAgentTool,
+  IAssistantMessage,
+  TToolApprovalDecision,
+  IToolResultMessage,
+  IUserMessage,
 } from "@/agent"
 import {
   AgentSession,
@@ -21,7 +21,7 @@ test("AgentSession restores history, persists completion barriers, and publishes
   manager.createSession(sessionInfo("session-1", "test-agent", "Restored"))
   manager.appendMessage(userMessage("Restored"))
   const persistedBeforeModel: number[] = []
-  const model: AgentModel = {
+  const model: IAgentModel = {
     async *stream() {
       persistedBeforeModel.push(manager.getMessages("session-1").length)
       yield { type: "text-start", id: "answer" }
@@ -79,12 +79,12 @@ test("AgentSession structurally shares immutable history across streaming snapsh
   const releaseFinish = Promise.withResolvers<void>()
   type TPublication = {
     snapshot: ISessionSnapshot
-    stateMessage: AssistantMessage | undefined
+    stateMessage: IAssistantMessage | undefined
   }
   const firstDeltaPublished = Promise.withResolvers<TPublication>()
   const secondDeltaPublished = Promise.withResolvers<TPublication>()
   const toolInput = { path: { directory: "src", file: "index.ts" } }
-  const model: AgentModel = {
+  const model: IAgentModel = {
     async *stream() {
       yield {
         type: "tool-call",
@@ -206,20 +206,24 @@ test("AgentSession publishes immutable approval request and resolution snapshots
   const manager = new InMemorySessionManager()
   manager.createSession(sessionInfo("session-1", "test-agent", "Approval"))
   const approvalStarted = Promise.withResolvers<void>()
-  const decisions: ToolApprovalDecision[] = []
-  const tool: AgentTool = {
-    name: "apply_patch",
-    approvalKind: "patch",
-    description: "Apply a patch",
+  const decisions: TToolApprovalDecision[] = []
+  const tool: IAgentTool = {
+    name: "bash",
+    approvalKind: "command",
+    description: "Run a command",
     inputSchema: { type: "object", additionalProperties: false },
     async execute(_input, context) {
       if (!context.requestApproval) throw new Error("Missing approval bridge")
       const decisionTask = context.requestApproval({
-        kind: "patch",
-        title: "Apply changes",
-        explanation: "Update the runtime",
-        diff: "--- a/src/application/runtime.ts\n+++ b/src/application/runtime.ts",
-        paths: ["src/application/runtime.ts"],
+        kind: "command",
+        title: "Verify the runtime",
+        explanation: "Run the focused runtime tests",
+        command: "bun test test/runtime.test.ts",
+        cwd: "/workspace",
+        purpose: "Verify the runtime behavior",
+        expectedOutcome: "The runtime tests pass",
+        sideEffects: "May write temporary test caches",
+        timeoutSeconds: 30,
       })
       approvalStarted.resolve()
       const decision = await decisionTask
@@ -239,7 +243,7 @@ test("AgentSession publishes immutable approval request and resolution snapshots
           if (requestCount++ === 0) {
             yield {
               type: "tool-call",
-              toolCallId: "patch-call",
+              toolCallId: "command-call",
               toolName: tool.name,
               input: {},
             }
@@ -262,25 +266,28 @@ test("AgentSession publishes immutable approval request and resolution snapshots
     approvalTransitions.push(approvalId)
   })
 
-  const run = session.prompt("Apply the runtime patch")
+  const run = session.prompt("Run the runtime tests")
   await approvalStarted.promise
   const waitingSnapshot = session.getSnapshot()
   const request = waitingSnapshot.pendingToolApproval
-  if (!request || request.kind !== "patch") {
-    throw new Error("Expected pending patch approval")
+  if (!request) {
+    throw new Error("Expected pending command approval")
   }
 
   expect(request).toMatchObject({
     sessionId: "session-1",
     runId: run.runId,
-    toolCallId: "patch-call",
-    kind: "patch",
-    paths: ["src/application/runtime.ts"],
+    toolCallId: "command-call",
+    kind: "command",
+    command: "bun test test/runtime.test.ts",
+    cwd: "/workspace",
+    timeoutSeconds: 30,
   })
   expect(Object.isFrozen(waitingSnapshot)).toBe(true)
   expect(Object.isFrozen(request)).toBe(true)
-  expect(Object.isFrozen(request.paths)).toBe(true)
-  expect(() => (request.paths as string[]).push("src/domain.ts")).toThrow()
+  expect(() => {
+    (request as { command: string }).command = "bun test"
+  }).toThrow()
   expect(manager.getMessages("session-1").map((message) => message.role)).toEqual([
     "user",
     "assistant",
@@ -302,9 +309,9 @@ test("AgentSession persists steering and follow-up before each model request", a
   manager.createSession(sessionInfo("session-1", "test-agent", "Steering"))
   const firstStarted = Promise.withResolvers<void>()
   const releaseFirst = Promise.withResolvers<void>()
-  const requests: AgentModelRequest[] = []
+  const requests: IAgentModelRequest[] = []
   const persistedBeforeRequest: number[] = []
-  const model: AgentModel = {
+  const model: IAgentModel = {
     async *stream(request) {
       requests.push({
         ...request,
@@ -644,7 +651,7 @@ test("AgentSession recovers a toolCallId reused by a later run", async () => {
     "call-shared",
     2,
   )
-  const firstResult: ToolResultMessage = {
+  const firstResult: IToolResultMessage = {
     id: "tool-result-run-1",
     sessionId: "session-1",
     runId: "run-1",
@@ -870,8 +877,8 @@ test("AgentSession compacts durable history into one cumulative checkpoint", asy
   manager.createSession(sessionInfo("session-1", "test-agent", "Compaction"))
   seedConversation(manager, 3, "x".repeat(50_000))
   const original = manager.getMessages("session-1")
-  const requests: AgentModelRequest[] = []
-  const model: AgentModel = {
+  const requests: IAgentModelRequest[] = []
+  const model: IAgentModel = {
     async *stream(request) {
       requests.push(request)
       if (request.runId.startsWith("compaction-")) {
@@ -955,7 +962,7 @@ test("AgentSession does not compact after settlement from reported usage", async
   manager.createSession(sessionInfo("session-1", "test-agent", "Automatic"))
   seedConversation(manager, 3)
   let compactionRequests = 0
-  const model: AgentModel = {
+  const model: IAgentModel = {
     async *stream(request) {
       if (request.runId.startsWith("compaction-")) {
         compactionRequests += 1
@@ -1075,7 +1082,7 @@ function userMessage(
   id = "restored-user",
   runId = "run-restored",
   createdAt = 1,
-): UserMessage {
+): IUserMessage {
   return {
     id,
     sessionId,
@@ -1106,7 +1113,7 @@ function toolCallAssistantMessage(
   runId: string,
   toolCallId: string,
   createdAt: number,
-): AssistantMessage {
+): IAssistantMessage {
   return {
     id,
     sessionId: "session-1",
@@ -1128,7 +1135,7 @@ function textAssistantMessage(
   runId: string,
   text: string,
   createdAt: number,
-): AssistantMessage {
+): IAssistantMessage {
   return {
     id,
     sessionId: "session-1",
@@ -1140,7 +1147,7 @@ function textAssistantMessage(
   }
 }
 
-function interruptedAssistantMessage(): AssistantMessage {
+function interruptedAssistantMessage(): IAssistantMessage {
   return {
     id: "assistant-interrupted",
     sessionId: "session-1",

@@ -94,19 +94,19 @@ from loading.
 
 Instructions are read once at startup, so restart Buli after editing them. Their
 contents are sent to the selected model as lower-priority project conventions;
-they cannot add tools, change workspace boundaries, or replace required command
-and patch approvals. A project may commit its `.buli` directory when the team
-wants to share the same instructions.
+they cannot add tools or replace Buli's edit and command approval rules. A
+project may commit its `.buli` directory when the team wants to share the same
+instructions.
 
 ## Development requirements
 
 - Bun 1.3.12 or newer
 - [ripgrep](https://github.com/BurntSushi/ripgrep) available as `rg`
-- [fd](https://github.com/sharkdp/fd) available as `fd` or `fdfind`
+- [fd](https://github.com/sharkdp/fd) available as `fd`
 
 ## Terminal app development
 
-Run the app in restart-on-save mode from the project root:
+Run the app in development mode from the project root:
 
 ```bash
 bun run dev
@@ -132,9 +132,10 @@ Inside the TUI:
 - press `Ctrl+S` to save the console logs
 - press `Ctrl+C` to exit
 
-Selected external paths authorize only `read` and `glob`; other workspace tools
-keep their existing boundaries. Screenshot bytes are stored as base64 in the
-local, unencrypted JSONL session and sent to the selected model.
+Path references selected through `@` are stored with the prompt so the model can
+inspect them lazily. Pi-style file tools accept relative and absolute paths;
+they are not restricted to the workspace. Screenshot bytes are stored as base64
+in the local, unencrypted JSONL session and sent to the selected model.
 
 If you want watch mode with the console hidden at startup:
 
@@ -146,7 +147,7 @@ Useful feedback commands:
 
 ```bash
 bun run typecheck
-bun test
+bun run test
 ```
 
 Maintainers should follow [`docs/releasing.md`](docs/releasing.md) when creating
@@ -162,7 +163,7 @@ technical layer:
 
 - `agent` owns messages, model and tool ports, run state, and approval contracts
 - `sessions` owns persistence, recovery, snapshots, and context compaction
-- `tools` contains the built-in workspace tool implementations and their approval UI
+- `tools` contains the built-in workspace tools and generic tool approval UI
 - `authentication` contains provider-neutral authentication core and UI
 - `providers/openai` adapts OpenAI to the agent and authentication contracts
 - `app` composes features and owns connected application screens and navigation
@@ -174,18 +175,94 @@ depend on `agent`, while `app` composes every feature. Feature-owned UI may use
 terminal primitives, but feature core does not depend on OpenTUI. Cross-feature
 imports use each feature's public `index.ts` surface.
 
+## Pi agent contract alignment
+
+Buli's agent core follows Pi's lifecycle vocabulary and loop structure, but it
+is intentionally a semantic superset rather than an API-compatible copy. Buli
+keeps run IDs, separate prompt acceptance and run settlement, a critical
+persistence sink, closed durable message types, interactive tool approvals, and
+sequential local tool execution. Agent interfaces use the `I...` prefix and
+type aliases use `T...`; runtime classes, functions, event discriminants, and
+persisted fields remain unprefixed.
+
+The references below are pinned to Pi commit
+[`936aff0`](https://github.com/earendil-works/pi/tree/936aff00918de1187f085f123c2812d8f2d67745/packages/agent)
+so future Pi changes do not silently change the examples.
+
+| Candidate improvement | Pi reference | Why it could help Buli | Why it is not adopted yet |
+| --- | --- | --- | --- |
+| Graceful `shouldStopAfterTurn` hook | [loop implementation](https://github.com/earendil-works/pi/blob/936aff00918de1187f085f123c2812d8f2d67745/packages/agent/src/agent-loop.ts#L224-L259) | Can stop at a turn boundary for an iteration budget or before compaction, after the current response and tools finish normally. | Buli must first define whether queued steering and follow-up messages stay pending, return to the editor, or are persisted when the hook stops a run. |
+| Parallel tool execution | [sequential and parallel paths](https://github.com/earendil-works/pi/blob/936aff00918de1187f085f123c2812d8f2d67745/packages/agent/src/agent-loop.ts#L411-L554) | Independent reads could finish faster while tool-result messages still follow model source order. | Concurrent progress, cancellation, critical persistence, and approval ordering need an explicit policy. Mutating or approval-based Buli tools must remain sequential. |
+| Generic before/after hooks | [tool lifecycle](https://github.com/earendil-works/pi/blob/936aff00918de1187f085f123c2812d8f2d67745/packages/agent/src/agent-loop.ts#L586-L758) | Provides one place for policy checks, auditing, and result post-processing. | Buli adopted only the small `prepareArguments` input-compatibility hook. Generic result hooks could still rewrite a durable outcome after a tool has reported side effects. |
+| Public `continue()` | [Agent implementation](https://github.com/earendil-works/pi/blob/936aff00918de1187f085f123c2812d8f2d67745/packages/agent/src/agent.ts#L360-L388) | Allows retrying from an existing user or tool-result tail without creating another user message. | Buli's `accepted` promise currently means that a new prompt is durable. A continuation has no new prompt, so acceptance, run IDs, recovery, and UI state need a separate contract. |
+| Queue modes such as `all` | [pending-message queue](https://github.com/earendil-works/pi/blob/936aff00918de1187f085f123c2812d8f2d67745/packages/agent/src/agent.ts#L125-L159) | Can inject several queued messages into one provider request instead of one message per response. | Buli currently restores one dequeued message after a persistence failure. Batch draining would require atomic persistence and restoration of the entire batch. |
+| Durable tree harness | [current harness surface](https://github.com/earendil-works/pi/blob/936aff00918de1187f085f123c2812d8f2d67745/packages/agent/src/harness/agent-harness.ts#L347-L507) | The proposed lanes, branching, and durable operations may be useful if Buli later needs conversation trees or resumable effects. | Pi's current harness is a scaffold whose main run operations throw `HarnessNotImplemented`. Buli's linear `AgentSession` is complete and should not be replaced by unfinished reference code. |
+
+When adopting one of these features, port its observable behavior and focused
+tests into Buli's existing boundaries. Do not import implementation code from
+the `_temp/pi` reference checkout or migrate the session format only for naming
+parity.
+
 ## Workspace changes
 
-`apply_patch` prepares one proposal in memory and shows its exact diff before
-changing the workspace. Rejecting or cancelling before approval discards that
-proposal; the separate `Apply` action consumes it once after checking that the
-source files still match the preview. Once application starts, Buli finishes
-the patch and reports if cancellation raced with a committed change.
+The default registry exposes `read`, `find`, `grep`, `edit`, `write`, and
+`bash`. The file tools and Bash's public `command`/`timeout` schema port the
+behavior of Pi commit
+[`6c87d9a`](https://github.com/badlogic/pi-mono/tree/6c87d9a026677b601e8278030dcf1ad97fe0bd86/packages/coding-agent/src/core/tools).
 
-Buli writes approved changes directly to their final paths and does not create
-temporary source-file copies. A forced process exit during that write can leave
-a missing, partial, or partially applied file, so inspect the workspace before
-retrying after a crash.
+`edit` applies one or more non-overlapping `oldText`/`newText` replacements to a
+single original file state. It preserves a UTF-8 BOM and the detected LF or
+CRLF style and uses Pi's Unicode and trailing-whitespace fallback when an exact
+match is unavailable. `write` creates missing parent directories and creates or
+fully overwrites one file.
+
+Both tools write directly without opening an approval modal. The system prompt
+requires the model to first show and explain the exact proposed diff, wait for
+explicit acceptance in a later user message, and then apply only that diff.
+This is a conversational policy, not a runtime security boundary. A crash or
+cancellation racing a direct write can leave changed or partial content, so
+inspect the file before retrying an interrupted mutation.
+
+`bash` uses the same conversational boundary for commands. Before calling the
+tool, the model must show the exact command and optional timeout, explain its
+program, subcommands, flags, arguments, operators, working directory, expected
+result, and side effects, then wait for explicit acceptance in a later user
+message. Acceptance applies only to that command and timeout; changing either
+requires a new explanation and acceptance. The tool executes directly without
+an approval modal.
+
+Commands always start in the workspace root through
+`/bin/bash --noprofile --norc -c`. The timeout is optional and has no default.
+This process is not sandboxed, and deliberately detached descendants may
+outlive the command.
+
+## Paginated tool output
+
+`read` is text-only and returns at most 2,000 complete lines or 50 KiB. File
+pages continue through the 1-based `offset` and optional line `limit`; a first
+line larger than 50 KiB produces a Bash fallback instead of a partial line.
+`find` stops at 1,000 results by default. `grep` stops at 100 matches by default
+and shortens individual result lines to 500 characters. Both search tools also
+cap their formatted output at 50 KiB and tell the model to increase `limit` or
+narrow the query.
+
+The self-limiting `read`, `find`, and `grep` results remain inline. Before a
+larger result from another tool is shortened to a preview, Buli writes its
+complete content to a private temporary store and returns an `outputId`;
+`tool_output` reads that content in bounded exact pages. Bash streams complete
+stdout and stderr into separate parts
+from the first byte while retaining small previews in the original result. Text
+pages preserve UTF-8 boundaries and BOM characters; arbitrary non-UTF-8 command
+bytes, including output smaller than the inline limit, receive an `outputId` and
+are available as exact base64 pages.
+
+This store is intentionally ephemeral and session-bound. Its files use private
+permissions and are removed when Buli shuts down. An `outputId` may remain in a
+saved conversation, but after restart it expires explicitly and the source tool
+must be run again. Storage or quota failures mark the tool result as failed
+instead of presenting an incomplete prefix as complete. Pages explicitly read
+by the model become ordinary tool-result messages and can therefore appear in
+the saved JSONL conversation even though the complete backing artifact does not.
 
 ## Authentication
 

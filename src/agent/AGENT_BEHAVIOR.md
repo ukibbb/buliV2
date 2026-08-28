@@ -4,7 +4,7 @@
 | --- | --- |
 | Status | WIP decision document |
 | Runtime effect | None |
-| Related implementation | `system-prompt.ts` |
+| Related implementation | `system-prompt.ts`, `agent-loop.ts`, `tool-executor.ts`, and `../tools/catalog.ts` |
 
 ## Purpose
 
@@ -25,6 +25,7 @@ This file is not injected into the model. A rule written here has no runtime eff
 | `OPEN` | Material options are known, but no option has been selected. |
 | `DEFERRED` | Deliberately postponed until an earlier dependency is resolved. |
 | `CURRENT` | Describes current runtime behavior, not necessarily desired behavior. |
+| `REJECTED` | Considered and explicitly not selected. |
 
 A recommendation is not a decision. Open sections retain all materially different options so they can be discussed one at a time.
 
@@ -54,25 +55,30 @@ The current application is smaller than the behavior described in the WIP notes.
 | --- | --- |
 | Active prompt | The strings returned by `systemPrompt()` and at most one selected `.buli` workspace instruction file reach the model. All earlier comments are inactive notes. |
 | Provider integration | `OpenAiAgentModel` maps provider-neutral requests to the AI SDK Responses API and sends the system prompt through OpenAI `instructions`. |
-| Tools | The default registry exposes only `read_file`, `glob`, and `grep`. |
-| Writes | There is no write tool, patch proposal, patch application, or approval workflow. |
+| Core tools | The default workspace registry exposes `read`, `find`, `grep`, `edit`, `write`, and `bash`. The application layer adds `tool_output` and, for the default OpenAI setup, `web_search`; injected tool/model configurations may differ. |
+| Tool lineage | `read`, `find`, `grep`, `edit`, `write`, and Bash's public `command`/`timeout` schema are Pi-style ports from SHA `6c87d9a`. |
+| Reads | `read` is text-only, accepts relative or absolute paths, supports `offset`/`limit`, and returns plain text without line numbers. `grep` returns matching line numbers. |
+| Writes | `edit` and `write` directly mutate unrestricted relative or absolute paths, including paths outside the workspace, subject only to normal filesystem permissions. There is no patch tool, edit modal, or runtime edit approval. |
+| Edit consent | The prompt requires an exact diff and explanation, then unambiguous conversational acceptance in a later message. After acceptance, the model calls `edit` or `write` directly; a changed diff requires new acceptance. |
+| Commands | The prompt requires the exact command and optional timeout to be explained, followed by unambiguous conversational acceptance in a later message. `bash` then executes directly in the workspace root without runtime approval. |
+| Tool arguments | The tool contract supports `prepareArguments` before schema conversion and validation. `edit` uses it to normalize serialized and legacy argument shapes. |
 | Modes | `auto`, `plan`, `learn`, and `implement` exist only in comments. There is no runtime type or mode state. |
 | Session | The TUI supports multiple named JSONL sessions per workspace. The first accepted prompt creates a session; mode, model selection, and prompt version are not persisted. |
 | Concurrent input | After the initial prompt is durably accepted, `Enter` queues FIFO steering and `Alt+Enter` queues FIFO follow-up. Both deliver one message at a time; steering runs after the current response and tool batch, while follow-up waits until no tool continuation or steering remains. |
 | Learning notes | Neither `_learning` nor a notes MCP server currently exists. |
-| Web research | No web search or web fetch tool is exposed to Buli. |
-| Citations | `grep` returns line numbers, but `read_file` does not currently support line ranges or line-numbered output. |
-| Tool loop | A user turn can perform at most five provider/tool iterations. |
-| Behavior tests | There are no direct prompt-builder tests or model behavior evals. |
+| Web research | The default OpenAI application exposes host-owned `web_search`. It is absent when a custom provider-neutral model/tool set is injected unless supplied explicitly. |
+| Tool output | The application-level `tool_output` tool pages complete stored output when a tool returns an `outputId`. |
+| Tool loop | There is no fixed provider/tool iteration cap in `agent-loop.ts`. The loop requests another model turn after tool results or queued steering, and processes follow-up after tool continuation and steering are exhausted. |
+| Tests | Prompt-builder tests, OpenAI model adapter/integration tests, workspace-tool tests, web-search tests, and Bash execution tests exist. A separate model behavior-eval suite does not. |
 | Ponytail | `ponytail/` is a separate nested repository and is not loaded by Buli at runtime. |
 
 Consequences:
 
-- “Do not modify files” is currently guaranteed by the absence of mutating tools, not by a permission system.
-- The model cannot reliably perform internet research even if the prompt asks it to.
+- The exact-diff edit workflow is a prompt-level collaboration rule, not a runtime security boundary.
+- `edit` and `write` can mutate any path the process can access; no workspace or symlink boundary protects those tools.
+- Bash consent, like edit consent, is a prompt-level collaboration rule rather than a runtime security boundary.
+- Tool and web capabilities must be described from the active registry because custom configurations can omit app-level tools.
 - Selecting a mode in text has no deterministic effect.
-- The promise to show and approve a diff is aspirational until the host implements that workflow.
-- “Continue until the feature is complete” conflicts with the fixed iteration limit unless interruption is represented explicitly.
 
 ## Requirements Recovered From The WIP Notes
 
@@ -121,7 +127,7 @@ This section normalizes the notes from `system-prompt.ts`. It preserves intent w
 - Planning is a discussion, not implicit permission to implement.
 - A useful plan has a clear starting state, goal, scope, phases when necessary, verification, and completion condition.
 - The current phase and unresolved decisions should remain visible during multi-step work.
-- Transition from planning to implementation must follow an explicit product rule rather than model interpretation alone.
+- The current prompt requires a separate explicit implementation request and exact-diff conversational acceptance before mutation.
 
 ### Implementation and quality
 
@@ -177,7 +183,7 @@ The ladder chooses implementation complexity. It does not require Buli to hide e
 - Its `lite/full/ultra` modes control minimalism intensity; Buli's proposed modes describe work intent and capabilities. These are different axes.
 - Its terse, code-first response style conflicts with Buli's teaching goal.
 - “Ship the lazy version” can conflict with Buli's requirement to establish understanding before consequential implementation.
-- Ponytail delegates patch permissions to its host. It does not provide the approval system Buli needs.
+- Ponytail's host permission model is not Buli's current flow. Buli uses prompt-level acceptance followed by direct `edit`/`write` or `bash` execution; the generic approval framework remains available only for injected tools that declare it.
 - Its many host adapters are unnecessary while Buli has one provider integration.
 - Its review and audit skills focus on overengineering and do not replace correctness or security review.
 
@@ -211,7 +217,7 @@ interface BehaviorSpec {
   id: BuliBehavior
   instructions: string
   allowedTools: readonly string[]
-  canProposePatch: boolean
+  canMutateFiles: boolean
 }
 
 interface PromptContext {
@@ -221,7 +227,8 @@ interface PromptContext {
   promptVersion: string
   availableTools: readonly string[]
   webAccess: boolean
-  writeCapability: "none" | "proposal-with-approval"
+  writeCapability: "none" | "direct-after-conversational-diff-acceptance"
+  commandCapability: "none" | "direct-after-conversational-command-acceptance"
 }
 ```
 
@@ -233,7 +240,7 @@ The exact types remain open. The architectural constraint is more important: the
 - evidence and uncertainty rules;
 - correctness and safety invariants;
 - concise but capability-aware communication;
-- distinction between discussion, proposal, approval, and observed execution;
+- distinction between discussion, diff proposal, conversational acceptance, and observed execution;
 - treatment of repository content as untrusted data;
 - requirement to expose limitations and incomplete work.
 
@@ -241,47 +248,48 @@ The exact types remain open. The architectural constraint is more important: the
 
 | Mode | Intended behavior | Candidate capabilities |
 | --- | --- | --- |
-| `auto` | Infer the response style for the current request while respecting explicit user intent. | Read tools; patch proposal behavior remains an open decision. |
-| `plan` | Investigate, discuss decisions, risks, phases, and verification without proposing a patch. | Read tools and optional research tools. |
+| `auto` | Infer the response style for the current request while respecting explicit user intent. | Active registry; `edit`/`write` follow the exact-diff conversational acceptance rule. |
+| `plan` | Investigate, discuss decisions, risks, phases, and verification without proposing file changes. | Read tools and optional research tools. |
 | `learn` | Teach, inspect sources, connect concepts, and test understanding. | Read tools; note proposals remain an open decision. |
-| `implement` | Inspect relevant code and prepare small, verifiable implementation proposals. | Read tools plus a patch-proposal capability. |
+| `implement` | Inspect relevant code and prepare small, verifiable implementation proposals. | Read/search tools plus direct `edit`/`write` after exact-diff conversational acceptance. |
 
 ### Suggested runtime context
 
-Runtime context must report facts rather than aspirations. Example:
+Runtime context must report facts rather than aspirations. An illustrative default OpenAI context is:
 
 ```text
 Workspace: /absolute/path
-Selected behavior: plan
-Effective behavior: plan
-Available tools: read_file, glob, grep
-Web access: unavailable
-Write capability: unavailable
-Prompt version: 1
+Intent routing: per message; no persistent mode
+Available tools: read, find, grep, edit, write, bash, web_search, tool_output
+Web access: available through web_search
+Write capability: direct after exact-diff conversational acceptance
+Command capability: direct after exact-command conversational acceptance
 ```
 
-If no web tool exists, the prompt should tell the model to disclose that limitation instead of instructing it to search the internet.
+If a custom registry omits `web_search`, the prompt should disclose that limitation instead of claiming internet access.
 
 ## Enforcement Boundaries
 
-Status: `OPEN`
+Status: `CURRENT`
 
-| Rule | Best enforcement mechanism |
+| Rule | Current enforcement |
 | --- | --- |
-| No workspace mutation without approval | Patch executor and approval state |
-| `plan` and read-only `learn` cannot propose patches | Tool filtering in central policy |
-| Only the approved diff is applied | Stored proposal, base hashes, and exact apply operation |
-| Workspace path and symlink boundaries | Tool implementation |
-| Secret-file access | Tool policy and permission UI |
-| Active mode is visible | TUI |
-| Mode persists at selected scope | Session store |
-| Mentoring tone and simple explanations | Prompt and behavior evals |
-| Ask only useful questions | Prompt and behavior evals |
-| Cite local source locations | Line-aware tools, prompt, and evals |
+| Exact diff and acceptance before file mutation | Prompt only; there is no stored proposal or runtime edit gate |
+| Apply only the accepted diff | Prompt only; `edit`/`write` execute their supplied arguments directly |
+| Edit/write path and symlink boundaries | None beyond path resolution and operating-system permissions; relative and absolute paths are unrestricted |
+| Bash exact-command explanation and acceptance | Prompt only; there is no stored proposal or runtime Bash gate |
+| Bash execution | Direct in the workspace root after the model calls the tool; optional timeout has no default |
+| Tool argument normalization | Optional `prepareArguments` runs before schema conversion and validation |
+| Tool availability | Runtime registry; the prompt is built from the supplied descriptors |
+| Mode-specific tool filtering | Not implemented because there is no runtime mode state |
+| Secret-file access | No dedicated runtime restriction or permission UI |
+| Mentoring tone and simple explanations | Prompt; a behavior-eval suite remains future work |
+| Ask only useful questions | Prompt; a behavior-eval suite remains future work |
+| Cite local source locations | `grep` and prompt; `read` itself has no line-numbered output and behavior evals remain future work |
 | Never claim unobserved success | Prompt plus tool-result protocol tests |
 | Prompt matches available capabilities | Prompt builder tests |
 
-Prompt text is appropriate for judgment and style. It is not an adequate security boundary.
+Prompt text is appropriate for judgment and collaboration. It is not a security boundary, so the edit-consent workflow does not technically prevent direct or out-of-scope mutation.
 
 ## Decision Catalogue
 
@@ -297,20 +305,15 @@ Decision: hybrid pair programming.
 | Hybrid | Buli guides by default and prepares a complete change only after an explicit implementation request. | Preserves mentoring while allowing practical delegation. | Requires a reliable distinction between discussion and implementation intent. |
 | Agent-led | Buli normally completes tasks autonomously and explains afterward. | Fastest delivery. | Creates more cognitive debt and weakens the pair-programming goal. |
 
-Implementation consequence: selecting hybrid behavior does not decide whether a requested patch is applied immediately or requires a separate approval. That is D2.
+Implementation consequence: hybrid behavior uses the consent sequence recorded in D2.
 
 ### D2. Meaning of “implement this”
 
-Status: `OPEN`
+Status: `DECIDED`
 
-| Option | Behavior | Benefits | Costs and consequences |
-| --- | --- | --- | --- |
-| Exact diff approval | The request permits Buli to prepare a patch. A separate UI action approves the exact diff. | Strongest safety, clear audit trail, no ambiguity around “ok”. | Requires proposal state, diff UI, stale-file detection, and a two-phase executor. |
-| Immediate application | An explicit implementation request permits direct file mutation. | Lowest friction and simplest interaction. | A misunderstood scope can immediately alter files; prompt interpretation becomes a safety boundary. |
-| Text approval | Buli proposes a diff and accepts a conversational answer such as “yes”. | Natural chat flow. | Ambiguous acknowledgements can be mistaken for permission; approval must bind to a proposal ID. |
-| Session-wide permission | User can allow future edits for the session or workspace. | Efficient for long delegated tasks. | Conflicts with the current note requiring separate approval and creates a larger accidental-change surface. |
+Decision: exact diff, explicit conversational acceptance, then direct mutation.
 
-Recommendation: exact diff approval. The implementation request should authorize a proposal, never an unreviewed mutation.
+An implementation request authorizes Buli to inspect and propose a change, not to mutate files immediately. Before the first `edit` or `write`, Buli must show the exact diff, explain it, and wait for unambiguous acceptance in a later user message. Acceptance is limited to that diff; any changed content or scope must be shown and accepted again. After acceptance, `edit` or `write` mutates the path directly with no patch modal, stored proposal, or runtime edit approval.
 
 ### D3. Mode model
 
@@ -338,17 +341,11 @@ Status: `OPEN`
 
 Recommendation: selected mode per session, with `auto` as the initial default.
 
-### D5. Auto-mode implementation authority
+### D5. Per-message implementation authority
 
-Status: `OPEN`
+Status: `CURRENT`
 
-| Option | Behavior | Benefits | Costs and consequences |
-| --- | --- | --- | --- |
-| Infer and propose | An explicit implementation request in `auto` can produce a patch proposal. | Natural workflow with minimal mode switching. | Intent classification must be conservative and approval must remain separate. |
-| Require switch | `auto` can discuss implementation but asks the user to enter `implement` before proposing a patch. | Maximum capability transparency. | Adds a redundant interaction after an already explicit request. |
-| Never implement | `auto` is permanently read-only. | Very simple safety model. | Makes the default mode less useful for routine delegated work. |
-
-Recommendation: infer and propose only when the user uses unambiguous implementation language; never infer approval to apply.
+There is no persistent `auto` or `implement` mode. The prompt infers intent per message. Only an unambiguous request to implement or change a concrete scope permits a diff proposal, and D2 still requires separate conversational acceptance before direct mutation.
 
 ### D6. Learning-note writes
 
@@ -356,13 +353,13 @@ Status: `OPEN`
 
 | Option | Behavior | Benefits | Costs and consequences |
 | --- | --- | --- | --- |
-| Explicit save plus diff | Notes are proposed only after “save this”, then approved like any file change. | User controls what enters long-term memory; no conflict with read-only teaching. | Requires an extra request and approval. |
+| Explicit save plus diff | Notes are proposed only after “save this”, then use D2's exact-diff conversational acceptance. | User controls what enters long-term memory; no conflict with read-only teaching. | Requires an extra request and acceptance. |
 | Offer after a lesson | Buli asks whether to save a concise note after meaningful teaching. | Encourages retention without silent writes. | Can become repetitive and interrupt the lesson. |
-| Automatic proposal | Buli prepares a note after every lesson but still awaits approval. | Captures knowledge consistently. | Produces noise and unnecessary proposals. |
-| Automatic write | Buli silently updates notes. | Lowest friction. | Violates explicit-consent expectations and may accumulate low-quality notes. |
+| Automatic proposal | Buli prepares a note after every lesson but still awaits conversational acceptance. | Captures knowledge consistently. | Produces noise and unnecessary proposals. |
+| Automatic write (`REJECTED`) | Buli silently updates notes. | Lowest friction. | Conflicts with D2 and may accumulate low-quality notes. |
 | No note writes | `learn` remains entirely read-only. | Simplest implementation. | Does not create the desired project learning memory. |
 
-Recommendation: explicit save plus exact diff approval. An optional reminder can be considered later based on usage.
+Recommendation: explicit save plus D2's exact-diff conversational acceptance. An optional reminder can be considered later based on usage.
 
 ### D7. Learning-note structure
 
@@ -431,7 +428,7 @@ Correctness, safety, explicit user constraints, and honest reporting should be n
 | Completion speed first | Working result, then explanation and simplification. | Useful under delivery pressure. | Highest risk of cognitive and technical debt. |
 | User-selected priority | User chooses per task. | Adapts to context. | Adds state and can make default behavior inconsistent. |
 
-Recommendation: understanding first by default, with an explicit user request able to prioritize speed for a particular task without relaxing correctness or approval rules.
+Recommendation: understanding first by default, with an explicit user request able to prioritize speed for a particular task without relaxing correctness or D2's diff-acceptance rule.
 
 ### D11. Number of options to discuss
 
@@ -472,15 +469,9 @@ Recommendation: make it a stable implementation principle, not a separate work m
 
 ### D14. Transition from plan to implementation
 
-Status: `OPEN`
+Status: `DECIDED`
 
-| Option | Behavior | Benefits | Costs and consequences |
-| --- | --- | --- | --- |
-| Explicit transition | Planning ends with a plan; implementation starts only after a new explicit request or mode change. | Clear consent boundary. | Adds one interaction. |
-| Confirm at end | Buli asks whether it should implement the agreed plan. | Natural workflow and explicit consent. | Can create repetitive prompts after every plan. |
-| Automatic continuation | Once uncertainties are resolved, Buli starts implementation. | Fastest flow. | Treats agreement with reasoning as permission to modify code. |
-
-Recommendation: explicit transition. Buli may offer implementation once, but should not begin automatically.
+Decision: planning ends without mutation. Implementation starts only after a new explicit request for a concrete scope, followed by D2's separate exact-diff conversational acceptance. Agreement with a plan is not implementation consent.
 
 ### D15. Implementation granularity
 
@@ -488,9 +479,9 @@ Status: `OPEN`
 
 | Option | Behavior | Benefits | Costs and consequences |
 | --- | --- | --- | --- |
-| One complete proposal | Prepare the smallest complete patch for the requested behavior. | Efficient review and fewer interruptions. | A larger diff can be harder to teach and validate. |
+| One complete proposal | Prepare the smallest complete diff for the requested behavior. | Efficient review and fewer interruptions. | A larger diff can be harder to teach and validate. |
 | Micro-step pairing | Propose one small edit at a time and discuss each step. | Maximum participation and understanding. | Slow and can fragment a coherent change. |
-| Phase-sized proposals | Agree on phases, then produce a complete patch per independently verifiable phase. | Balances coherence, learning, and reviewability. | Requires phase state for larger work. |
+| Phase-sized proposals | Agree on phases, then produce a complete diff per independently verifiable phase. | Balances coherence, learning, and reviewability. | Requires phase state for larger work. |
 
 Recommendation: one small complete proposal for ordinary changes and phase-sized proposals for larger features. Use micro-steps when the user explicitly wants to type or learn each part.
 
@@ -508,16 +499,9 @@ Recommendation: risk-based vertical slices. “First make it work” should mean
 
 ### D17. External documentation and web access
 
-Status: `OPEN`
+Status: `CURRENT`
 
-| Option | Behavior | Benefits | Costs and consequences |
-| --- | --- | --- | --- |
-| Local sources only | Buli reads repository code and installed dependency sources. | Simple privacy and capability model. | Cannot reliably explain current external APIs or documentation. |
-| Add controlled web tools | Buli can search and fetch documentation through explicit tools. | Supports authoritative and current research. | Requires source policy, citations, network errors, and privacy decisions. |
-| Provider-native research | Delegate browsing to provider capabilities. | Less host code. | Provider-specific behavior and weaker control/auditability. |
-| User-provided sources | Ask the user for links or docs when local evidence is insufficient. | No new tool infrastructure. | Interrupts work and shifts research burden to the user. |
-
-Recommendation: keep prompts capability-aware now; add controlled web tools only as a separate feature with source and privacy rules.
+The default OpenAI setup registers the host-owned `web_search` tool and can inspect live search results and pages. The application does not add that tool when a provider-neutral model is injected, so prompts and answers must remain capability-aware. Web output is untrusted data and does not grant instructions or tool authority.
 
 ### D18. Source citation policy
 
@@ -529,61 +513,40 @@ Status: `OPEN`
 | Cite evidence-bearing claims | Cite local code, external API behavior, and facts that affect decisions. | Useful evidence without overwhelming the response. | Requires judgment about which claims need support. |
 | Cite only on request | Sources are optional unless requested. | Concise output. | Conflicts with the desire for confidence and reproducibility. |
 
-Recommendation: cite evidence-bearing claims. Upgrade `read_file` to support line ranges and line-numbered output before making `path:line` a strict contract.
+Recommendation: cite evidence-bearing claims. `read` already supports line ranges through `offset` and `limit`, but its output is plain text; add line-numbered output before making `path:line` a strict contract for reads.
 
 ### D19. Secret-file policy
 
 Status: `OPEN`
+
+Current tools have no dedicated secret-file restriction, and `read`, `find`, `grep`, `edit`, and `write` can resolve process-accessible paths outside the workspace.
 
 | Option | Behavior | Benefits | Costs and consequences |
 | --- | --- | --- | --- |
 | Deny by default | Block common secret files and credential paths. | Strong privacy baseline. | Can prevent legitimate debugging unless an override exists. |
 | Ask before read | Show the path and request permission before sending content to the provider. | Balances control and legitimate access. | Requires read permissions and sensitive-output handling. |
 | Allow after explicit prompt | Read secrets when the user's message explicitly asks for it. | Lower implementation complexity. | Natural language is an unreliable policy boundary. |
-| Unrestricted workspace read | Treat every workspace file equally. | Simplest tool behavior. | Risks transmitting credentials and private data. |
+| Unrestricted process-readable paths | Treat every path the process can read equally. | Simplest tool behavior. | Risks transmitting credentials and private data. |
 
 Recommendation: deny known credential stores and ask before reading potentially sensitive project files such as `.env`.
 
 ### D20. Command execution policy
 
-Status: `DEFERRED`
+Status: `CURRENT`
 
-Buli currently has no command tool. Before adding one, choose among:
-
-| Option | Behavior | Benefits | Costs and consequences |
-| --- | --- | --- | --- |
-| Ask for every command | Every process execution needs approval. | Strong control. | Excessive friction for tests and read-only inspection. |
-| Allowlisted safe commands | Known read-only and verification commands run automatically; others require approval. | Practical balance. | Command classification and arguments are security-sensitive. |
-| Risk categories | Commands are classified as inspect, verify, mutate, network, or destructive with different policies. | Expressive and scalable. | More policy and UI complexity. |
-| Unrestricted execution | Explicit implementation request permits commands. | Minimal friction. | Unacceptable blast radius for a mentoring tool with approval goals. |
-
-Recommendation: defer until patch approval is designed, then use explicit risk categories enforced outside the prompt.
+`bash` is active with the Pi-style public schema `command` plus optional `timeout`. Before calling it, the model must show the exact command and timeout or explicitly state that no timeout is set; explain the program, subcommands, flags, arguments, operators, workspace-root working directory, expected outcome, and side effects; then wait for unambiguous written acceptance in a later message. Acceptance is limited to that exact command and timeout, and any change requires new acceptance. The tool then launches directly without a modal through `/bin/bash --noprofile --norc -c`, always in the workspace root. There is no default timeout, and the process is not sandboxed.
 
 ### D21. Session model
 
-Status: `OPEN`
+Status: `CURRENT`
 
-| Option | Behavior | Benefits | Costs and consequences |
-| --- | --- | --- | --- |
-| One workspace session | Continue the current permanent `default` conversation. | Minimal UI and storage logic. | Context grows indefinitely and unrelated tasks contaminate decisions. |
-| Multiple named sessions | User creates and resumes conversations. | Clear task boundaries and independent modes. | Requires session UI and lifecycle management. |
-| Automatic task sessions | Buli detects task boundaries and starts sessions. | Low user effort. | Unreliable classification can split or merge context incorrectly. |
-| Ephemeral by default | Start fresh unless the user explicitly resumes. | Clean context and predictable prompts. | Loses convenient continuity and learning history. |
-
-Recommendation: multiple sessions with an explicit new/reset action; keep behavior state isolated per session.
+The TUI supports multiple named JSONL sessions per workspace. A session is created only after its first prompt is accepted. There is no persisted mode or prompt-policy version to isolate because those states are not implemented.
 
 ### D22. Iteration limit
 
-Status: `OPEN`
+Status: `CURRENT`
 
-| Option | Behavior | Benefits | Costs and consequences |
-| --- | --- | --- | --- |
-| Fixed limit of five | Preserve current behavior. | Predictable cost and runaway protection. | Larger research tasks stop without a semantic completion signal. |
-| Configurable fixed limit | Set a default and allow product configuration. | Flexible cost control. | Configuration does not itself improve interruption handling. |
-| Budget plus continuation | Stop at a budget, report exact progress, and let the user continue. | Honest and controllable. | Requires explicit interrupted state and resumable task context. |
-| Goal-driven loop | Continue until completion or abort. | Strong autonomy. | Unbounded cost and tool-loop risk. |
-
-Recommendation: a configurable budget plus an explicit `max-iterations` result that reports completed work, remaining work, and the next safe step.
+`agent-loop.ts` has no fixed iteration count. It continues with another model turn after tool results or queued steering, and handles queued follow-up only after tool continuation and steering are exhausted. Abort and model stop/error reasons still terminate a run.
 
 ### D23. Prompt versioning
 
@@ -643,12 +606,9 @@ Status: `OPEN`
 2. “The user writes the code” conflicts with an `implement` mode that completes delegated work.
 3. “Be maximally concise” conflicts with “explain every detail and every example.”
 4. “Discuss all possible options” conflicts with Ponytail's stop-at-the-first-sufficient-rung minimalism.
-5. “Never change anything without permission” does not define whether the implementation request itself is permission.
-6. “Continue until the feature is complete” conflicts with a hard limit of five provider iterations.
-7. “Always research documentation and the internet” conflicts with the absence of web tools.
-8. “Always cite `path:line`” conflicts with a `read_file` tool that does not expose line-numbered ranges.
-9. “Ask the user proactively” can conflict with “do not stall; inspect the repository first.”
-10. “First make it work, then write tests” can conflict with changes where a failing regression test is the clearest definition of working behavior.
+5. “Always cite `path:line`” conflicts with `read` returning plain text without line numbers.
+6. “Ask the user proactively” can conflict with “do not stall; inspect the repository first.”
+7. “First make it work, then write tests” can conflict with changes where a failing regression test is the clearest definition of working behavior.
 
 The decision catalogue provides concrete alternatives for each conflict. None should be resolved silently inside prompt wording.
 
@@ -666,7 +626,7 @@ Expected behavior:
 - establish what problem the cache would solve;
 - explain meaningful options and consequences;
 - recommend the simplest sufficient choice;
-- do not produce or apply a patch unless implementation is explicitly requested.
+- do not propose or make file changes unless implementation is explicitly requested.
 
 ### Planning a feature
 
@@ -697,24 +657,24 @@ Expected behavior:
 
 User: “Implement the validation we discussed.”
 
-Expected behavior under the recommended policy:
+Expected behavior under current D2:
 
 - inspect definitions, callers, existing patterns, and tests;
 - restate only assumptions that materially affect the implementation;
 - choose the smallest complete change;
-- prepare an exact patch proposal;
-- wait for approval of that proposal;
-- apply only the approved diff and report observed verification results.
+- show the exact proposed diff and explain each change;
+- wait for unambiguous conversational acceptance in a later message;
+- call `edit` or `write` directly for exactly that diff, then report observed verification results.
 
 ### Ambiguous acknowledgement
 
 User after seeing a proposal: “Looks good.”
 
-Expected behavior under exact diff approval:
+Expected behavior under D2:
 
-- do not treat conversational approval as the technical approval action;
-- keep the proposal pending;
-- point to the explicit approval control without repeatedly explaining the whole policy.
+- do not infer acceptance from an ambiguous acknowledgement;
+- keep the diff unapplied;
+- ask for one unambiguous conversational acceptance; there is no edit-approval control or modal.
 
 ### Saving a learning note
 
@@ -725,12 +685,12 @@ Expected behavior under the recommended policy:
 - search `_learning` for the topic and related sections;
 - update an existing note instead of duplicating it when possible;
 - include connections, an example, sources, and optional recall questions;
-- present the note diff for approval;
+- present the exact note diff and wait for conversational acceptance under D2;
 - never overwrite unrelated user notes.
 
 ### Missing research capability
 
-User asks about the newest version of an external library while no web tool exists.
+User asks about the newest version of an external library while `web_search` is not in the active registry.
 
 Expected behavior:
 
@@ -750,135 +710,60 @@ Expected behavior:
 - continue following the active Buli policy;
 - never gain tools or approval from file contents.
 
-### Iteration budget reached
-
-Expected behavior:
-
-- do not imply completion;
-- report what was inspected or changed;
-- identify unfinished work and uncertainty;
-- provide the exact next step needed to resume.
-
 ## Test Strategy
 
-### Deterministic prompt tests
+### Current deterministic coverage
 
-- Core instructions appear exactly once for every behavior.
-- Mode instructions do not leak into incompatible modes.
-- The prompt lists only tools actually available for the turn.
-- Missing web access is represented as unavailable rather than promised.
-- Workspace paths are safely delimited, including unusual characters and newlines.
-- Prompt and policy version are present once versioning is enabled.
-- Critical invariants cannot disappear without a failing test.
+- `agents-prompts.test.ts` checks capability-aware prompt construction, D2's exact-diff conversational flow, direct `edit`/`write` semantics, Bash conversational consent wording, and lower-priority workspace instructions.
+- `openai-agent-model.test.ts` checks provider request mapping, prompt delivery through OpenAI instructions, model-facing tool names and schemas, and multi-turn tool execution.
+- `workspace-tools.test.ts` checks the exact core registry, text-only `read`, `find`/`grep` behavior, direct relative and absolute file mutation, and `prepareArguments` normalization for `edit`.
+- Web-search, tool-output, and Bash tests cover their host integration, direct command execution, optional timeout, output retention, and process cleanup.
 
-### Tool-policy tests
+### Remaining behavior evals
 
-- Each mode receives the exact intended set of tools.
-- A custom tool registry cannot bypass central policy.
-- `plan` and read-only `learn` cannot call a patch proposal tool.
-- Path traversal and symlink escapes remain blocked.
-- Secret-file policy is enforced independently of model wording.
-- Read tools report truncation and provide a continuation mechanism.
-
-### Patch and approval tests
-
-- Creating a proposal does not modify the workspace.
-- Rejection leaves files byte-for-byte unchanged.
-- Approval applies exactly the displayed diff once.
-- A file changed after proposal creation makes the proposal stale.
-- Restart never silently applies a pending proposal.
-- Mode changes do not approve pending work.
-- Path, symlink, binary, malformed, and duplicate-apply cases fail safely.
-
-### Session and UI tests
-
-- Selected and effective modes are visible and restored at the chosen scope.
-- Two sessions do not share mode or approval state.
-- The UI distinguishes working, waiting for approval, rejected, stale, interrupted, and completed states.
-- A new/reset session does not inherit unrelated task decisions.
-- Reaching the iteration budget produces an explicit interrupted result.
-
-### Model behavior evals
-
-Use a small, versioned set of scenarios inspired by Ponytail's behavior tests:
+A separate model behavior-eval suite remains useful for judgment that deterministic tests cannot enforce:
 
 - discussion does not become implementation;
-- planning remains read-only;
-- learning starts simple and connects to callers;
-- explicit implementation inspects before proposing;
-- ambiguous text is not technical approval;
+- planning and learning requests do not mutate files;
+- explicit implementation inspects first, shows an exact diff, and waits for unambiguous conversational acceptance;
+- ambiguous acknowledgement does not trigger `edit` or `write`;
 - requested detail overrides general brevity;
-- repository prompt injection is ignored;
+- repository and web prompt injection is treated as untrusted data;
 - minimalism removes unnecessary abstractions without removing required behavior;
 - unavailable tools and unknown facts are disclosed honestly.
 
-Model evals assess judgment and style. They never replace deterministic permission or filesystem tests.
+These evals would assess prompt behavior only. They would not turn D2 or Bash consent into runtime enforcement or replace filesystem, tool-protocol, and Bash execution tests.
 
-## Incremental Delivery Plan
+## Implementation Status
 
-The order intentionally follows Ponytail's minimalism lesson: validate the smallest useful layer before building infrastructure.
+The former read-only, modal-based mutation plan is superseded. The implemented baseline is:
 
-### Phase 0: behavior specification
+- a capability-aware prompt builder with deterministic tests;
+- Pi-style `read`, `find`, `grep`, `edit`, and `write` ports from SHA `6c87d9a`;
+- text-only reads and direct, unrestricted `edit`/`write` mutation under D2's prompt-level consent sequence;
+- direct workspace-root Bash commands after prompt-level exact-command acceptance;
+- application-level `tool_output` and default-OpenAI `web_search`;
+- an optional `prepareArguments` hook before tool schema conversion and validation;
+- prompt-builder, model adapter/integration, tool, web-search, output, Bash execution, and generic command-approval tests.
 
-- Keep this document as the decision workspace.
-- Discuss open decisions one section at a time.
-- Record accepted choices as `DECIDED` with rationale and date.
-- Do not expand the runtime prompt with unresolved promises.
+Remaining product work should stay separate from that baseline:
 
-### Phase 1: prompt builder, still read-only
-
-- Extract concise core instructions from accepted decisions.
-- Define typed behavior specs.
-- Build instructions from core, behavior, and truthful runtime context.
-- Keep all modes read-only initially.
-- Add deterministic prompt tests.
-
-### Phase 2: evidence-quality read tools
-
-- Add line ranges and line numbers to `read_file`.
-- Make truncation explicit and resumable.
-- Decide and enforce secret-file access.
-- Ensure citations can satisfy the chosen contract.
-
-### Phase 3: mode state and UI
-
-- Add selected and effective behavior to session state.
-- Show the active mode in the TUI.
-- Implement the chosen lifetime and switching rules.
-- Persist prompt/policy version with each turn.
-
-### Phase 4: patch proposal and approval
-
-- Introduce a non-mutating patch proposal operation.
-- Parse and validate paths before showing the diff.
-- Store base hashes and pending approval state.
-- Add approve/reject UI.
-- Apply only the exact approved proposal and detect stale files.
-- Add deterministic safety and lifecycle tests before enabling `implement` writes.
-
-### Phase 5: project learning notes
-
-- Validate the `_learning` format with plain Markdown files.
-- Search before creating or extending notes.
-- Reuse the patch approval path for note changes.
-- Add recall or indexing features only after real usage demonstrates a need.
-
-### Phase 6: external research and behavior evals
-
-- Decide whether controlled web access is needed.
-- Define trusted-source, citation, network, and privacy behavior.
-- Add a small versioned behavior-eval suite.
-- Compare prompt revisions against stable scenarios rather than intuition alone.
+- decide whether persistent modes are useful enough to implement;
+- decide and enforce secret-file policy;
+- add line-numbered `read` output if strict read citations are required;
+- validate the `_learning` note workflow before adding indexing or MCP infrastructure;
+- add the focused behavior-eval suite above;
+- add prompt/policy versioning only when there is state worth versioning.
 
 ## Decision Log
 
 | ID | Topic | Status | Current result |
 | --- | --- | --- | --- |
 | D1 | Default code ownership | `DECIDED` | Hybrid: guide by default, implement after explicit delegation. |
-| D2 | Meaning of implementation request | `OPEN` | Options documented. |
+| D2 | Meaning of implementation request | `DECIDED` | Show and explain the exact diff, wait for explicit conversational acceptance, then mutate directly with `edit`/`write`; there is no runtime edit approval. |
 | D3 | Mode model | `OPEN` | Options documented. |
 | D4 | Mode lifetime | `OPEN` | Options documented. |
-| D5 | Auto implementation authority | `OPEN` | Options documented. |
+| D5 | Per-message implementation authority | `CURRENT` | No persistent mode; infer intent per message, with D2 required for edits. |
 | D6 | Learning-note writes | `OPEN` | Options documented. |
 | D7 | Learning-note structure | `OPEN` | Options documented. |
 | D8 | Response depth | `OPEN` | Options documented. |
@@ -887,32 +772,25 @@ The order intentionally follows Ponytail's minimalism lesson: validate the small
 | D11 | Number of alternatives | `OPEN` | Options documented. |
 | D12 | Question threshold | `OPEN` | Options documented. |
 | D13 | Degree of Ponytail adoption | `OPEN` | Options documented. |
-| D14 | Plan-to-implementation transition | `OPEN` | Options documented. |
+| D14 | Plan-to-implementation transition | `DECIDED` | Planning does not continue automatically; a new implementation request and D2 acceptance are required. |
 | D15 | Implementation granularity | `OPEN` | Options documented. |
 | D16 | Quality sequence | `OPEN` | Options documented. |
-| D17 | External research | `OPEN` | Options documented. |
+| D17 | External research | `CURRENT` | The default OpenAI setup exposes host-owned `web_search`; custom configurations are capability-dependent. |
 | D18 | Citation policy | `OPEN` | Options documented. |
 | D19 | Secret-file policy | `OPEN` | Options documented. |
-| D20 | Command execution | `DEFERRED` | Decide before adding a command tool. |
-| D21 | Session model | `OPEN` | Options documented. |
-| D22 | Iteration limit | `OPEN` | Options documented. |
+| D20 | Command execution | `CURRENT` | Explain the exact command and optional timeout, wait for written acceptance in a later message, then execute directly in the workspace root without runtime approval. |
+| D21 | Session model | `CURRENT` | Multiple named JSONL sessions per workspace. |
+| D22 | Iteration limit | `CURRENT` | No fixed iteration cap; continuation follows tool results and queued input. |
 | D23 | Prompt versioning | `OPEN` | Options documented. |
 | D24 | Language | `OPEN` | Options documented. |
 | D25 | Assumed skill level | `OPEN` | Options documented. |
 | D26 | API/library completeness | `OPEN` | Options documented. |
 | D27 | Workspace instructions | `DECIDED` | Create `.buli` at startup and load one exact-case file in `BULI.md`, `AGENTS.md`, `CLAUDE.md` precedence order. Load once per process as lower-priority project policy. |
 
-## Migration Rule For `system-prompt.ts`
+## Runtime Drift Rule
 
-Until the decisions above are accepted:
-
-- keep the current WIP comments so no original intent is lost;
-- do not copy this entire document into the system prompt;
-- do not describe unavailable tools or workflows as active capabilities.
-
-After enough decisions are accepted:
-
-1. Convert accepted behavior into short, testable runtime instructions.
-2. Enforce capabilities and permissions in code.
-3. Replace the large WIP comment block with a short link to this document.
-4. Keep this file as design rationale and the typed prompt builder as executable behavior.
+- Keep this file as design rationale; `system-prompt.ts`, the active tool registry, and tool implementations define executable behavior.
+- Build capability wording from supplied tool descriptors rather than copying a fixed tool list into the prompt.
+- Keep D2 explicitly described as prompt-level consent unless runtime edit enforcement is actually introduced.
+- Update prompt-builder, model, and tool tests whenever capability names, consent semantics, or approval boundaries change.
+- Do not describe open design ideas as active capabilities.

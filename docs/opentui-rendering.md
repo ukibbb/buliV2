@@ -1,6 +1,6 @@
 # OpenTUI rendering
 
-Buli currently targets OpenTUI 0.5.6. This document records the rendering
+Buli currently targets OpenTUI 0.5.8. This document records the rendering
 choices that are easy to lose when adding screens or upgrading OpenTUI.
 
 ## Theme and layout
@@ -15,13 +15,14 @@ choices that are easy to lose when adding screens or upgrading OpenTUI.
 - `useTerminalDimensions()` keeps command-menu selection visible on short
   terminals. Authentication content uses a bounded scroll area for the same
   reason.
-- Patch approvals use unified diffs at every terminal width. The built-in
-  OpenTUI console keeps its default colors and chrome.
+- Host-injected tools may use one scrollable command-approval panel. Built-in
+  Bash consent happens in the conversation and does not open that panel. The
+  built-in OpenTUI console keeps its default colors and chrome.
 
 ## Syntax highlighting
 
 `syntax` is a single `SyntaxStyle` instance shared by Markdown, fenced code,
-command approvals, and workspace diffs. It covers the detailed Tree-sitter
+and host-injected command approvals. It covers the detailed Tree-sitter
 scopes for comments, constants, functions, keywords, operators, punctuation,
 strings, types, variables, and Markdown markup while using only the classic
 Buli palette. Scope fallback still lets unknown subtypes inherit their broader
@@ -29,19 +30,21 @@ token style.
 
 Markdown keeps OpenTUI's native renderer and top-level streaming block reuse.
 Headings, emphasis, links, lists, quotes, inline code, and fenced code therefore
-receive syntax styling without a custom `renderNode` callback. Fenced code does
-not add a card, background, or padding. Tables use the full available width,
-proportional columns, word wrapping, and the muted single-line grid.
+receive syntax styling. A code-block-only `renderNode` callback converts valid,
+closed `diff` fenced blocks into OpenTUI's unified diff viewer. Incomplete
+streaming blocks and malformed patches retain the native code-block fallback.
+Other fenced code does not add a card, background, or padding. Tables use the
+full available width, proportional columns, word wrapping, and the muted
+single-line grid.
 
-Command approvals render their preview as Bash code. Patch approvals choose the
-diff parser from each file path and fall back to plain text when the extension
-is unknown; they remain unified at every terminal width.
+Host-injected command approvals render their preview as Bash code. Built-in
+Bash commands and file edits are proposed in the conversation and do not open a
+separate modal.
 
 OpenTUI includes the TypeScript parser. `src/terminal/parsers.ts` registers
 tag-pinned Python 0.23.6 and Bash 0.25.0 WASM grammars and highlight queries
-before the shared Tree-sitter client starts. The first use can require network
-access; OpenTUI caches the downloaded parser resources. A failed or unknown
-parser still displays unstyled content.
+from embedded assets before the shared Tree-sitter client starts. A failed or
+unknown parser still displays unstyled content.
 
 ## Component map
 
@@ -53,8 +56,8 @@ parser still displays unstyled content.
 | `<input>` | Manual authentication callback entry |
 | `<select>` | Authentication choices |
 | `<markdown>` | Assistant responses and tool output with shared syntax highlighting |
-| `<code>` | Native fenced blocks and Bash command approval previews |
-| `<diff>` | Unified per-file workspace patches with path-based syntax highlighting |
+| `<code>` | Native fenced blocks and host-injected command approval previews |
+| `<diff>` | Valid, closed `diff` fenced blocks in assistant responses |
 | `<a>` | Clickable authentication URLs while preserving visible fallback text |
 
 ## Reserved primitives
@@ -64,8 +67,8 @@ product behavior:
 
 - `<image>`: message attachments or tool results that carry image data. Define
   terminal capability fallback and size limits before rendering binary content.
-- `<line-number>`: a dedicated source-file viewer. Existing `<diff>` already
-  owns patch line numbers, so a separate gutter there would duplicate state.
+- `<line-number>`: a dedicated source-file viewer. A future `<diff>` viewer can
+  render its own patch line numbers without a separate gutter.
 - `<tab-select>`: persistent peer views, such as multiple open artifacts. The
   current command menu and authentication flow are actions, not tabs.
 - `<ascii-font>`: responsive display type. Home intentionally uses a fixed text

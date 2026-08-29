@@ -32,7 +32,9 @@ Markdown keeps OpenTUI's native renderer and top-level streaming block reuse.
 Headings, emphasis, links, lists, quotes, inline code, and fenced code therefore
 receive syntax styling. A code-block-only `renderNode` callback converts valid,
 closed `diff` fenced blocks into OpenTUI's unified diff viewer. Incomplete
-streaming blocks and malformed patches retain the native code-block fallback.
+streaming blocks and structurally malformed patches retain the native code-block
+fallback. Inaccurate hunk counts are corrected only in the render input; stored
+assistant text remains unchanged.
 Other fenced code does not add a card, background, or padding. Tables use the
 full available width, proportional columns, word wrapping, and the muted
 single-line grid.

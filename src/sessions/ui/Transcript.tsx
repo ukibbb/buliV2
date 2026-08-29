@@ -11,6 +11,7 @@ import type {
     IToolCallContent,
     IToolResultMessage,
 } from "@/agent"
+import { normalizeMarkdownDiff } from "@/sessions/ui/markdown-diff"
 import { ToolActivityLine } from "@/sessions/ui/ToolActivity"
 import { syntax, theme } from "@/terminal/theme"
 
@@ -33,12 +34,6 @@ function isClosedFencedBlock(raw: string): boolean {
     return /^ {0,3}(`{3,}|~{3,})[ \t]*$/.test(lastLine)
 }
 
-function isUnifiedDiff(diff: string): boolean {
-    return /^--- .+\r?$/m.test(diff)
-        && /^\+\+\+ .+\r?$/m.test(diff)
-        && /^@@ .+ @@/m.test(diff)
-}
-
 export interface ITranscriptProps {
     readonly messages: readonly TAgentMessage[]
     readonly streamingMessage?: IAssistantMessage
@@ -57,13 +52,15 @@ function AssistantCard(props: {
     const renderNode = useMemo(
         () => createMarkdownCodeBlockRenderer({
             diff: (token, context) => {
-                if (!isUnifiedDiff(token.text)
-                    || (props.streaming && !isClosedFencedBlock(token.raw))) {
+                if (props.streaming && !isClosedFencedBlock(token.raw)) {
                     return context.defaultRender()
                 }
 
+                const diff = normalizeMarkdownDiff(token.text)
+                if (!diff) return context.defaultRender()
+
                 return new DiffRenderable(renderer, {
-                    diff: token.text,
+                    diff,
                     width: "100%",
                     view: "unified",
                     fg: theme.text,

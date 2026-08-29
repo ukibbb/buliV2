@@ -1093,6 +1093,85 @@ test("replaces a completed streaming diff block with the diff viewer", async () 
     }
 })
 
+test("repairs completed diff counts before creating the diff viewer", async () => {
+    const patch = [
+        "--- a/example.ts",
+        "+++ b/example.ts",
+        "@@ -1,2 +1,3 @@",
+        " const answer = 1",
+        "+const repaired = true",
+    ].join("\n")
+    const message: IAssistantMessage = {
+        id: "repaired-diff",
+        sessionId: "default",
+        runId: "run-repaired-diff",
+        role: "assistant",
+        createdAt: 1,
+        stopReason: "stop",
+        content: [{ type: "text", text: `\`\`\`diff\n${patch}\n\`\`\`` }],
+    }
+    const setup = await testRender(<Transcript messages={[message]} />, {
+        width: 80,
+        height: 12,
+    })
+
+    try {
+        await act(async () => {
+            await setup.renderOnce()
+        })
+
+        const diffs = diffRenderables(setup.renderer.root)
+        expect(diffs).toHaveLength(1)
+        expect(diffs[0]?.diff).toContain("@@ -1,1 +1,2 @@")
+        expect(message.content[0]).toEqual({
+            type: "text",
+            text: `\`\`\`diff\n${patch}\n\`\`\``,
+        })
+        expect(setup.captureCharFrame()).not.toContain("Error parsing diff")
+    } finally {
+        act(() => {
+            setup.renderer.destroy()
+        })
+    }
+})
+
+test("falls back to code for a structurally malformed completed diff", async () => {
+    const patch = [
+        "--- a/example.ts",
+        "+++ b/example.ts",
+        "@@ -1 +1 @@",
+        "line without a diff prefix",
+    ].join("\n")
+    const setup = await testRender(<Transcript messages={[{
+        id: "malformed-diff",
+        sessionId: "default",
+        runId: "run-malformed-diff",
+        role: "assistant",
+        createdAt: 1,
+        stopReason: "stop",
+        content: [{ type: "text", text: `\`\`\`diff\n${patch}\n\`\`\`` }],
+    }]} />, {
+        width: 80,
+        height: 12,
+    })
+
+    try {
+        await act(async () => {
+            await setup.renderOnce()
+        })
+
+        expect(diffRenderables(setup.renderer.root)).toHaveLength(0)
+        expect(codeRenderables(setup.renderer.root).some(
+            (renderable) => renderable.filetype === "diff",
+        )).toBe(true)
+        expect(setup.captureCharFrame()).not.toContain("Error parsing diff")
+    } finally {
+        act(() => {
+            setup.renderer.destroy()
+        })
+    }
+})
+
 test("keeps completed history renderables stable across streaming text updates", async () => {
     let updateText: ((text: string) => void) | undefined
     const messages: TAgentMessage[] = [

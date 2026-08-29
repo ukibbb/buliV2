@@ -41,6 +41,18 @@ export interface IAgentApprovalContext {
     readonly signal: AbortSignal
 }
 
+/**
+ * Bridges a tool's approval request to Agent state and the UI.
+ *
+ * No production tool currently uses this bridge; the end-to-end infrastructure
+ * is implemented and covered by tests. To enable approval for a tool:
+ * 1. Set its `approvalKind` to a kind declared in `tool-approval.ts`.
+ * 2. Call and await `context.requestApproval(draft)` inside `tool.execute()`.
+ * 3. Handle every returned decision before performing the protected action.
+ * 4. Present `tool_approval_requested` in the UI and pass the user's decision
+ *    through `BuliRuntime.resolveToolApproval()`.
+ * 5. Add focused tool, Agent, session, runtime, and UI tests for the full flow.
+ */
 export type TAgentApprovalHandler = (
     draft: TToolApprovalDraft,
     context: IAgentApprovalContext,
@@ -85,8 +97,10 @@ export async function runAgentLoop(
     context: IAgentContext,
     config: IAgentLoopConfig,
 ): Promise<IAgentLoopResult> {
+    // dodac now i generateId do common i uzywac explict nie z obiektu ?
     const now = config.now ?? Date.now
     const generateId = config.generateId ?? (() => crypto.randomUUID())
+
     // One registry keeps model descriptors and local executors in sync.
     const toolsByName = indexAgentTools(context.tools)
     const activeTools = [...toolsByName.values()]

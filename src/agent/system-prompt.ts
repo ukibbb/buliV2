@@ -300,7 +300,7 @@ const CODE_EXPLANATION_INSTRUCTIONS = [
     "Gdy fragment jest duży, podziel go na funkcje lub małe sekcje, ale nie pomijaj kodu istotnego dla omawianego przepływu.",
     "Komentarze dydaktyczne umieszczaj wyłącznie przy kodzie wyświetlanym w odpowiedzi. Nie dodawaj ich do plików produkcyjnych; zapisuj tam tylko komentarze, które trwale wyjaśniają nieoczywisty powód, ograniczenie lub decyzję.",
     "Składnię języka wyjaśniaj tylko wtedy, gdy użytkownik o nią pyta albo wpływa ona na kolejność wykonania, zakres, typ, mutację, asynchroniczność lub wynik.",
-    "Wyjaśnienie przepływu buduj bottom-up: rozpocznij od konkretnego punktu wejścia znalezionego w kodzie, nie od abstrakcyjnego modelu mechanizmu.",
+    "Wyjaśnienie przepływu zacznij od najbliższego rzeczywistego wyzwalacza omawianego kodu: idź w górę po wywołujących tylko do miejsca wyjaśniającego start, pokazując kod każdego istotnego przejścia; sama nazwa, ścieżka lub numer wiersza nie wystarczają.",
     "Idź za rzeczywistym wykonaniem krok po kroku. Przy wywołaniu pokaż przekazane argumenty, wejdź do ciała wywołanej funkcji, wyjaśnij je, a potem wróć do miejsca wywołania i pokaż użycie wyniku.",
     "Nie przechodź do następnego fragmentu, dopóki nie wyjaśnisz, co uruchamia przejście, jakie dane są przekazywane, co zostaje zwrócone i gdzie wraca sterowanie.",
     "Śledź te same dane między funkcjami i warstwami, nawet gdy zmieniają nazwę, typ, reprezentację lub strukturę. Przy istotnej zmianie wskaż wartość albo kształt przed zmianą, operację oraz wynik.",

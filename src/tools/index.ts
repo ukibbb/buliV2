@@ -16,6 +16,13 @@ export {
     MAX_TOOL_OUTPUT_PAGE_LINES,
 } from "@/tools/output/tool-output-tool"
 export { createFdPathSearcher } from "@/tools/search/fd-path-search"
+export {
+    FileChangeProposalStore,
+} from "@/tools/patch/file-change-proposal-store"
+export {
+    createApplyFileChangesTool,
+    createRejectFileChangesTool,
+} from "@/tools/patch/file-change-proposal-tools"
 export { createFindTool } from "@/tools/search/find-tool"
 export { createGrepTool } from "@/tools/search/grep-tool"
 export { createReadTool } from "@/tools/read/read-tool"

@@ -19,6 +19,13 @@ export type {
     TAgentEventListener,
 } from "@/agent/events"
 export type {
+    IFileChangeProposal,
+    IFileChangeProposalRecord,
+    IFileChangeProposalSource,
+    TFileChangeOperation,
+    TFileChangeProposalStatus,
+} from "@/agent/file-change-proposal"
+export type {
     TAgentMessage,
     TAssistantContent,
     IAssistantMessage,

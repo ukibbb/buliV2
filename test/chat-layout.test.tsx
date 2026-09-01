@@ -4,6 +4,7 @@ import { act } from "react"
 
 import { ChatStatus } from "@/app/ui/chat/ChatStatus"
 import { CommandMenu } from "@/app/ui/chat/CommandMenu"
+import { glyphs } from "@/terminal/theme"
 
 test("keeps errors readable beside a long model name", async () => {
   const setup = await testRender(
@@ -70,7 +71,9 @@ test("renders compaction lifecycle and estimated context usage", async () => {
     })
 
     const frame = setup.captureCharFrame()
-    expect(frame).toContain("Compacting context | Esc stop")
+    expect(frame).toContain("Compacting context · Esc stop")
+    expect(frame).toContain(glyphs.snakeHead)
+    expect(frame).toContain(glyphs.snakeBody)
     expect(frame).toContain("ctx ~142k/200k (71%)")
     expect(frame).not.toContain("Stale provider failure")
   } finally {

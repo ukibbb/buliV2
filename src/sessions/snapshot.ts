@@ -3,18 +3,24 @@ import {
     type TAgentMessage,
     type TAgentRunEndReason,
     type IAssistantMessage,
+    type IFileChangeProposal,
+    type IFileChangeProposalRecord,
     type TToolApprovalRequest,
     type IUserMessage,
 } from "@/agent"
+import type { ICompactionCheckpoint } from "@/sessions/compaction/checkpoint"
 import type { IContextUsage } from "@/sessions/compaction/context-budget"
 
 /** Immutable read model published by one live agent session. */
 export interface ISessionSnapshot {
     readonly messages: readonly TAgentMessage[]
+    readonly fileChangeProposals: readonly IFileChangeProposalRecord[]
     readonly pendingSteeringMessages: readonly IUserMessage[]
     readonly pendingFollowUpMessages: readonly IUserMessage[]
     readonly streamingMessage?: IAssistantMessage
     readonly pendingToolApproval?: TToolApprovalRequest
+    readonly pendingFileChangeProposal?: IFileChangeProposal
+    readonly compactionCheckpoint?: ICompactionCheckpoint
     readonly isRunning: boolean
     readonly isCompacting: boolean
     readonly contextUsage?: IContextUsage
@@ -45,6 +51,11 @@ export function freezeSessionSnapshot(
             previousSource?.messages,
             previousValue?.messages,
         ),
+        fileChangeProposals: freezeBranch(
+            snapshot.fileChangeProposals,
+            previousSource?.fileChangeProposals,
+            previousValue?.fileChangeProposals,
+        ),
         pendingSteeringMessages: freezeBranch(
             snapshot.pendingSteeringMessages,
             previousSource?.pendingSteeringMessages,
@@ -71,6 +82,24 @@ export function freezeSessionSnapshot(
                     snapshot.pendingToolApproval,
                     previousSource?.pendingToolApproval,
                     previousValue?.pendingToolApproval,
+                ),
+            }),
+        ...(snapshot.pendingFileChangeProposal === undefined
+            ? {}
+            : {
+                pendingFileChangeProposal: freezeBranch(
+                    snapshot.pendingFileChangeProposal,
+                    previousSource?.pendingFileChangeProposal,
+                    previousValue?.pendingFileChangeProposal,
+                ),
+            }),
+        ...(snapshot.compactionCheckpoint === undefined
+            ? {}
+            : {
+                compactionCheckpoint: freezeBranch(
+                    snapshot.compactionCheckpoint,
+                    previousSource?.compactionCheckpoint,
+                    previousValue?.compactionCheckpoint,
                 ),
             }),
         isRunning: snapshot.isRunning,

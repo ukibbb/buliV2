@@ -14,6 +14,7 @@ import { testRender } from "@opentui/react/test-utils"
 import { act, useState } from "react"
 
 import type { TAgentMessage, IAssistantMessage } from "@/agent"
+import type { ICompactionCheckpoint } from "@/sessions"
 import { Transcript } from "@/sessions/ui"
 import { syntax, theme } from "@/terminal/theme"
 
@@ -1266,6 +1267,149 @@ test("keeps completed history renderables stable across streaming text updates",
         expect(historyCodeAfter).toBe(historyCodeBefore)
         expect(toolAfter).toBe(toolBefore)
         expect(setup.captureCharFrame()).toContain("Live text continues")
+    } finally {
+        act(() => {
+            setup.renderer.destroy()
+        })
+    }
+})
+
+test("renders a checkpoint at its anchor before uncompacted and streaming messages", async () => {
+    const messages: TAgentMessage[] = [
+        {
+            id: "compacted-user",
+            sessionId: "default",
+            runId: "run-old",
+            role: "user",
+            source: "prompt",
+            createdAt: 1,
+            content: "Compacted prefix",
+        },
+        {
+            id: "uncompacted-user",
+            sessionId: "default",
+            runId: "run-new",
+            role: "user",
+            source: "prompt",
+            createdAt: 2,
+            content: "Uncompacted suffix",
+        },
+    ]
+    const checkpoint: ICompactionCheckpoint = {
+        id: "checkpoint-1",
+        sessionId: "default",
+        createdAt: 3,
+        reason: "automatic",
+        compactedMessageCount: 1,
+        throughMessageId: "compacted-user",
+        summary: [
+            "# Checkpoint summary",
+            "",
+            "- Preserved detail",
+            "",
+            "```diff",
+            "--- a/src/value.ts",
+            "+++ b/src/value.ts",
+            "@@ -1 +1 @@",
+            "-const value = 1",
+            "+const value = 2",
+            "```",
+        ].join("\n"),
+    }
+    const setup = await testRender(<Transcript
+        messages={messages}
+        compactionCheckpoint={checkpoint}
+        streamingMessage={{
+            id: "live-assistant",
+            sessionId: "default",
+            runId: "run-live",
+            role: "assistant",
+            createdAt: 4,
+            stopReason: "pending",
+            content: [{ type: "text", text: "Live response" }],
+        }}
+    />, {
+        width: 80,
+        height: 20,
+    })
+
+    try {
+        await act(async () => {
+            await setup.renderOnce()
+            await Promise.all(
+                codeRenderables(setup.renderer.root).map((renderable) =>
+                    renderable.highlightingDone
+                ),
+            )
+            await setup.renderOnce()
+        })
+
+        const frame = setup.captureCharFrame()
+        const compactedIndex = frame.indexOf("Compacted prefix")
+        const checkpointIndex = frame.indexOf("Context compacted")
+        const suffixIndex = frame.indexOf("Uncompacted suffix")
+        const liveIndex = frame.indexOf("Live response")
+        expect(compactedIndex).toBeGreaterThanOrEqual(0)
+        expect(checkpointIndex).toBeGreaterThan(compactedIndex)
+        expect(frame).toContain("Checkpoint summary")
+        expect(frame).toContain("Preserved detail")
+        expect(suffixIndex).toBeGreaterThan(checkpointIndex)
+        expect(liveIndex).toBeGreaterThan(suffixIndex)
+
+        const markdown = markdownRenderables(setup.renderer.root)
+        expect(markdown).toHaveLength(2)
+        expect(markdown[0]?.content).toBe(checkpoint.summary)
+        expect(markdown[0]?.syntaxStyle).toBe(syntax)
+        expect(markdown[0]?.conceal).toBe(true)
+        expect(markdown[0]?.concealCode).toBe(false)
+        expect(markdown[0]?.internalBlockMode).toBe("top-level")
+        expect(markdown[0]?.renderNode).toBeFunction()
+        expect(markdown[0]?.tableOptions).toEqual(expect.objectContaining({
+            style: "grid",
+            widthMode: "full",
+        }))
+        const checkpointDiffs = diffRenderables(setup.renderer.root)
+        expect(checkpointDiffs).toHaveLength(1)
+        expect(checkpointDiffs[0]?.diff).toContain("@@ -1 +1 @@")
+        expect(checkpointDiffs[0]?.diff).toContain("+const value = 2")
+    } finally {
+        act(() => {
+            setup.renderer.destroy()
+        })
+    }
+})
+
+test("treats a checkpoint-only transcript as non-empty", async () => {
+    const setup = await testRender(<Transcript
+        messages={[]}
+        compactionCheckpoint={{
+            id: "checkpoint-only",
+            sessionId: "default",
+            createdAt: 1,
+            reason: "manual",
+            compactedMessageCount: 1,
+            throughMessageId: "persisted-anchor",
+            summary: "Checkpoint without loaded messages",
+        }}
+    />, {
+        width: 80,
+        height: 8,
+    })
+
+    try {
+        await act(async () => {
+            await setup.renderOnce()
+            await Promise.all(
+                codeRenderables(setup.renderer.root).map((renderable) =>
+                    renderable.highlightingDone
+                ),
+            )
+            await setup.renderOnce()
+        })
+        const frame = setup.captureCharFrame()
+        expect(frame).toContain("Context compacted")
+        expect(frame).toContain("Checkpoint without loaded messages")
+        expect(frame).not.toContain("Start conversation")
     } finally {
         act(() => {
             setup.renderer.destroy()

@@ -18,7 +18,7 @@ import {
 const MODEL_PROFILE = {
   providerId: "test",
   modelId: "context-model",
-  contextWindowTokens: 4_096,
+  contextWindowTokens: 16_000,
 } as const
 
 test("AgentSession dispatches below-threshold requests without compaction", async () => {
@@ -91,13 +91,15 @@ test("AgentSession compacts at preflight and dispatches the same durable prompt"
   const run = session.prompt(prompt)
   await run.settled
 
-  expect(summaryRequests.length).toBeGreaterThan(1)
+  expect(summaryRequests).toHaveLength(1)
   expect(summaryRequests.every((request) => (
-    request.tools.length === 0
+    request.reasoningEffort === "none"
+    && request.tools.length === 0
     && request.messages.length === 1
     && request.messages[0]?.role === "user"
   ))).toBe(true)
   expect(conversationRequests).toHaveLength(1)
+  expect(conversationRequests[0]?.reasoningEffort).toBe("medium")
   expect(manager.getCompactionCheckpoint("session-1")).toMatchObject({
     reason: "automatic",
     compactedMessageCount: 4,
@@ -305,7 +307,7 @@ test("AgentSession compacts a 238k request before dispatching to a 272k model", 
         : { contextSummary: request.contextSummary }),
       messages: request.messages,
       tools: request.tools,
-    }) <= 64_000
+    }) <= contextWindowTokens - 16_384
   ))).toBe(true)
   expect(conversationRequests).toHaveLength(1)
   expect(estimateContextInputTokens({
@@ -353,6 +355,7 @@ test("AgentSession blocks an oversized request when compaction has no progress",
   expect(summaryAttempts).toBe(0)
   expect(requests).toHaveLength(0)
   expect(manager.getCompactionCheckpoint("session-1")).toBeUndefined()
+  expect(session.getSnapshot().compactionCheckpoint).toBeUndefined()
   expect(manager.getMessages("session-1").findLast(
     (message) => message.role === "assistant" && message.runId === run.runId,
   )).toMatchObject({
@@ -477,6 +480,8 @@ for (const overflowMode of ["emitted", "thrown"] as const) {
     seedLargeTurns(manager, 2)
     let conversationAttempts = 0
     let summaryAttempts = 0
+    let checkpointBeforeRetry: string | undefined
+    let publishedCheckpointBeforeRetry: string | undefined
     const requests: IAgentModelRequest[] = []
     const session = openSession(manager, {
       async *stream(request) {
@@ -493,6 +498,13 @@ for (const overflowMode of ["emitted", "thrown"] as const) {
 
         conversationAttempts += 1
         requests.push(cloneRequest(request))
+        if (conversationAttempts === 2) {
+          checkpointBeforeRetry = manager.getCompactionCheckpoint(
+            "session-1",
+          )?.summary
+          publishedCheckpointBeforeRetry = session.getSnapshot()
+            .compactionCheckpoint?.summary
+        }
         if (conversationAttempts === 1) {
           const overflow = new ModelContextOverflowError("context overflow")
           if (overflowMode === "emitted") {
@@ -510,6 +522,10 @@ for (const overflowMode of ["emitted", "thrown"] as const) {
 
     expect(conversationAttempts).toBe(2)
     expect(summaryAttempts).toBe(1)
+    expect(checkpointBeforeRetry).toBe(structuredSummary("Recovered context"))
+    expect(publishedCheckpointBeforeRetry).toBe(
+      structuredSummary("Recovered context"),
+    )
     expect(requests[1]).toMatchObject({
       runId: run.runId,
       contextSummary: structuredSummary("Recovered context"),
@@ -594,6 +610,10 @@ test("AgentSession can compact at preflight and advance again for overflow recov
     }),
   ])
   expect(manager.getCompactionCheckpoint("session-1")).toMatchObject({
+    compactedMessageCount: 16,
+    summary: structuredSummary("Recompressed checkpoint"),
+  })
+  expect(session.getSnapshot().compactionCheckpoint).toMatchObject({
     compactedMessageCount: 16,
     summary: structuredSummary("Recompressed checkpoint"),
   })
@@ -702,6 +722,7 @@ test("AgentSession surfaces overflow without retry when compaction cannot advanc
   expect(conversationAttempts).toBe(1)
   expect(summaryAttempts).toBe(0)
   expect(manager.getCompactionCheckpoint("session-1")).toBeUndefined()
+  expect(session.getSnapshot().compactionCheckpoint).toBeUndefined()
   expect(compactionStates).toContain(true)
   expect(session.getSnapshot().isCompacting).toBe(false)
   expect(manager.getMessages("session-1").findLast(
@@ -724,6 +745,8 @@ test("AgentSession aborts preflight compaction without saving a checkpoint", asy
     listSessions: memory.listSessions,
     getMessages: memory.getMessages,
     appendMessage: memory.appendMessage,
+    getFileChangeProposals: memory.getFileChangeProposals,
+    saveFileChangeProposal: memory.saveFileChangeProposal,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
     saveCompactionCheckpoint: (checkpoint) => {
       checkpointSaves += 1
@@ -759,6 +782,7 @@ test("AgentSession aborts preflight compaction without saving a checkpoint", asy
   expect(conversationAttempts).toBe(0)
   expect(checkpointSaves).toBe(0)
   expect(manager.getCompactionCheckpoint("session-1")).toBeUndefined()
+  expect(session.getSnapshot().compactionCheckpoint).toBeUndefined()
   expect(compactionStates.filter(Boolean).length).toBeGreaterThanOrEqual(2)
   expect(session.getSnapshot().isCompacting).toBe(false)
 

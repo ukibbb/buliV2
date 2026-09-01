@@ -1,4 +1,7 @@
-import type { TAgentMessage } from "@/agent"
+import type {
+    IFileChangeProposalRecord,
+    TAgentMessage,
+} from "@/agent"
 import {
     assertCheckpointAnchor,
     type ICompactionCheckpoint,
@@ -10,6 +13,7 @@ import type {
 import {
     assertCompactionCheckpoint,
     assertDurableSessionMessage,
+    assertFileChangeProposalRecord,
     assertSessionInfo,
 } from "@/sessions/validation"
 
@@ -25,6 +29,10 @@ export class InMemorySessionManager implements ISessionManager {
     private readonly checkpointsBySession = new Map<
         TSessionId,
         ICompactionCheckpoint
+    >()
+    private readonly proposalsBySession = new Map<
+        TSessionId,
+        readonly IFileChangeProposalRecord[]
     >()
 
     readonly createSession = (info: ISessionInfo): void => {
@@ -73,6 +81,32 @@ export class InMemorySessionManager implements ISessionManager {
         })
     }
 
+    readonly getFileChangeProposals = (
+        sessionId: string,
+    ): readonly IFileChangeProposalRecord[] => {
+        return structuredClone(this.proposalsBySession.get(sessionId) ?? [])
+    }
+
+    readonly saveFileChangeProposal = (
+        proposal: IFileChangeProposalRecord,
+    ): void => {
+        assertFileChangeProposalRecord(proposal)
+        if (!this.sessionsById.has(proposal.sessionId)) {
+            throw new Error(`Session does not exist: ${proposal.sessionId}`)
+        }
+
+        const current = this.proposalsBySession.get(proposal.sessionId) ?? []
+        const existingIndex = current.findIndex(
+            (candidate) => candidate.id === proposal.id,
+        )
+        const updated = [...current]
+
+        if (existingIndex === -1) updated.push(structuredClone(proposal))
+        else updated[existingIndex] = structuredClone(proposal)
+
+        this.proposalsBySession.set(proposal.sessionId, updated)
+    }
+
     readonly getCompactionCheckpoint = (
         sessionId: string,
     ): ICompactionCheckpoint | undefined => {
@@ -103,6 +137,7 @@ export class InMemorySessionManager implements ISessionManager {
         this.sessionsById.delete(sessionId)
         this.messagesBySession.delete(sessionId)
         this.checkpointsBySession.delete(sessionId)
+        this.proposalsBySession.delete(sessionId)
     }
 
     getAllMessages(): readonly TAgentMessage[] {

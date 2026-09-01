@@ -1,4 +1,7 @@
-import type { TAgentMessage } from "@/agent"
+import type {
+    IFileChangeProposalRecord,
+    TAgentMessage,
+} from "@/agent"
 import type { ICompactionCheckpoint } from "@/sessions/compaction/checkpoint"
 
 /** Lightweight session metadata used by navigation and persistence indexes. */
@@ -17,6 +20,12 @@ export interface ISessionManager {
     readonly listSessions: () => readonly ISessionInfo[]
     readonly getMessages: (sessionId: string) => readonly TAgentMessage[]
     readonly appendMessage: (message: TAgentMessage) => void
+    readonly getFileChangeProposals: (
+        sessionId: string,
+    ) => readonly IFileChangeProposalRecord[]
+    readonly saveFileChangeProposal: (
+        proposal: IFileChangeProposalRecord,
+    ) => void
     readonly getCompactionCheckpoint: (
         sessionId: string,
     ) => ICompactionCheckpoint | undefined

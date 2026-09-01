@@ -205,9 +205,10 @@ parity.
 
 ## Workspace changes
 
-The default registry exposes `read`, `find`, `grep`, `edit`, `write`, and
-`bash`. The file tools and Bash's public `command`/`timeout` schema port the
-behavior of Pi commit
+The default workspace registry exposes `read`, `find`, `grep`, `edit`, `write`,
+`bash`, `apply_file_changes`, and `reject_file_changes`; the application also
+adds `tool_output`. The file tools and Bash's public `command`/`timeout` schema
+port the behavior of Pi commit
 [`6c87d9a`](https://github.com/badlogic/pi-mono/tree/6c87d9a026677b601e8278030dcf1ad97fe0bd86/packages/coding-agent/src/core/tools).
 
 `edit` applies one or more non-overlapping `oldText`/`newText` replacements to a
@@ -216,12 +217,24 @@ CRLF style and uses Pi's Unicode and trailing-whitespace fallback when an exact
 match is unavailable. `write` creates missing parent directories and creates or
 fully overwrites one file.
 
-Both tools write directly without opening an approval modal. The system prompt
-requires the model to first show and explain the exact proposed diff, wait for
-explicit acceptance in a later user message, and then apply only that diff.
-This is a conversational policy, not a runtime security boundary. A crash or
-cancellation racing a direct write can leave changed or partial content, so
-inspect the file before retrying an interrupted mutation.
+In the default application, `edit` and `write` create one immutable proposal per
+session instead of modifying the workspace. The transcript renders its exact
+diff, and the model must wait for acceptance in a later user message before
+calling `apply_file_changes`. A refusal resolves it through
+`reject_file_changes`; a replacement first expires the previous proposal.
+
+Applying verifies that the file still matches the proposal's base content and
+serializes mutations for the same path. If persisting the `applied` status
+fails, Buli restores the base content and leaves the proposal pending for a
+retry. A retry can also finish the durable transition when the exact target is
+already present. The workspace write and session JSONL cannot form one atomic
+filesystem transaction, so a process termination in the narrow interval
+between them can still leave the target on disk without an `applied` record.
+
+Library callers that construct `edit` or `write` without a proposal store keep
+the direct-write behavior. In that mode the generated system prompt requires an
+exact diff and explicit acceptance before the mutating tool call. This remains
+a conversational policy rather than a runtime security boundary.
 
 `bash` uses the same conversational boundary for commands. Before calling the
 tool, the model must show the exact command and optional timeout, explain its
@@ -243,8 +256,8 @@ pages continue through the 1-based `offset` and optional line `limit`; a first
 line larger than 50 KiB produces a Bash fallback instead of a partial line.
 `find` stops at 1,000 results by default. `grep` stops at 100 matches by default
 and shortens individual result lines to 500 characters. Both search tools also
-cap their formatted output at 50 KiB and tell the model to increase `limit` or
-narrow the query.
+cap their formatted output at 50 KiB, return a concise result-count summary,
+and tell the model to increase `limit` or narrow the query.
 
 The self-limiting `read`, `find`, and `grep` results remain inline. Before a
 larger result from another tool is shortened to a preview, Buli writes its
@@ -303,6 +316,13 @@ Buli stores multiple conversations per workspace. The app starts on Home without
 On restart, saved sessions are available through `/sessions`. Opening one restores its completed turns for the next model request. `/new` returns Home without changing the saved conversation, and the next prompt starts a separate session. In-progress assistant snapshots are kept only in memory, so a process crash can lose the unfinished response without growing the JSONL file once per streamed token.
 
 Pending steering and follow-up messages are also kept only in memory. `Escape` restores them to the editor before aborting, but exiting or crashing the process can discard them.
+
+Public file-change proposal records and cumulative compaction checkpoints are
+stored in the same JSONL history. Complete proposal base and target contents
+remain private and in memory, so a pending proposal is marked `expired` after a
+restart and must be generated again. A saved compaction checkpoint remains
+visible at its transcript anchor and supplies the context summary for later
+model requests.
 
 Concurrent writers are not coordinated for the shared workspace session log. Running multiple Buli processes in one workspace may lose session updates.
 

@@ -11,6 +11,7 @@ import type {
 } from "@/agent"
 import {
   AgentSession,
+  freezeSessionSnapshot,
   InMemorySessionManager,
   type ISessionManager,
   type ISessionSnapshot,
@@ -66,6 +67,56 @@ test("AgentSession restores history, persists completion barriers, and publishes
   )).toBe(true)
   expect(session.getSnapshot().isRunning).toBe(false)
   expect(notifications).toBeGreaterThan(0)
+
+  await session.dispose()
+})
+
+test("AgentSession expires durable pending proposals that cannot be reapplied", async () => {
+  const manager = new InMemorySessionManager()
+  manager.createSession(sessionInfo("session-1", "test-agent", "Restored"))
+  manager.saveFileChangeProposal({
+    id: "proposal-1",
+    sessionId: "session-1",
+    runId: "run-1",
+    toolCallId: "edit-1",
+    operation: "edit",
+    path: "src/example.ts",
+    diff: "--- a/src/example.ts\n+++ b/src/example.ts\n",
+    status: "pending",
+    createdAt: 10,
+  })
+
+  const session = new AgentSession({
+    agentId: "test-agent",
+    sessionId: "session-1",
+    manager,
+    systemPrompt: "System",
+    resolveRunConfiguration: () => ({
+      model: { async *stream() {} },
+      reasoningEffort: "medium",
+    }),
+    tools: [],
+    now: () => 20,
+  })
+
+  expect(manager.getFileChangeProposals("session-1")).toEqual([{
+    id: "proposal-1",
+    sessionId: "session-1",
+    runId: "run-1",
+    toolCallId: "edit-1",
+    operation: "edit",
+    path: "src/example.ts",
+    diff: "--- a/src/example.ts\n+++ b/src/example.ts\n",
+    status: "expired",
+    createdAt: 10,
+    resolvedAt: 20,
+  }])
+  expect(session.getSnapshot().fileChangeProposals).toEqual(
+    manager.getFileChangeProposals("session-1"),
+  )
+  expect(session.getSnapshot()).not.toHaveProperty(
+    "pendingFileChangeProposal",
+  )
 
   await session.dispose()
 })
@@ -200,6 +251,61 @@ test("AgentSession structurally shares immutable history across streaming snapsh
       (item) => item.type === "text",
     )?.text
   }
+})
+
+test("freezeSessionSnapshot freezes and structurally shares checkpoints", () => {
+  const checkpoint = {
+    id: "checkpoint-1",
+    sessionId: "session-1",
+    createdAt: 10,
+    reason: "automatic" as const,
+    compactedMessageCount: 2,
+    throughMessageId: "seed-assistant-0",
+    summary: "Preserved context",
+    model: {
+      providerId: "test",
+      modelId: "model-1",
+      contextWindowTokens: 100_000,
+    },
+    usage: { inputTokens: 30, outputTokens: 4, totalTokens: 34 },
+  }
+  const cache = {
+    source: undefined,
+    value: undefined,
+  }
+  const source = sessionSnapshotWithCheckpoint(checkpoint)
+
+  const first = freezeSessionSnapshot(source, cache)
+  const second = freezeSessionSnapshot({ ...source, isRunning: true }, cache)
+
+  expect(second).not.toBe(first)
+  expect(second.compactionCheckpoint).toBe(first.compactionCheckpoint)
+  expect(Object.isFrozen(first.compactionCheckpoint)).toBe(true)
+  expect(Object.isFrozen(first.compactionCheckpoint?.model)).toBe(true)
+  expect(Object.isFrozen(first.compactionCheckpoint?.usage)).toBe(true)
+  checkpoint.model.modelId = "mutated-model"
+  checkpoint.usage.totalTokens = 999
+  expect(first.compactionCheckpoint?.model?.modelId).toBe("model-1")
+  expect(first.compactionCheckpoint?.usage?.totalTokens).toBe(34)
+  expect(() => {
+    if (first.compactionCheckpoint?.model) {
+      (first.compactionCheckpoint.model as { modelId: string }).modelId =
+        "changed"
+    }
+  }).toThrow()
+
+  const replacementCheckpoint = {
+    ...checkpoint,
+    id: "checkpoint-2",
+    summary: "Latest preserved context",
+  }
+  const third = freezeSessionSnapshot(
+    sessionSnapshotWithCheckpoint(replacementCheckpoint),
+    cache,
+  )
+  expect(third.compactionCheckpoint).not.toBe(second.compactionCheckpoint)
+  expect(third.compactionCheckpoint?.summary).toBe("Latest preserved context")
+  expect(Object.isFrozen(third.compactionCheckpoint)).toBe(true)
 })
 
 test("AgentSession publishes immutable approval request and resolution snapshots", async () => {
@@ -413,6 +519,8 @@ test("AgentSession restores steering to the queue when persistence fails", async
       }
       memory.appendMessage(message)
     },
+    getFileChangeProposals: memory.getFileChangeProposals,
+    saveFileChangeProposal: memory.saveFileChangeProposal,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
     saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
     deleteSession: memory.deleteSession,
@@ -485,6 +593,8 @@ test("AgentSession restores follow-up to the queue when persistence fails", asyn
       }
       memory.appendMessage(message)
     },
+    getFileChangeProposals: memory.getFileChangeProposals,
+    saveFileChangeProposal: memory.saveFileChangeProposal,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
     saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
     deleteSession: memory.deleteSession,
@@ -554,6 +664,8 @@ test("AgentSession rejects acceptance without invoking the provider or diverging
     appendMessage: () => {
       throw persistenceFailure
     },
+    getFileChangeProposals: memory.getFileChangeProposals,
+    saveFileChangeProposal: memory.saveFileChangeProposal,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
     saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
     deleteSession: memory.deleteSession,
@@ -917,7 +1029,7 @@ test("AgentSession compacts durable history into one cumulative checkpoint", asy
       modelProfile: {
         providerId: "test",
         modelId: "model-1",
-        contextWindowTokens: 100_000,
+        contextWindowTokens: 272_000,
       },
       reasoningEffort: "medium",
     }),
@@ -949,7 +1061,7 @@ test("AgentSession compacts durable history into one cumulative checkpoint", asy
     model: {
       providerId: "test",
       modelId: "model-1",
-      contextWindowTokens: 100_000,
+      contextWindowTokens: 272_000,
     },
     usage: { inputTokens: 12, outputTokens: 3, totalTokens: 15 },
   })
@@ -1010,6 +1122,21 @@ test("AgentSession does not compact after settlement from reported usage", async
 
   await session.dispose()
 })
+
+function sessionSnapshotWithCheckpoint(
+  compactionCheckpoint: NonNullable<ISessionSnapshot["compactionCheckpoint"]>,
+): ISessionSnapshot {
+  return {
+    messages: [],
+    fileChangeProposals: [],
+    pendingSteeringMessages: [],
+    pendingFollowUpMessages: [],
+    compactionCheckpoint,
+    isRunning: false,
+    isCompacting: false,
+    pendingToolCallIds: [],
+  }
+}
 
 function sessionInfo(id: string, agentId: string, title: string) {
   return {

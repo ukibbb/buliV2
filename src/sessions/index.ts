@@ -44,5 +44,6 @@ export {
 export {
     assertCompactionCheckpoint,
     assertDurableSessionMessage,
+    assertFileChangeProposalRecord,
     assertSessionInfo,
 } from "@/sessions/validation"

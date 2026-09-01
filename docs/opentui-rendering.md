@@ -40,8 +40,14 @@ full available width, proportional columns, word wrapping, and the muted
 single-line grid.
 
 Host-injected command approvals render their preview as Bash code. Built-in
-Bash commands and file edits are proposed in the conversation and do not open a
-separate modal.
+Bash consent remains conversational. File-change proposals render their stored
+unified diff directly in the transcript and do not open a separate modal.
+
+Durable proposal diffs are inserted after the assistant tool call that created
+them and before the next later message. A live proposal is rendered only until
+its durable record appears. The latest compaction checkpoint is rendered as a
+Markdown summary immediately after its `throughMessageId` anchor, while the
+status row shows an animated `Compacting context` state during generation.
 
 OpenTUI includes the TypeScript parser. `src/terminal/parsers.ts` registers
 tag-pinned Python 0.23.6 and Bash 0.25.0 WASM grammars and highlight queries
@@ -59,7 +65,7 @@ unknown parser still displays unstyled content.
 | `<select>` | Authentication choices |
 | `<markdown>` | Assistant responses and tool output with shared syntax highlighting |
 | `<code>` | Native fenced blocks and host-injected command approval previews |
-| `<diff>` | Valid, closed `diff` fenced blocks in assistant responses |
+| `<diff>` | Valid assistant `diff` fences and file-change proposal records |
 | `<a>` | Clickable authentication URLs while preserving visible fallback text |
 
 ## Reserved primitives
@@ -69,8 +75,8 @@ product behavior:
 
 - `<image>`: message attachments or tool results that carry image data. Define
   terminal capability fallback and size limits before rendering binary content.
-- `<line-number>`: a dedicated source-file viewer. A future `<diff>` viewer can
-  render its own patch line numbers without a separate gutter.
+- `<line-number>`: a dedicated source-file viewer. The current proposal and
+  Markdown diff viewers already render their own patch line numbers.
 - `<tab-select>`: persistent peer views, such as multiple open artifacts. The
   current command menu and authentication flow are actions, not tabs.
 - `<ascii-font>`: responsive display type. Home intentionally uses a fixed text

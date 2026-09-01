@@ -8,10 +8,14 @@ import { useMemo, type ReactNode } from "react"
 import type {
     TAgentMessage,
     IAssistantMessage,
+    IFileChangeProposal,
+    IFileChangeProposalRecord,
     IToolCallContent,
     IToolResultMessage,
 } from "@/agent"
+import type { ICompactionCheckpoint } from "@/sessions/compaction/checkpoint"
 import { normalizeMarkdownDiff } from "@/sessions/ui/markdown-diff"
+import { ProposedChanges } from "@/sessions/ui/ProposedChanges"
 import { ToolActivityLine } from "@/sessions/ui/ToolActivity"
 import { syntax, theme } from "@/terminal/theme"
 
@@ -36,17 +40,17 @@ function isClosedFencedBlock(raw: string): boolean {
 
 export interface ITranscriptProps {
     readonly messages: readonly TAgentMessage[]
+    readonly fileChangeProposals?: readonly IFileChangeProposalRecord[]
     readonly streamingMessage?: IAssistantMessage
+    readonly compactionCheckpoint?: ICompactionCheckpoint
     readonly activeRunId?: string
     readonly pendingToolCallIds?: readonly string[]
+    readonly pendingFileChangeProposal?: IFileChangeProposal
 }
 
-function AssistantCard(props: {
-    readonly message: IAssistantMessage
+function MarkdownBody(props: {
+    readonly content: string
     readonly streaming: boolean
-    readonly toolResults: ReadonlyMap<string, IToolResultMessage>
-    readonly activeToolCallIds: ReadonlySet<string>
-    readonly runningToolCallIds: ReadonlySet<string>
 }): ReactNode {
     const renderer = useRenderer()
     const renderNode = useMemo(
@@ -77,21 +81,43 @@ function AssistantCard(props: {
         [renderer, props.streaming],
     )
 
+    return <markdown
+        fg={theme.text}
+        content={props.content}
+        syntaxStyle={syntax}
+        streaming={props.streaming}
+        conceal
+        concealCode={false}
+        internalBlockMode="top-level"
+        {...(renderNode === undefined ? {} : { renderNode })}
+        tableOptions={MARKDOWN_TABLE_OPTIONS}
+    />
+}
+
+function CompactionCheckpointCard(props: {
+    readonly checkpoint: ICompactionCheckpoint
+}): ReactNode {
+    return <box width="100%" flexDirection="column">
+        <text fg={theme.textMuted}>Context compacted</text>
+        <MarkdownBody content={props.checkpoint.summary} streaming={false} />
+    </box>
+}
+
+function AssistantCard(props: {
+    readonly message: IAssistantMessage
+    readonly streaming: boolean
+    readonly toolResults: ReadonlyMap<string, IToolResultMessage>
+    readonly activeToolCallIds: ReadonlySet<string>
+    readonly runningToolCallIds: ReadonlySet<string>
+}): ReactNode {
     return (
         <box width="100%" flexDirection="column">
             {props.message.content.map((content, index) => {
                 if (content.type === "text") {
-                    return <markdown
+                    return <MarkdownBody
                         key={`${props.message.id}-text-${index}`}
-                        fg={theme.text}
                         content={content.text}
-                        syntaxStyle={syntax}
                         streaming={props.streaming}
-                        conceal
-                        concealCode={false}
-                        internalBlockMode="top-level"
-                        {...(renderNode === undefined ? {} : { renderNode })}
-                        tableOptions={MARKDOWN_TABLE_OPTIONS}
                     />
                 }
 
@@ -147,17 +173,67 @@ export function Transcript(props: ITranscriptProps): ReactNode {
             : new Set(props.pendingToolCallIds),
         [props.pendingToolCallIds],
     )
-    // Structural sharing keeps durable tool/Markdown presentation intact on live text deltas.
     const durableHistory = useMemo(
-        () => props.messages.map((message) => renderDurableMessage(
-            message,
+        () => projectTranscriptItems(
+            props.messages,
+            props.fileChangeProposals ?? [],
+        ).map((item) => item.type === "message"
+            ? renderDurableMessage(
+                item.message,
+                projection,
+                runningToolCallIds,
+            )
+            : <ProposedChanges
+                key={item.proposal.id}
+                proposal={item.proposal}
+            />),
+        [
+            props.messages,
+            props.fileChangeProposals,
             projection,
             runningToolCallIds,
-        )),
-        [props.messages, projection, runningToolCallIds],
+        ],
     )
+    const checkpointHistory = useMemo(() => {
+        if (!props.compactionCheckpoint) return durableHistory
 
-    if (props.messages.length === 0 && !props.streamingMessage) {
+        const checkpointCard = <CompactionCheckpointCard
+            key={props.compactionCheckpoint.id}
+            checkpoint={props.compactionCheckpoint}
+        />
+        const anchorIndex = projectTranscriptItems(
+            props.messages,
+            props.fileChangeProposals ?? [],
+        ).findIndex((item) => item.type === "message"
+            && item.message.id === props.compactionCheckpoint?.throughMessageId)
+        if (anchorIndex < 0) return [...durableHistory, checkpointCard]
+
+        return [
+            ...durableHistory.slice(0, anchorIndex + 1),
+            checkpointCard,
+            ...durableHistory.slice(anchorIndex + 1),
+        ]
+    }, [
+        durableHistory,
+        props.messages,
+        props.fileChangeProposals,
+        props.compactionCheckpoint,
+    ])
+    const durableProposalIds = new Set(
+        (props.fileChangeProposals ?? []).map((proposal) => proposal.id),
+    )
+    const liveProposal = props.pendingFileChangeProposal === undefined
+        || durableProposalIds.has(props.pendingFileChangeProposal.id)
+        ? undefined
+        : props.pendingFileChangeProposal
+
+    if (
+        props.messages.length === 0
+        && (props.fileChangeProposals?.length ?? 0) === 0
+        && !props.streamingMessage
+        && !props.compactionCheckpoint
+        && !liveProposal
+    ) {
         return <text fg={theme.textMuted} selectable={false}>
             Start conversation
         </text>
@@ -174,13 +250,54 @@ export function Transcript(props: ITranscriptProps): ReactNode {
         />
         : null
     const renderedMessages = liveAssistant === null
-        ? durableHistory
-        : [...durableHistory, liveAssistant]
+        ? checkpointHistory
+        : [...checkpointHistory, liveAssistant]
     return (
         <box width="100%" flexDirection="column">
             {renderedMessages}
+            {liveProposal === undefined
+                ? null
+                : <ProposedChanges proposal={liveProposal} />}
         </box>
     )
+}
+
+type TTranscriptItem =
+    | { readonly type: "message"; readonly message: TAgentMessage }
+    | {
+        readonly type: "fileChangeProposal"
+        readonly proposal: IFileChangeProposalRecord
+    }
+
+function projectTranscriptItems(
+    messages: readonly TAgentMessage[],
+    proposals: readonly IFileChangeProposalRecord[],
+): readonly TTranscriptItem[] {
+    const items: TTranscriptItem[] = messages.map((message) => ({
+        type: "message",
+        message,
+    }))
+    for (const proposal of proposals) {
+        const matchingAssistantIndex = items.findIndex((item) =>
+            item.type === "message"
+            && item.message.role === "assistant"
+            && item.message.content.some((content) =>
+                content.type === "toolCall"
+                && content.toolCallId === proposal.toolCallId
+            ))
+        const laterItemIndex = items.findIndex((item, index) =>
+            index > matchingAssistantIndex
+            && item.type === "message"
+            && item.message.createdAt > proposal.createdAt)
+        const insertionIndex = laterItemIndex < 0
+            ? items.length
+            : laterItemIndex
+        items.splice(insertionIndex, 0, {
+            type: "fileChangeProposal",
+            proposal,
+        })
+    }
+    return items
 }
 
 function renderDurableMessage(

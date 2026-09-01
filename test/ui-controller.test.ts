@@ -1028,6 +1028,7 @@ function sessionSource(
 ) {
   const snapshot: ISessionSnapshot = {
     messages: [],
+    fileChangeProposals: [],
     pendingSteeringMessages: [],
     pendingFollowUpMessages: [],
     isRunning,

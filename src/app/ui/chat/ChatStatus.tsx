@@ -39,7 +39,10 @@ export function ChatStatus(props: IChatStatusProps) {
             {props.pendingToolApproval ? (
                 <text fg={theme.amber}>Waiting for your decision</text>
             ) : props.isCompacting ? (
-                <text fg={theme.amber}>Compacting context | Esc stop</text>
+                <box flexDirection="row">
+                    <SnakeAnimation />
+                    <text fg={theme.amber}>Compacting context · Esc stop</text>
+                </box>
             ) : props.isRunning ? (
                 <box flexDirection="row">
                     <SnakeAnimation />

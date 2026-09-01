@@ -90,11 +90,18 @@ export function SessionScreen(props: ISessionScreenProps): ReactNode {
         >
           <Transcript
             messages={session.messages}
+            fileChangeProposals={session.fileChangeProposals}
             {...(session.streamingMessage
               ? { streamingMessage: session.streamingMessage }
               : {})}
+            {...(session.compactionCheckpoint
+              ? { compactionCheckpoint: session.compactionCheckpoint }
+              : {})}
             {...(session.activeRunId ? { activeRunId: session.activeRunId } : {})}
             pendingToolCallIds={session.pendingToolCallIds}
+            {...(session.pendingFileChangeProposal
+              ? { pendingFileChangeProposal: session.pendingFileChangeProposal }
+              : {})}
           />
         </scrollbox>
       )}

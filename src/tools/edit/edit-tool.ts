@@ -4,12 +4,14 @@ import {
     readFile,
     writeFile,
 } from "node:fs/promises"
+import { createTwoFilesPatch } from "diff"
 import { Type, type Static } from "typebox"
 
 import type { IAgentTool } from "@/agent"
 import {
     withFileMutationQueue,
 } from "@/tools/shared/file-mutation"
+import type { FileChangeProposalStore } from "@/tools/patch/file-change-proposal-store"
 import { resolveToCwd } from "@/tools/shared/path-utils"
 
 // Ported from Pi 6c87d9a026677b601e8278030dcf1ad97fe0bd86 (c) 2025 Mario Zechner, MIT License.
@@ -113,11 +115,13 @@ export function prepareEditArguments(input: unknown): EditToolInput {
 /** Creates Pi's direct, exact-text edit tool for one working directory. */
 export function createEditTool(
     cwd: string,
+    proposalStore?: FileChangeProposalStore,
 ): IAgentTool<typeof EDIT_INPUT_SCHEMA> {
     return {
         name: "edit",
-        description:
-            "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+        description: proposalStore
+            ? "Prepare an immutable proposal to edit one file using exact text replacement. This does not modify the file. Every edits[].oldText must match a unique, non-overlapping region of the original file."
+            : "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
         inputSchema: EDIT_INPUT_SCHEMA,
         prepareArguments: prepareEditArguments,
         execute: async (input, context) => {
@@ -162,6 +166,27 @@ export function createEditTool(
 
                 const finalContent = bom
                     + restoreLineEndings(newContent, originalEnding)
+                if (proposalStore) {
+                    const proposal = proposalStore.propose({
+                        sessionId: context.sessionId,
+                        runId: context.runId,
+                        toolCallId: context.toolCallId,
+                        operation: "edit",
+                        path,
+                        baseContent: rawContent,
+                        targetContent: finalContent,
+                        diff: createTwoFilesPatch(
+                            `a/${path}`,
+                            `b/${path}`,
+                            rawContent,
+                            finalContent,
+                            "",
+                            "",
+                        ),
+                    })
+                    return `Proposed ${edits.length} replacement(s) in ${path}. Proposal ID: ${proposal.id}. Wait for the user's next message before applying or rejecting it.`
+                }
+
                 await writeFile(absolutePath, finalContent, "utf-8")
                 throwIfAborted()
 

@@ -1,6 +1,8 @@
 import {
   type CliRenderer,
+  DiffRenderable,
   type KeyEvent,
+  MarkdownRenderable,
   type ParsedKey,
   type Renderable,
   RGBA,
@@ -24,7 +26,7 @@ import {
 import { SessionScreen } from "@/app/ui/shell/SessionScreen"
 import { BuliUiController } from "@/app/ui/ui-controller"
 import type { ICommandToolApprovalRequest, IUserMessage } from "@/agent"
-import type { ISessionSnapshot } from "@/sessions"
+import type { ICompactionCheckpoint, ISessionSnapshot } from "@/sessions"
 import { theme } from "@/terminal/theme"
 
 const SESSION_ID = "session-screen-test"
@@ -64,6 +66,7 @@ function sessionSnapshot(
 ): ISessionSnapshot {
   return {
     messages: [],
+    fileChangeProposals: [],
     pendingSteeringMessages: [],
     pendingFollowUpMessages: [],
     isRunning: false,
@@ -220,6 +223,58 @@ test("configures a culled sticky transcript with restrained mouse scrolling", as
   }
 })
 
+test("renders and replaces the latest session checkpoint", async () => {
+  const messages = transcriptMessages(2)
+  const firstCheckpoint = checkpoint({
+    id: "checkpoint-1",
+    throughMessageId: messages[0]!.id,
+    compactedMessageCount: 1,
+    summary: "First checkpoint summary",
+  })
+  const harness = createSessionHarness(sessionSnapshot({
+    messages,
+    compactionCheckpoint: firstCheckpoint,
+  }))
+  const setup = await testRender(sessionElement(harness), {
+    width: 70,
+    height: 18,
+  })
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+    })
+    expect(checkpointMarkdown(setup.renderer.root)?.content).toBe(
+      firstCheckpoint.summary,
+    )
+
+    const latestCheckpoint = checkpoint({
+      id: "checkpoint-2",
+      throughMessageId: messages[1]!.id,
+      compactedMessageCount: 2,
+      summary: "Latest checkpoint summary",
+    })
+    await act(async () => {
+      harness.setSnapshot(sessionSnapshot({
+        messages,
+        compactionCheckpoint: latestCheckpoint,
+      }))
+      await setup.renderOnce()
+    })
+
+    const markdown = markdownRenderables(setup.renderer.root)
+    expect(markdown.some((renderable) => (
+      renderable.content === firstCheckpoint.summary
+    ))).toBe(false)
+    expect(checkpointMarkdown(setup.renderer.root)?.content).toBe(
+      latestCheckpoint.summary,
+    )
+  } finally {
+    harness.controller.dispose()
+    act(() => setup.renderer.destroy())
+  }
+})
+
 test("navigates only modified transcript keys and drops a stale approval ref", async () => {
   const harness = createSessionHarness(sessionSnapshot({
     messages: transcriptMessages(40),
@@ -297,6 +352,70 @@ test("navigates only modified transcript keys and drops a stale approval ref", a
     expect(staleScrollCalls).toBe(0)
     expect(approvalKey.defaultPrevented).toBe(false)
     expect(approvalKey.propagationStopped).toBe(false)
+  } finally {
+    harness.controller.dispose()
+    act(() => setup.renderer.destroy())
+  }
+})
+
+test("shows proposed changes in transcript order while keeping the prompt active", async () => {
+  const messages = transcriptMessages(3)
+  const harness = createSessionHarness(sessionSnapshot({
+    messages,
+    fileChangeProposals: [{
+      id: "proposal-1",
+      sessionId: SESSION_ID,
+      runId: "run-history",
+      toolCallId: "edit-1",
+      operation: "edit",
+      path: "src/example.ts",
+      diff: [
+        "--- a/src/example.ts",
+        "+++ b/src/example.ts",
+        "@@ -1,1 +1,1 @@",
+        "-const value = 1",
+        "+const value = 2",
+        "",
+      ].join("\n"),
+      status: "applied",
+      createdAt: 1,
+      resolvedAt: 3,
+    }],
+  }))
+  const setup = await testRender(sessionElement(harness), {
+    width: 70,
+    height: 18,
+  })
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+    })
+
+    const frame = setup.captureCharFrame()
+    expect(frame).not.toContain("Proposed changes")
+    expect(frame).toContain("Transcript line 0")
+    expect(findDiffRenderable(setup.renderer.root)).toBeDefined()
+    expect(findScrollBoxRenderable(setup.renderer.root)).toBeDefined()
+
+    const transcript = findScrollBoxRenderable(setup.renderer.root)
+    const orderedText = transcript?.getChildren().flatMap((child) =>
+      child.getChildren().map((item) => "plainText" in item
+        ? String(item.plainText)
+        : item.constructor.name)
+    ).join("\n") ?? ""
+    expect(orderedText.indexOf("Transcript line 0")).toBeLessThan(
+      orderedText.indexOf("DiffRenderable"),
+    )
+    expect(orderedText.indexOf("DiffRenderable")).toBeLessThan(
+      orderedText.indexOf("Transcript line 2"),
+    )
+
+    await act(async () => {
+      await setup.mockInput.typeText("ok")
+      await setup.renderOnce()
+    })
+    expect(textareaRenderable(setup.renderer.root).cursorOffset).toBe(2)
   } finally {
     harness.controller.dispose()
     act(() => setup.renderer.destroy())
@@ -419,6 +538,45 @@ function findScrollBoxRenderable(
   for (const child of root.getChildren()) {
     const transcript = findScrollBoxRenderable(child)
     if (transcript) return transcript
+  }
+  return undefined
+}
+
+function checkpoint(
+  overrides: Partial<ICompactionCheckpoint>,
+): ICompactionCheckpoint {
+  return {
+    id: "checkpoint",
+    sessionId: SESSION_ID,
+    createdAt: 1,
+    reason: "automatic",
+    compactedMessageCount: 1,
+    throughMessageId: "message-0",
+    summary: "Checkpoint summary",
+    ...overrides,
+  }
+}
+
+function checkpointMarkdown(root: Renderable): MarkdownRenderable | undefined {
+  return markdownRenderables(root).find((renderable) => (
+    renderable.content.includes("checkpoint summary")
+  ))
+}
+
+function markdownRenderables(root: Renderable): MarkdownRenderable[] {
+  return root.getChildren().flatMap((child) => [
+    ...(child instanceof MarkdownRenderable ? [child] : []),
+    ...markdownRenderables(child),
+  ])
+}
+
+function findDiffRenderable(
+  root: Renderable,
+): DiffRenderable | undefined {
+  if (root instanceof DiffRenderable) return root
+  for (const child of root.getChildren()) {
+    const diff = findDiffRenderable(child)
+    if (diff) return diff
   }
   return undefined
 }

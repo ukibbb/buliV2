@@ -14,6 +14,7 @@ import {
   InMemorySessionManager,
   type ISessionManager,
 } from "@/sessions"
+import { FileChangeProposalStore } from "@/tools"
 
 const WORKSPACE_ROOT = "/workspace"
 const TEST_AGENT_ID = "test-agent"
@@ -33,6 +34,7 @@ function runtimeWith(
   modelOverride: IAgentModel = model,
   agents: readonly IBuliAgentRuntimeConfig[] = TEST_AGENTS,
   manager: ISessionManager = new InMemorySessionManager(),
+  fileChangeProposalStore?: FileChangeProposalStore,
 ): BuliApplicationRuntime {
   let sessionNumber = 0
   return new BuliApplicationRuntime({
@@ -53,6 +55,9 @@ function runtimeWith(
     workspaceRoot: WORKSPACE_ROOT,
     now: () => 100 + sessionNumber,
     generateId: () => `session-${++sessionNumber}`,
+    ...(fileChangeProposalStore === undefined
+      ? {}
+      : { fileChangeProposalStore }),
   })
 }
 
@@ -103,6 +108,50 @@ test("application runtime submits prompts into its session view", async () => {
     expect.objectContaining({ runId: submission.runId }),
   ])
 
+  await runtime.dispose()
+})
+
+test("publishes file-change proposals through the owning session", async () => {
+  const store = new FileChangeProposalStore(() => "proposal-1")
+  const runtime = runtimeWith(model, TEST_AGENTS, undefined, store)
+  const session = createSession(runtime)
+  let notifications = 0
+  session.subscribe(() => {
+    notifications += 1
+  })
+
+  store.propose({
+    sessionId: "session-1",
+    runId: "run-1",
+    toolCallId: "call-1",
+    operation: "edit",
+    path: "src/example.ts",
+    baseContent: "before\n",
+    targetContent: "after\n",
+    diff: "--- a/src/example.ts\n+++ b/src/example.ts\n",
+  })
+
+  const proposal = session.getSnapshot().pendingFileChangeProposal
+  expect(proposal).toEqual({
+    id: "proposal-1",
+    sessionId: "session-1",
+    runId: "run-1",
+    toolCallId: "call-1",
+    operation: "edit",
+    path: "src/example.ts",
+    diff: "--- a/src/example.ts\n+++ b/src/example.ts\n",
+  })
+  expect(proposal).not.toHaveProperty("baseContent")
+  expect(proposal).not.toHaveProperty("targetContent")
+  expect(Object.isFrozen(proposal)).toBe(true)
+  expect(notifications).toBe(1)
+
+  store.resolve("session-1", "proposal-1")
+
+  expect(session.getSnapshot()).not.toHaveProperty(
+    "pendingFileChangeProposal",
+  )
+  expect(notifications).toBe(2)
   await runtime.dispose()
 })
 
@@ -963,6 +1012,8 @@ test("submitPrompt rolls back a new session when its first prompt is not accepte
     appendMessage: () => {
       throw persistenceFailure
     },
+    getFileChangeProposals: memory.getFileChangeProposals,
+    saveFileChangeProposal: memory.saveFileChangeProposal,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
     saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
     deleteSession: (sessionId) => {
@@ -1008,6 +1059,8 @@ test("new-session settled waits for rollback before exposing failure", async () 
     appendMessage: () => {
       throw persistenceFailure
     },
+    getFileChangeProposals: memory.getFileChangeProposals,
+    saveFileChangeProposal: memory.saveFileChangeProposal,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
     saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
     deleteSession: memory.deleteSession,

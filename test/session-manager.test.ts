@@ -3,6 +3,7 @@ import { expect, test } from "bun:test"
 import type {
   TAgentMessage,
   IAssistantMessage,
+  IFileChangeProposalRecord,
   IToolResultMessage,
   IUserMessage,
 } from "@/agent"
@@ -234,13 +235,44 @@ test("rejects duplicate toolCallId entries in one assistant message", () => {
   expect(manager.getMessages("session-1")).toEqual([])
 })
 
-test("delete removes selected metadata and messages without affecting other sessions", () => {
+test("stores the latest defensive file-change proposal state", () => {
+  const manager = new InMemorySessionManager()
+  manager.createSession(sessionInfo())
+  const pending = fileChangeProposal()
+
+  manager.saveFileChangeProposal(pending)
+  ;(pending as { diff: string }).diff = "mutated input"
+  const returned = manager.getFileChangeProposals("session-1")
+  ;(returned[0] as { diff: string }).diff = "mutated output"
+
+  expect(manager.getFileChangeProposals("session-1")).toEqual([
+    fileChangeProposal(),
+  ])
+
+  const applied = fileChangeProposal({
+    status: "applied",
+    resolvedAt: 3,
+  })
+  manager.saveFileChangeProposal(applied)
+
+  expect(manager.getFileChangeProposals("session-1")).toEqual([applied])
+  expect(() => manager.saveFileChangeProposal(fileChangeProposal({
+    sessionId: "missing-session",
+  }))).toThrow("Session does not exist: missing-session")
+})
+
+test("delete removes selected metadata, messages, and proposals without affecting other sessions", () => {
   const manager = new InMemorySessionManager()
   manager.createSession(sessionInfo("session-1"))
   manager.createSession(sessionInfo("session-2", { title: "Second" }))
   const retained = userMessage("Second", "session-2", "user-2", 20)
   manager.appendMessage(userMessage("First", "session-1", "user-1", 10))
   manager.appendMessage(retained)
+  manager.saveFileChangeProposal(fileChangeProposal())
+  manager.saveFileChangeProposal(fileChangeProposal({
+    id: "proposal-2",
+    sessionId: "session-2",
+  }))
 
   manager.deleteSession("session-1")
 
@@ -252,8 +284,29 @@ test("delete removes selected metadata and messages without affecting other sess
     updatedAt: 20,
   })
   expect(manager.getMessages("session-2")).toEqual([retained])
+  expect(manager.getFileChangeProposals("session-1")).toEqual([])
+  expect(manager.getFileChangeProposals("session-2")).toEqual([
+    fileChangeProposal({ id: "proposal-2", sessionId: "session-2" }),
+  ])
   expect(manager.listSessions().map((info) => info.id)).toEqual(["session-2"])
 })
+
+function fileChangeProposal(
+  overrides: Partial<IFileChangeProposalRecord> = {},
+): IFileChangeProposalRecord {
+  return {
+    id: "proposal-1",
+    sessionId: "session-1",
+    runId: "run-1",
+    toolCallId: "edit-1",
+    operation: "edit",
+    path: "src/example.ts",
+    diff: "-const value = 1\n+const value = 2\n",
+    status: "pending",
+    createdAt: 2,
+    ...overrides,
+  }
+}
 
 function sessionInfo(
   id = "session-1",

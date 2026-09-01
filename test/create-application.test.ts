@@ -35,8 +35,15 @@ test("does not attach OpenAI web search to an injected provider-neutral model", 
     if (!modelRequest) throw new Error("Expected one model request")
     expect(modelRequest.tools.map((tool) => tool.name)).not.toContain("web_search")
     expect(modelRequest.tools.map((tool) => tool.name)).toContain("tool_output")
+    expect(modelRequest.tools.map((tool) => tool.name)).toContain(
+      "apply_file_changes",
+    )
+    expect(modelRequest.tools.map((tool) => tool.name)).toContain(
+      "reject_file_changes",
+    )
     expect(modelRequest.systemPrompt).not.toContain("web_search")
     expect(modelRequest.systemPrompt).toContain("When a tool result contains outputId")
+    expect(modelRequest.systemPrompt).toContain("generate an immutable proposal")
     expect(modelRequest.systemPrompt).toContain(
       '<workspace_instructions source=".buli/AGENTS.md">',
     )

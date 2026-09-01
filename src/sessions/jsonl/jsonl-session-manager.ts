@@ -13,7 +13,10 @@ import {
 } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
-import type { TAgentMessage } from "@/agent"
+import type {
+    IFileChangeProposalRecord,
+    TAgentMessage,
+} from "@/agent"
 import {
     assertCheckpointAnchor,
     type ICompactionCheckpoint,
@@ -26,6 +29,7 @@ import type {
 import {
     assertCompactionCheckpoint,
     assertDurableSessionMessage,
+    assertFileChangeProposalRecord,
     assertSessionInfo,
 } from "@/sessions/validation"
 
@@ -49,6 +53,12 @@ interface ICompactionRecord {
     readonly recordType: "compaction"
     readonly version: 2
     readonly checkpoint: ICompactionCheckpoint
+}
+
+interface IFileChangeProposalJsonlRecord {
+    readonly recordType: "fileChangeProposal"
+    readonly version: 2
+    readonly proposal: IFileChangeProposalRecord
 }
 
 /** Persists session metadata and direct Agent messages as JSONL records. */
@@ -108,6 +118,35 @@ export class JsonlSessionManager implements ISessionManager {
         this.persistedSessionIds.add(message.sessionId)
     }
 
+    readonly getFileChangeProposals = (
+        sessionId: string,
+    ): readonly IFileChangeProposalRecord[] => {
+        this.assertActive()
+        return this.memory.getFileChangeProposals(sessionId)
+    }
+
+    readonly saveFileChangeProposal = (
+        proposal: IFileChangeProposalRecord,
+    ): void => {
+        this.assertActive()
+        assertFileChangeProposalRecord(proposal)
+
+        const info = this.memory.getSessionInfo(proposal.sessionId)
+        if (!info) {
+            throw new Error(`Session does not exist: ${proposal.sessionId}`)
+        }
+
+        const isPersisted = this.persistedSessionIds.has(proposal.sessionId)
+        const records: readonly unknown[] = isPersisted
+            ? [fileChangeProposalRecord(proposal)]
+            : [sessionRecord(info), fileChangeProposalRecord(proposal)]
+
+        if (isPersisted) this.appendRecords(records)
+        else this.replaceFile(this.currentContents() + serializeRecords(records))
+        this.memory.saveFileChangeProposal(proposal)
+        this.persistedSessionIds.add(proposal.sessionId)
+    }
+
     readonly getCompactionCheckpoint = (
         sessionId: string,
     ): ICompactionCheckpoint | undefined => {
@@ -144,6 +183,10 @@ export class JsonlSessionManager implements ISessionManager {
                 records.push(
                     ...this.memory.getMessages(info.id).map(messageRecord),
                 )
+                records.push(
+                    ...this.memory.getFileChangeProposals(info.id)
+                        .map(fileChangeProposalRecord),
+                )
                 const checkpoint = this.memory.getCompactionCheckpoint(info.id)
                 if (checkpoint) records.push(compactionRecord(checkpoint))
             }
@@ -167,6 +210,10 @@ export class JsonlSessionManager implements ISessionManager {
         const lastRecordIndex = lines.findLastIndex((line) => line.trim().length > 0)
         const infoBySession = new Map<string, ISessionInfo>()
         const messagesBySession = new Map<string, TAgentMessage[]>()
+        const proposalsBySession = new Map<
+            string,
+            IFileChangeProposalRecord[]
+        >()
         const checkpointsBySession = new Map<string, ICompactionCheckpoint>()
         const sessionOrder: string[] = []
         const seenSessionIds = new Set<string>()
@@ -226,6 +273,29 @@ export class JsonlSessionManager implements ISessionManager {
                 continue
             }
 
+            if (isRecord(value) && value.recordType === "fileChangeProposal") {
+                try {
+                    assertFileChangeProposalJsonlRecord(value)
+                    if (!infoBySession.has(value.proposal.sessionId)) {
+                        throw new Error(
+                            `Missing session metadata: ${value.proposal.sessionId}`,
+                        )
+                    }
+                } catch (error) {
+                    throw invalidLineError(index, error)
+                }
+
+                const proposals = proposalsBySession.get(value.proposal.sessionId)
+                    ?? []
+                const existingIndex = proposals.findIndex(
+                    (proposal) => proposal.id === value.proposal.id,
+                )
+                if (existingIndex === -1) proposals.push(value.proposal)
+                else proposals[existingIndex] = value.proposal
+                proposalsBySession.set(value.proposal.sessionId, proposals)
+                continue
+            }
+
             if (isRecord(value) && value.recordType === "compaction") {
                 try {
                     assertCompactionRecord(value)
@@ -277,6 +347,9 @@ export class JsonlSessionManager implements ISessionManager {
 
             this.memory.createSession(info)
             for (const message of messages) this.memory.appendMessage(message)
+            for (const proposal of proposalsBySession.get(sessionId) ?? []) {
+                this.memory.saveFileChangeProposal(proposal)
+            }
             const checkpoint = checkpointsBySession.get(sessionId)
             if (checkpoint) this.memory.saveCompactionCheckpoint(checkpoint)
         }
@@ -358,6 +431,16 @@ function messageRecord(message: TAgentMessage): IMessageRecord {
     }
 }
 
+function fileChangeProposalRecord(
+    proposal: IFileChangeProposalRecord,
+): IFileChangeProposalJsonlRecord {
+    return {
+        recordType: "fileChangeProposal",
+        version: 2,
+        proposal: structuredClone(proposal),
+    }
+}
+
 function compactionRecord(
     checkpoint: ICompactionCheckpoint,
 ): ICompactionRecord {
@@ -414,6 +497,20 @@ function assertMessageRecord(value: unknown): asserts value is IMessageRecord {
         throw new Error("Invalid message record")
     }
     assertDurableSessionMessage(value.message)
+}
+
+function assertFileChangeProposalJsonlRecord(
+    value: unknown,
+): asserts value is IFileChangeProposalJsonlRecord {
+    if (
+        !isRecord(value)
+        || !hasExactKeys(value, ["recordType", "version", "proposal"])
+        || value.recordType !== "fileChangeProposal"
+        || value.version !== 2
+    ) {
+        throw new Error("Invalid file-change proposal record")
+    }
+    assertFileChangeProposalRecord(value.proposal)
 }
 
 function assertCompactionRecord(

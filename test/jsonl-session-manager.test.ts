@@ -13,6 +13,7 @@ import type {
   TAgentMessage,
   IAgentModelRequest,
   IAssistantMessage,
+  IFileChangeProposalRecord,
   IToolResultMessage,
   IUserMessage,
 } from "@/agent"
@@ -695,6 +696,71 @@ test("restores the latest same-anchor checkpoint without deleting history", asyn
   }
 })
 
+test("round-trips the latest file-change proposal state", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-proposals-"))
+  const filePath = join(directory, "sessions.jsonl")
+
+  try {
+    const manager = jsonlManager(filePath)
+    manager.createSession(sessionInfo())
+    const pending = fileChangeProposal()
+    const applied = fileChangeProposal({
+      status: "applied",
+      resolvedAt: 4,
+    })
+
+    manager.saveFileChangeProposal(pending)
+    manager.saveFileChangeProposal(applied)
+
+    const records = await jsonlRecords(filePath)
+    expect(records[0]).toEqual(sessionRecord(sessionInfo()))
+    expect(records.filter((record) => (
+      record as { recordType?: string }
+    ).recordType === "fileChangeProposal")).toHaveLength(2)
+    expect(jsonlManager(filePath).getFileChangeProposals("session-1"))
+      .toEqual([applied])
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test("expires a restored pending proposal through append-only JSONL", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-orphaned-proposal-"))
+  const filePath = join(directory, "sessions.jsonl")
+
+  try {
+    const manager = jsonlManager(filePath)
+    manager.createSession(sessionInfo())
+    manager.saveFileChangeProposal(fileChangeProposal())
+    manager.dispose()
+
+    const restored = jsonlManager(filePath)
+    const session = new AgentSession({
+      agentId: "test-agent",
+      sessionId: "session-1",
+      manager: restored,
+      systemPrompt: "System",
+      resolveRunConfiguration: () => ({
+        model: { async *stream() {} },
+        reasoningEffort: "medium",
+      }),
+      tools: [],
+      now: () => 5,
+    })
+
+    expect(restored.getFileChangeProposals("session-1")).toEqual([
+      fileChangeProposal({ status: "expired", resolvedAt: 5 }),
+    ])
+    expect((await jsonlRecords(filePath)).filter((record) => (
+      record as { recordType?: string }
+    ).recordType === "fileChangeProposal")).toHaveLength(2)
+
+    await session.dispose()
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test("opens a session log while another manager is active", async () => {
   const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-shared-"))
   const filePath = join(directory, "sessions.jsonl")
@@ -750,6 +816,23 @@ function messageRecord(message: TAgentMessage): {
     recordType: "message",
     version: 2,
     message: structuredClone(message),
+  }
+}
+
+function fileChangeProposal(
+  overrides: Partial<IFileChangeProposalRecord> = {},
+): IFileChangeProposalRecord {
+  return {
+    id: "proposal-1",
+    sessionId: "session-1",
+    runId: "run-1",
+    toolCallId: "edit-1",
+    operation: "edit",
+    path: "src/example.ts",
+    diff: "-const value = 1\n+const value = 2\n",
+    status: "pending",
+    createdAt: 3,
+    ...overrides,
   }
 }
 

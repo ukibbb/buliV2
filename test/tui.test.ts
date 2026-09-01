@@ -141,6 +141,7 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
   const sessionListeners = new Set<() => void>()
   let sessionSnapshot: ISessionSnapshot = options.sessionSnapshot ?? {
     messages: [],
+    fileChangeProposals: [],
     pendingSteeringMessages: [],
     pendingFollowUpMessages: [],
     isRunning: false,
@@ -243,6 +244,7 @@ function approvalSessionSnapshot(
 ): ISessionSnapshot {
   return {
     messages: [],
+    fileChangeProposals: [],
     pendingSteeringMessages: [],
     pendingFollowUpMessages: [],
     pendingToolApproval,
@@ -633,6 +635,7 @@ test("submits textarea input as steering while the session is running", async ()
   const fake = fakeApplication({
     sessionSnapshot: {
       messages: [],
+      fileChangeProposals: [],
       pendingSteeringMessages: [],
       pendingFollowUpMessages: [],
       isRunning: true,
@@ -673,6 +676,7 @@ test("notifies when a run finishes while authentication replaces the session", a
   const fake = fakeApplication({
     sessionSnapshot: {
       messages: [],
+      fileChangeProposals: [],
       pendingSteeringMessages: [],
       pendingFollowUpMessages: [],
       isRunning: true,
@@ -708,6 +712,7 @@ test("notifies when a run finishes while authentication replaces the session", a
     await act(async () => {
       fake.setSessionSnapshot({
         messages: [],
+        fileChangeProposals: [],
         pendingSteeringMessages: [],
         pendingFollowUpMessages: [],
         isRunning: false,
@@ -734,6 +739,7 @@ test("retains textarea input and allows Escape while compacting", async () => {
   const fake = fakeApplication({
     sessionSnapshot: {
       messages: [],
+      fileChangeProposals: [],
       pendingSteeringMessages: [],
       pendingFollowUpMessages: [],
       isRunning: false,
@@ -781,6 +787,7 @@ test("submits Alt+Enter input as follow-up while the session is running", async 
   const fake = fakeApplication({
     sessionSnapshot: {
       messages: [],
+      fileChangeProposals: [],
       pendingSteeringMessages: [],
       pendingFollowUpMessages: [],
       isRunning: true,
@@ -821,6 +828,7 @@ test("retains textarea input when a finishing run rejects steering", async () =>
   const fake = fakeApplication({
     sessionSnapshot: {
       messages: [],
+      fileChangeProposals: [],
       pendingSteeringMessages: [],
       pendingFollowUpMessages: [],
       isRunning: true,
@@ -863,6 +871,7 @@ test("renders running and failed session status", async () => {
   const fake = fakeApplication({
     sessionSnapshot: {
       messages: [],
+      fileChangeProposals: [],
       pendingSteeringMessages: [{
         id: "steering-1",
         sessionId: "default",
@@ -915,6 +924,7 @@ test("renders running and failed session status", async () => {
     await act(async () => {
       fake.setSessionSnapshot({
         messages: [],
+        fileChangeProposals: [],
         pendingSteeringMessages: [],
         pendingFollowUpMessages: [],
         isRunning: false,
@@ -1231,6 +1241,7 @@ test("focuses approval and ignores printable keys and chat submission", async ()
     await act(async () => {
       fake.setSessionSnapshot({
         messages: [transcriptMessage],
+        fileChangeProposals: [],
         pendingSteeringMessages: [],
         pendingFollowUpMessages: [],
         isRunning: true,

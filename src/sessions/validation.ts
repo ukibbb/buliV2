@@ -4,6 +4,7 @@ import { isAbsolute } from "node:path"
 import type {
     TAgentMessage,
     IAssistantMessage,
+    IFileChangeProposalRecord,
     TToolExecutionOutcome,
 } from "@/agent"
 import {
@@ -79,6 +80,52 @@ export function assertSessionInfo(
         || value.updatedAt < value.createdAt
     ) {
         throw new Error("Invalid session metadata")
+    }
+}
+
+/** Asserts that a value is an exact durable file-change proposal. */
+export function assertFileChangeProposalRecord(
+    value: unknown,
+): asserts value is IFileChangeProposalRecord {
+    if (
+        !isRecord(value)
+        || !hasExactKeys(value, [
+            "id",
+            "sessionId",
+            "runId",
+            "toolCallId",
+            "operation",
+            "path",
+            "diff",
+            "status",
+            "createdAt",
+            ...(value.resolvedAt === undefined ? [] : ["resolvedAt"]),
+        ])
+        || typeof value.id !== "string"
+        || value.id.trim().length === 0
+        || typeof value.sessionId !== "string"
+        || value.sessionId.trim().length === 0
+        || typeof value.runId !== "string"
+        || value.runId.trim().length === 0
+        || typeof value.toolCallId !== "string"
+        || value.toolCallId.trim().length === 0
+        || (value.operation !== "edit" && value.operation !== "write")
+        || typeof value.path !== "string"
+        || value.path.trim().length === 0
+        || typeof value.diff !== "string"
+        || value.diff.length === 0
+        || !isFileChangeProposalStatus(value.status)
+        || typeof value.createdAt !== "number"
+        || !Number.isFinite(value.createdAt)
+        || (
+            value.status === "pending"
+                ? value.resolvedAt !== undefined
+                : typeof value.resolvedAt !== "number"
+                    || !Number.isFinite(value.resolvedAt)
+                    || value.resolvedAt < value.createdAt
+        )
+    ) {
+        throw new Error("Invalid file-change proposal")
     }
 }
 
@@ -377,6 +424,13 @@ function isNonNegativeInteger(value: unknown, allowZero: boolean): boolean {
     return typeof value === "number"
         && Number.isSafeInteger(value)
         && (allowZero ? value >= 0 : value > 0)
+}
+
+function isFileChangeProposalStatus(value: unknown): boolean {
+    return value === "pending"
+        || value === "applied"
+        || value === "rejected"
+        || value === "expired"
 }
 
 function isToolExecutionOutcome(value: unknown): value is TToolExecutionOutcome {

@@ -8,6 +8,7 @@ import {
     type IAgentRunHandle,
     type IAgentState,
     type IAgentTool,
+    type IFileChangeProposalSource,
     type IToolOutputStore,
     type IModelProfile,
     type TToolApprovalDecision,
@@ -32,8 +33,6 @@ import {
     type ISessionSnapshotFreezeCache,
     type ISessionSnapshot,
 } from "@/sessions/snapshot"
-
-
 const DEFAULT_DISPOSE_TIMEOUT_MS = 5_000
 
 interface IAgentSessionOptions {
@@ -47,6 +46,7 @@ interface IAgentSessionOptions {
     readonly generateId?: () => string
     readonly disposeTimeoutMs?: number
     readonly toolOutputStore?: IToolOutputStore
+    readonly fileChangeProposalStore?: IFileChangeProposalSource
 }
 
 interface IQueuedSessionMessages {
@@ -64,10 +64,12 @@ export class AgentSession {
     private readonly manager: ISessionManager
     private readonly listeners = new Set<TSessionListener>()
     private readonly unsubscribeAgent: () => void
+    private readonly unsubscribeFileChangeProposals: () => void
     private readonly disposeTimeoutMs: number
     private readonly resolveRunConfiguration: TAgentRunConfigurationResolver
     private readonly systemPrompt: string
     private readonly tools: readonly IAgentTool[]
+    private readonly fileChangeProposalStore: IFileChangeProposalSource | undefined
     private readonly now: () => number
     private readonly generateId: () => string
     private readonly snapshotFreezeCache: ISessionSnapshotFreezeCache = {
@@ -95,12 +97,14 @@ export class AgentSession {
         this.resolveRunConfiguration = options.resolveRunConfiguration
         this.systemPrompt = options.systemPrompt
         this.tools = options.tools
+        this.fileChangeProposalStore = options.fileChangeProposalStore
         this.now = options.now ?? Date.now
         this.generateId = options.generateId ?? generateRandomId
         this.disposeTimeoutMs = options.disposeTimeoutMs ?? DEFAULT_DISPOSE_TIMEOUT_MS
         if (!Number.isFinite(this.disposeTimeoutMs) || this.disposeTimeoutMs <= 0) {
             throw new Error("disposeTimeoutMs must be a positive finite number")
         }
+        this.expireOrphanedFileChangeProposals()
         const initialMessages = this.loadDurableHistory()
         this.initializeContextUsage(initialMessages)
         this.agent = new Agent({
@@ -153,6 +157,12 @@ export class AgentSession {
         this.unsubscribeAgent = this.agent.subscribe((event) => {
             this.handleAgentEvent(event)
         })
+        this.unsubscribeFileChangeProposals =
+            this.fileChangeProposalStore?.subscribe(
+                this.id,
+                () => this.publishSnapshot(),
+            )
+            ?? (() => undefined)
     }
 
     get state(): IAgentState {
@@ -313,6 +323,7 @@ export class AgentSession {
         } finally {
             this.acceptCriticalEvents = false
             this.unsubscribeAgent()
+            this.unsubscribeFileChangeProposals()
             this.listeners.clear()
         }
     }
@@ -565,6 +576,24 @@ export class AgentSession {
         this.publishSnapshot()
     }
 
+    private expireOrphanedFileChangeProposals(): void {
+        const liveProposalId = this.fileChangeProposalStore
+            ?.getSnapshot(this.id)?.id
+        const orphaned = this.manager.getFileChangeProposals(this.id)
+            .filter((proposal) => proposal.status === "pending"
+                && proposal.id !== liveProposalId)
+        if (orphaned.length === 0) return
+
+        const resolvedAt = this.now()
+        for (const proposal of orphaned) {
+            this.manager.saveFileChangeProposal({
+                ...proposal,
+                status: "expired",
+                resolvedAt: Math.max(resolvedAt, proposal.createdAt),
+            })
+        }
+    }
+
     private loadDurableHistory(): readonly TAgentMessage[] {
         const messages = this.manager.getMessages(this.id)
         const recoveries = createInterruptedToolResults(messages)
@@ -588,9 +617,12 @@ export class AgentSession {
 
     private createSnapshot(): ISessionSnapshot {
         const state = this.agent.state
+        const fileChangeProposal = this.fileChangeProposalStore?.getSnapshot(this.id)
+        const compactionCheckpoint = this.manager.getCompactionCheckpoint(this.id)
 
         return freezeSessionSnapshot({
             messages: state.messages,
+            fileChangeProposals: this.manager.getFileChangeProposals(this.id),
             pendingSteeringMessages: this.agent.pendingSteeringMessages,
             pendingFollowUpMessages: this.agent.pendingFollowUpMessages,
             ...(state.streamingMessage
@@ -599,6 +631,12 @@ export class AgentSession {
             ...(state.pendingToolApproval
                 ? { pendingToolApproval: state.pendingToolApproval }
                 : {}),
+            ...(fileChangeProposal === undefined
+                ? {}
+                : { pendingFileChangeProposal: fileChangeProposal }),
+            ...(compactionCheckpoint === undefined
+                ? {}
+                : { compactionCheckpoint }),
             isRunning: state.isRunning,
             isCompacting: this.compactionTask !== undefined,
             ...(this.contextUsage === undefined

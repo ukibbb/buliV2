@@ -29,6 +29,7 @@ import {
     createToolOutputTool,
     createWorkspaceTools,
     EphemeralToolOutputStore,
+    FileChangeProposalStore,
 } from "@/tools"
 
 const BULI_AGENT_ID = "buli"
@@ -36,9 +37,13 @@ const BULI_AGENT_ID = "buli"
 function defaultWorkspaceTools(
     workspaceRoot: string,
     toolOutputStore: EphemeralToolOutputStore,
+    fileChangeProposalStore: FileChangeProposalStore,
 ): readonly IAgentTool[] {
     if (process.env.BULI_DEVELOPMENT === "1") {
-        return createWorkspaceTools(workspaceRoot, { toolOutputStore })
+        return createWorkspaceTools(workspaceRoot, {
+            toolOutputStore,
+            fileChangeProposalStore,
+        })
     }
     const executableDirectory = resolve(
         dirname(process.execPath),
@@ -48,6 +53,7 @@ function defaultWorkspaceTools(
     )
     return createWorkspaceTools(workspaceRoot, {
         toolOutputStore,
+        fileChangeProposalStore,
         fdExecutablePath: resolve(
             executableDirectory,
             process.platform === "win32" ? "fd.exe" : "fd",
@@ -118,6 +124,9 @@ export async function createBuliApplication(
         manager = options.manager ?? new JsonlSessionManager({
             filePath: defaultSessionFilePath(workspaceRoot),
         })
+        const fileChangeProposalStore = new FileChangeProposalStore({
+            saveProposal: manager.saveFileChangeProposal,
+        })
         const model: IAgentModel = options.model ?? new OpenAiAgentModel({
             auth: auth.openAi,
         })
@@ -150,7 +159,11 @@ export async function createBuliApplication(
         }
         const baseTools: readonly IAgentTool[] = options.tools
             ?? [
-                ...defaultWorkspaceTools(workspaceRoot, toolOutputStore),
+                ...defaultWorkspaceTools(
+                    workspaceRoot,
+                    toolOutputStore,
+                    fileChangeProposalStore,
+                ),
                 ...(options.model === undefined
                     ? [createOpenAiWebSearchTool({ search: auth.openAi.search })]
                     : []),
@@ -183,6 +196,7 @@ export async function createBuliApplication(
             selection,
             searchPaths: defaultPathSearcher(workspaceRoot),
             toolOutputStore,
+            fileChangeProposalStore,
             ...(options.model === undefined
                 ? {
                     loadModels: async (signal: AbortSignal) => (

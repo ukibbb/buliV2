@@ -25,7 +25,10 @@ import {
     type ISessionManager,
     type ISessionSnapshot,
 } from "@/sessions"
-import type { TFdPathSearcher } from "@/tools"
+import type {
+    FileChangeProposalStore,
+    TFdPathSearcher,
+} from "@/tools"
 
 type TBuliRuntimeListener = () => void
 type TBuliRuntimeSubscribe = () => void
@@ -62,6 +65,7 @@ export interface IBuliRuntimeOptions {
     readonly now?: () => number
     readonly generateId?: () => string
     readonly toolOutputStore?: IToolOutputStore
+    readonly fileChangeProposalStore?: FileChangeProposalStore
 }
 
 
@@ -79,6 +83,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
     private readonly now: () => number
     private readonly generateId: () => string
     private readonly toolOutputStore: IToolOutputStore | undefined
+    private readonly fileChangeProposalStore: FileChangeProposalStore | undefined
     private readonly lifetime = new AbortController()
 
     private selection: IBuliModelSelection
@@ -116,6 +121,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
         this.now = options.now ?? Date.now
         this.generateId = options.generateId ?? generateRandomId
         this.toolOutputStore = options.toolOutputStore
+        this.fileChangeProposalStore = options.fileChangeProposalStore
 
         this.resolveAgent(this.defaultAgentId)
         this.resolveSelectedModel()
@@ -558,6 +564,9 @@ export class BuliApplicationRuntime implements IBuliApplication {
             ...(this.toolOutputStore === undefined
                 ? {}
                 : { toolOutputStore: this.toolOutputStore }),
+            ...(this.fileChangeProposalStore === undefined
+                ? {}
+                : { fileChangeProposalStore: this.fileChangeProposalStore }),
         })
     }
 

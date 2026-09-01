@@ -9,11 +9,10 @@ import {
     assertCheckpointAnchor,
     type ICompactionCheckpoint,
 } from "@/sessions/compaction/checkpoint"
+import { ESTIMATED_BYTES_PER_TOKEN } from "@/sessions/compaction/context-budget"
 
-const COMPACTION_MIN_OUTPUT_HEADROOM_TOKENS = 2_048
-const COMPACTION_MAX_INPUT_TOKENS = 64_000
-const COMPACTION_ESTIMATED_BYTES_PER_TOKEN = 1
-const MAX_SUMMARY_RECOMPRESSION_PASSES = 8
+const COMPACTION_MAX_OUTPUT_HEADROOM_TOKENS = 16_384
+const COMPACTION_UNKNOWN_CONTEXT_INPUT_TOKENS = 64_000
 const COMPACTION_SUMMARY_HEADINGS = [
     "## Goals",
     "## User Constraints",
@@ -37,9 +36,9 @@ Under Files Read and Why, record what was inspected, why, the useful findings, a
 Under Handoff Guidance, distinguish safe reproducible inspection from actions with side effects; never repeat a command or mutation merely because it appears in history.
 Distinguish completed work from proposals, prefer completeness over artificial brevity, and do not invent missing details.
 Use concise bullets and write (none) when a section has no relevant content.`
-const COMPACTION_HISTORY_PROMPT_PREFIX = "Conversation history chunk to incorporate:\n\n"
-const COMPACTION_RECOMPRESSION_PROMPT_PREFIX = "Operational checkpoint chunk to recompress:\n\n"
-const COMPACTION_HISTORY_PROMPT_SUFFIX = "\n\nMerge this chunk into the cumulative operational checkpoint."
+const COMPACTION_HISTORY_PROMPT_PREFIX = "Conversation history to incorporate:\n\n"
+const COMPACTION_RECOMPRESSION_PROMPT_PREFIX = "Operational checkpoint to recompress:\n\n"
+const COMPACTION_HISTORY_PROMPT_SUFFIX = "\n\nMerge this history into the cumulative operational checkpoint."
 const COMPACTION_RECOMPRESSION_PROMPT_SUFFIX = "\n\nRewrite this content as a materially shorter cumulative operational checkpoint while preserving every actionable fact."
 
 /** Supplies durable history and model dependencies for one compaction pass. */
@@ -91,24 +90,20 @@ export async function compactSessionMessages(
     if (recompressing && previousSummary === undefined) return undefined
 
     const checkpointId = options.generateId()
-    let remainingHistory = recompressing
+    let history = recompressing
         ? previousSummary ?? ""
         : serializeCompactionMessages(options.messages.slice(previousCount, cutoff))
-    if (remainingHistory.length === 0) {
-        remainingHistory = "[No provider-visible content in this history segment.]"
+    if (history.length === 0) {
+        history = "[No provider-visible content in this history segment.]"
     }
-    const reductionState: ICompactionReductionState = {
-        nextChunkIndex: 1,
-        recompressionPasses: 0,
-    }
-    const normalizedSummary = await reduceCompactionHistory({
+    const result = await summarizeCompactionHistory(
         options,
         checkpointId,
-        history: remainingHistory,
-        initialSummary: recompressing ? undefined : previous?.summary,
-        mode: recompressing ? "recompress" : "history",
-        state: reductionState,
-    })
+        history,
+        recompressing ? undefined : previous?.summary,
+        recompressing ? "recompress" : "history",
+    )
+    const normalizedSummary = result.summary
     if (
         previousSummary !== undefined
         && serializedSummaryBytes(normalizedSummary)
@@ -130,9 +125,9 @@ export async function compactSessionMessages(
         ...(options.runConfiguration.modelProfile === undefined
             ? {}
             : { model: structuredClone(options.runConfiguration.modelProfile) }),
-        ...(reductionState.usage === undefined
+        ...(result.usage === undefined
             ? {}
-            : { usage: structuredClone(reductionState.usage) }),
+            : { usage: structuredClone(result.usage) }),
     }
     options.signal.throwIfAborted()
     return checkpoint
@@ -211,11 +206,6 @@ function isProviderVisibleAssistant(message: TAgentMessage): boolean {
         ))
 }
 
-interface ICompactionChunk {
-    readonly chunk: string
-    readonly remaining: string
-}
-
 interface ICompactionSummaryResult {
     readonly summary: string
     readonly usage?: IModelUsage
@@ -223,103 +213,22 @@ interface ICompactionSummaryResult {
 
 type TCompactionPromptMode = "history" | "recompress"
 
-interface ICompactionReductionState {
-    nextChunkIndex: number
-    recompressionPasses: number
-    usage?: IModelUsage
-}
-
-interface IReduceCompactionHistoryOptions {
-    readonly options: ICompactSessionMessagesOptions
-    readonly checkpointId: string
-    readonly history: string
-    readonly initialSummary: string | undefined
-    readonly mode: TCompactionPromptMode
-    readonly state: ICompactionReductionState
-}
-
-async function reduceCompactionHistory(
-    input: IReduceCompactionHistoryOptions,
-): Promise<string> {
-    let remainingHistory = input.history
-    let normalizedSummary = input.initialSummary
-    while (remainingHistory.length > 0) {
-        input.options.signal.throwIfAborted()
-        if (
-            normalizedSummary
-            && !summaryLeavesChunkCapacity(
-                normalizedSummary,
-                input.options.runConfiguration.modelProfile?.contextWindowTokens,
-                input.mode,
-            )
-        ) {
-            if (
-                input.state.recompressionPasses
-                >= MAX_SUMMARY_RECOMPRESSION_PASSES
-            ) {
-                throw new Error("Compaction checkpoint could not be reduced enough to accept more history")
-            }
-            input.state.recompressionPasses += 1
-            const previousSummary = normalizedSummary
-            normalizedSummary = await reduceCompactionHistory({
-                ...input,
-                history: previousSummary,
-                initialSummary: undefined,
-                mode: "recompress",
-            })
-            if (
-                serializedSummaryBytes(normalizedSummary)
-                >= serializedSummaryBytes(previousSummary)
-            ) {
-                throw new Error("Compaction checkpoint recompression made no progress")
-            }
-            continue
-        }
-
-        const split = takeCompactionChunk(
-            remainingHistory,
-            normalizedSummary,
-            input.options.runConfiguration.modelProfile?.contextWindowTokens,
-            input.mode,
-        )
-        const chunkIndex = input.state.nextChunkIndex
-        input.state.nextChunkIndex += 1
-        const result = await summarizeCompactionChunk(
-            input.options,
-            input.checkpointId,
-            chunkIndex,
-            split.chunk,
-            normalizedSummary,
-            input.mode,
-        )
-        normalizedSummary = result.summary
-        const usage = mergeUsage(input.state.usage, result.usage)
-        if (usage !== undefined) input.state.usage = usage
-        remainingHistory = split.remaining
-    }
-    if (!normalizedSummary) {
-        throw new Error("Compaction model returned no completed summary")
-    }
-    return normalizedSummary
-}
-
-async function summarizeCompactionChunk(
+async function summarizeCompactionHistory(
     options: ICompactSessionMessagesOptions,
     checkpointId: string,
-    chunkIndex: number,
-    chunk: string,
+    history: string,
     contextSummary: string | undefined,
     mode: TCompactionPromptMode,
 ): Promise<ICompactionSummaryResult> {
-    const runId = `compaction-${checkpointId}-${chunkIndex}`
-    const promptContent = compactionPrompt(chunk, mode)
+    const runId = `compaction-${checkpointId}`
+    const promptContent = compactionPrompt(history, mode)
     assertCompactionSummaryInputFits(
         promptContent,
         contextSummary,
         options.runConfiguration.modelProfile?.contextWindowTokens,
     )
     const summaryPrompt: TAgentMessage = {
-        id: `${checkpointId}-prompt-${chunkIndex}`,
+        id: `${checkpointId}-prompt`,
         sessionId: options.sessionId,
         runId,
         role: "user",
@@ -335,7 +244,7 @@ async function summarizeCompactionChunk(
         messages: [summaryPrompt],
         tools: [],
         signal: options.signal,
-        reasoningEffort: options.runConfiguration.reasoningEffort,
+        reasoningEffort: "none",
     })
 
     let summary = ""
@@ -382,45 +291,22 @@ async function summarizeCompactionChunk(
     }
 }
 
-function takeCompactionChunk(
-    history: string,
-    contextSummary: string | undefined,
-    contextWindowTokens: number | undefined,
-    mode: TCompactionPromptMode,
-): ICompactionChunk {
-    const targetTokens = compactionInputTargetTokens(contextWindowTokens)
-    const fixedTokens = estimateCompactionInputTokens(
-        compactionPrompt("", mode),
-        contextSummary,
-    )
-    let maximumBytes = Math.max(0, (targetTokens - fixedTokens) * 2)
-    if (maximumBytes === 0) {
-        throw compactionInputError(fixedTokens, contextWindowTokens)
-    }
-
-    while (maximumBytes > 0) {
-        const split = splitUtf8Prefix(history, maximumBytes)
-        if (split.chunk.length === 0) break
-        const estimatedInputTokens = estimateCompactionInputTokens(
-            compactionPrompt(split.chunk, mode),
-            contextSummary,
-        )
-        if (estimatedInputTokens <= targetTokens) return split
-        maximumBytes = Math.floor(maximumBytes / 2)
-    }
-    throw compactionInputError(fixedTokens, contextWindowTokens)
-}
-
 function compactionInputTargetTokens(
     contextWindowTokens: number | undefined,
 ): number {
-    if (contextWindowTokens === undefined) return COMPACTION_MAX_INPUT_TOKENS
+    if (contextWindowTokens === undefined) {
+        return COMPACTION_UNKNOWN_CONTEXT_INPUT_TOKENS
+    }
+    return Math.max(
+        0,
+        contextWindowTokens - compactionOutputHeadroomTokens(contextWindowTokens),
+    )
+}
+
+function compactionOutputHeadroomTokens(contextWindowTokens: number): number {
     return Math.min(
-        COMPACTION_MAX_INPUT_TOKENS,
-        Math.max(
-            0,
-            contextWindowTokens - COMPACTION_MIN_OUTPUT_HEADROOM_TOKENS,
-        ),
+        COMPACTION_MAX_OUTPUT_HEADROOM_TOKENS,
+        Math.floor(contextWindowTokens / 4),
     )
 }
 
@@ -429,6 +315,8 @@ function assertCompactionSummaryInputFits(
     contextSummary: string | undefined,
     contextWindowTokens: number | undefined,
 ): void {
+    // Do not serially rewrite a growing checkpoint. A future oversized-history
+    // fallback should use bounded map-reduce or retain a recent context tail.
     const estimatedInputTokens = estimateCompactionInputTokens(
         promptContent,
         contextSummary,
@@ -451,7 +339,7 @@ function estimateCompactionInputTokens(
     })
     return Math.ceil(
         Buffer.byteLength(serialized, "utf8")
-            / COMPACTION_ESTIMATED_BYTES_PER_TOKEN,
+            / ESTIMATED_BYTES_PER_TOKEN,
     )
 }
 
@@ -460,52 +348,23 @@ function compactionInputError(
     contextWindowTokens: number | undefined,
 ): Error {
     const inputTarget = compactionInputTargetTokens(contextWindowTokens)
+    const outputHeadroom = contextWindowTokens === undefined
+        ? undefined
+        : compactionOutputHeadroomTokens(contextWindowTokens)
     return new Error(
-        "Compaction summary input does not fit the summarizer model context: "
+        "Compaction summary input does not fit the summarizer model context in one request: "
         + `estimated ${estimatedInputTokens} input tokens exceeds the safe `
-        + `${inputTarget}-token input budget with a `
-        + `${COMPACTION_MIN_OUTPUT_HEADROOM_TOKENS}-token output headroom`,
+        + `${inputTarget}-token input budget`
+        + (outputHeadroom === undefined
+            ? " while the model context window is unknown"
+            : ` with a ${outputHeadroom}-token output headroom`),
     )
 }
 
-function compactionPrompt(chunk: string, mode: TCompactionPromptMode): string {
+function compactionPrompt(content: string, mode: TCompactionPromptMode): string {
     return mode === "recompress"
-        ? `${COMPACTION_RECOMPRESSION_PROMPT_PREFIX}${chunk}${COMPACTION_RECOMPRESSION_PROMPT_SUFFIX}`
-        : `${COMPACTION_HISTORY_PROMPT_PREFIX}${chunk}${COMPACTION_HISTORY_PROMPT_SUFFIX}`
-}
-
-function summaryLeavesChunkCapacity(
-    summary: string,
-    contextWindowTokens: number | undefined,
-    mode: TCompactionPromptMode,
-): boolean {
-    return estimateCompactionInputTokens(
-        compactionPrompt("", mode),
-        summary,
-    ) < compactionInputTargetTokens(contextWindowTokens)
-}
-
-function splitUtf8Prefix(value: string, maximumBytes: number): ICompactionChunk {
-    if (Buffer.byteLength(value, "utf8") <= maximumBytes) {
-        return { chunk: value, remaining: "" }
-    }
-
-    let bytes = 0
-    let end = 0
-    for (const character of value) {
-        const characterBytes = Buffer.byteLength(character, "utf8")
-        if (bytes + characterBytes > maximumBytes) break
-        bytes += characterBytes
-        end += character.length
-    }
-    if (end === 0) return { chunk: "", remaining: value }
-
-    const paragraphEnd = value.lastIndexOf("\n\n", end)
-    if (paragraphEnd >= Math.floor(end / 2)) end = paragraphEnd + 2
-    return {
-        chunk: value.slice(0, end),
-        remaining: value.slice(end),
-    }
+        ? `${COMPACTION_RECOMPRESSION_PROMPT_PREFIX}${content}${COMPACTION_RECOMPRESSION_PROMPT_SUFFIX}`
+        : `${COMPACTION_HISTORY_PROMPT_PREFIX}${content}${COMPACTION_HISTORY_PROMPT_SUFFIX}`
 }
 
 function serializeCompactionMessages(messages: readonly TAgentMessage[]): string {
@@ -547,8 +406,10 @@ function serializeCompactionMessages(messages: readonly TAgentMessage[]): string
             case "toolResult": {
                 sections.push([
                     `[Tool result: ${message.toolName}${message.isError ? " error" : ""}]`,
-                    message.summary,
-                    message.content,
+                    message.outcome === undefined
+                        ? undefined
+                        : `Outcome: ${message.outcome}`,
+                    message.summary || message.content,
                 ].filter((value): value is string => Boolean(value)).join("\n"))
                 break
             }
@@ -593,41 +454,4 @@ function safeJson(value: unknown): string {
     } catch {
         return "[Unserializable tool input]"
     }
-}
-
-function mergeUsage(
-    previous: IModelUsage | undefined,
-    current: IModelUsage | undefined,
-): IModelUsage | undefined {
-    if (!previous) return current === undefined ? undefined : structuredClone(current)
-    if (!current) return previous
-    return {
-        ...optionalUsage("inputTokens", previous.inputTokens, current.inputTokens),
-        ...optionalUsage("outputTokens", previous.outputTokens, current.outputTokens),
-        ...optionalUsage("totalTokens", previous.totalTokens, current.totalTokens),
-        ...optionalUsage(
-            "cacheReadTokens",
-            previous.cacheReadTokens,
-            current.cacheReadTokens,
-        ),
-        ...optionalUsage(
-            "cacheWriteTokens",
-            previous.cacheWriteTokens,
-            current.cacheWriteTokens,
-        ),
-        ...optionalUsage(
-            "reasoningTokens",
-            previous.reasoningTokens,
-            current.reasoningTokens,
-        ),
-    }
-}
-
-function optionalUsage<K extends keyof IModelUsage>(
-    key: K,
-    previous: number | undefined,
-    current: number | undefined,
-): Pick<IModelUsage, K> | Record<string, never> {
-    if (previous === undefined && current === undefined) return {}
-    return { [key]: (previous ?? 0) + (current ?? 0) } as Pick<IModelUsage, K>
 }

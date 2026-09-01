@@ -280,10 +280,11 @@ test("compactSessionMessages migrates an unstructured stored checkpoint", async 
   })
 })
 
-test("compactSessionMessages sends full durable tool output through bounded chunks", async () => {
+test("compactSessionMessages prefers a tool summary over its full durable output", async () => {
   const imageData = "SECRET_IMAGE_DATA".repeat(1_000)
   const toolOutputMiddle = "SECRET_TOOL_OUTPUT_MIDDLE"
   const toolOutputTail = "SECRET_TOOL_OUTPUT_TAIL"
+  const toolSummary = "README inspection completed"
   const messages: readonly TAgentMessage[] = [
     {
       ...user("image-user", "Inspect the image"),
@@ -304,12 +305,16 @@ test("compactSessionMessages sends full durable tool output through bounded chun
         input: { path: "README.md" },
       },
     ]),
-    toolResult(
-      "tool-result",
-      "call-1",
-      "R".repeat(3_000) + toolOutputMiddle + "R".repeat(3_000) + toolOutputTail,
-      "run-tool-assistant",
-    ),
+    {
+      ...toolResult(
+        "tool-result",
+        "call-1",
+        "R".repeat(3_000) + toolOutputMiddle + "R".repeat(3_000) + toolOutputTail,
+        "run-tool-assistant",
+      ),
+      outcome: "completed",
+      summary: toolSummary,
+    },
     user("pending-user", "Continue", 4),
   ]
   const requests: IAgentModelRequest[] = []
@@ -328,16 +333,17 @@ test("compactSessionMessages sends full durable tool output through bounded chun
     generateId: () => "checkpoint-full-tool-output",
   })
 
-  expect(requests.length).toBeGreaterThan(1)
+  expect(requests).toHaveLength(1)
   expect(requests.every((request) => request.messages.length === 1)).toBe(true)
   const serializedRequests = JSON.stringify(requests)
   expect(serializedRequests).toContain(
     "[Image attachment: screen.png (image/png)]",
   )
   expect(serializedRequests).toContain("[Assistant tool call: read_file]")
-  expect(serializedRequests).toContain(toolOutputMiddle)
-  expect(serializedRequests).toContain(toolOutputTail)
-  expect(serializedRequests).not.toContain("tool output truncated for compaction")
+  expect(serializedRequests).toContain("Outcome: completed")
+  expect(serializedRequests).toContain(toolSummary)
+  expect(serializedRequests).not.toContain(toolOutputMiddle)
+  expect(serializedRequests).not.toContain(toolOutputTail)
   expect(serializedRequests).not.toContain("SECRET_IMAGE_DATA")
   expect(serializedRequests).not.toContain("SECRET_REASONING")
   expect(checkpoint).toMatchObject({
@@ -346,37 +352,37 @@ test("compactSessionMessages sends full durable tool output through bounded chun
   })
 })
 
-test("compactSessionMessages preserves every UTF-8 byte across chunk boundaries", async () => {
-  const content = Array.from(
-    { length: 2_000 },
-    (_, index) => index % 2 === 0 ? `🙂 ${index}  \n\n` : `żółć ${index}\t`,
-  ).join("")
+test("compactSessionMessages sends a 400 KB history in one 272k request", async () => {
+  const content = (
+    "const value = readResult(path); // preserve exact context\n".repeat(10_000)
+  ).slice(0, 400 * 1_024)
+  expect(Buffer.byteLength(content, "utf8")).toBe(400 * 1_024)
   const messages: readonly TAgentMessage[] = [
-    user("utf8-user", content),
-    assistant("utf8-assistant", [{ type: "text", text: "Done" }]),
+    user("large-user", content),
+    assistant("large-assistant", [{ type: "text", text: "Done" }]),
   ]
   const requests: IAgentModelRequest[] = []
 
   await compactSessionMessages({
     sessionId: "session-1",
     messages,
-    runConfiguration: configuration(requests, "UTF-8 checkpoint", 6_000),
+    runConfiguration: configuration(requests, "Large checkpoint", 272_000),
     reason: "automatic",
     signal: new AbortController().signal,
     now: () => 100,
-    generateId: () => "checkpoint-utf8",
+    generateId: () => "checkpoint-large",
   })
 
-  const prefix = "Conversation history chunk to incorporate:\n\n"
-  const suffix = "\n\nMerge this chunk into the cumulative operational checkpoint."
-  const chunks = requests.map((request) => {
-    const prompt = requestPrompt(request)
-    expect(prompt.startsWith(prefix)).toBe(true)
-    expect(prompt.endsWith(suffix)).toBe(true)
-    return prompt.slice(prefix.length, -suffix.length)
-  })
-  expect(chunks.length).toBeGreaterThan(1)
-  expect(chunks.join("")).toBe(`[User]\n${content}\n\n[Assistant]\nDone`)
+  expect(requests).toHaveLength(1)
+  expect(requests[0]?.reasoningEffort).toBe("none")
+  const prefix = "Conversation history to incorporate:\n\n"
+  const suffix = "\n\nMerge this history into the cumulative operational checkpoint."
+  const prompt = requestPrompt(requests[0]!)
+  expect(prompt.startsWith(prefix)).toBe(true)
+  expect(prompt.endsWith(suffix)).toBe(true)
+  expect(prompt.slice(prefix.length, -suffix.length)).toBe(
+    `[User]\n${content}\n\n[Assistant]\nDone`,
+  )
 })
 
 test("compactSessionMessages recompresses an existing checkpoint at the same anchor", async () => {
@@ -411,7 +417,7 @@ test("compactSessionMessages recompresses an existing checkpoint at the same anc
     summary: structuredSummary("Shorter checkpoint"),
   })
   expect(requests[0]?.contextSummary).toBeUndefined()
-  expect(requestPrompt(requests[0]!)).toContain("Operational checkpoint chunk")
+  expect(requestPrompt(requests[0]!)).toContain("Operational checkpoint to recompress")
 })
 
 test("compactSessionMessages rejects same-anchor recompression without size progress", async () => {
@@ -474,7 +480,7 @@ test("compactSessionMessages accepts same-size text with smaller request seriali
   expect(checkpoint?.summary).toBe(plainSummary)
 })
 
-test("compactSessionMessages rejects summary input that cannot fit its model", async () => {
+test("compactSessionMessages rejects oversized history without serial fallback", async () => {
   let modelCalled = false
   const model: IAgentModel = {
     async *stream() {
@@ -485,22 +491,25 @@ test("compactSessionMessages rejects summary input that cannot fit its model", a
 
   await expect(compactSessionMessages({
     sessionId: "session-1",
-    messages: conversation(4),
+    messages: [
+      user("oversized-user", "X".repeat(600 * 1_024)),
+      assistant("oversized-assistant", [{ type: "text", text: "Done" }]),
+    ],
     runConfiguration: {
       model,
       modelProfile: {
         providerId: "test",
-        modelId: "small-summarizer",
-        contextWindowTokens: 2_050,
+        modelId: "single-request-summarizer",
+        contextWindowTokens: 272_000,
       },
       reasoningEffort: "low",
     },
     reason: "manual",
     signal: new AbortController().signal,
     now: () => 100,
-    generateId: () => "checkpoint-small",
+    generateId: () => "checkpoint-oversized",
   })).rejects.toThrow(
-    "Compaction summary input does not fit the summarizer model context",
+    "Compaction summary input does not fit the summarizer model context in one request",
   )
   expect(modelCalled).toBe(false)
 })

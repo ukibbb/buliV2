@@ -9,19 +9,21 @@ const descriptor = (name: string): IAgentToolDescriptor => ({
   inputSchema: { type: "object" },
 })
 
-test("builds pair-programming instructions from active capabilities", () => {
+test("builds proposal instructions from complete active capabilities", () => {
   const prompt = systemPrompt("/workspace", [
     descriptor("read"),
     descriptor("find"),
     descriptor("grep"),
     descriptor("edit"),
     descriptor("write"),
+    descriptor("apply_file_changes"),
+    descriptor("reject_file_changes"),
     descriptor("bash"),
     descriptor("tool_output"),
   ])
 
   expect(prompt).toContain(
-    "Aktywne narzędzia: read, find, grep, edit, write, bash, tool_output.",
+    "Active tools: read, find, grep, edit, write, apply_file_changes, reject_file_changes, bash, tool_output.",
   )
   for (const sectionName of [
     "general",
@@ -35,58 +37,75 @@ test("builds pair-programming instructions from active capabilities", () => {
     expect(prompt).toContain(`<${sectionName}>`)
     expect(prompt).toContain(`</${sectionName}>`)
   }
-  expect(prompt).toContain("Nie jesteś autonomicznym wykonawcą")
-  expect(prompt).toContain("Domyślnie użytkownik zachowuje ownership kodu")
-  expect(prompt).toContain(
-    "pokazać użytkownikowi dokładny diff z wyjaśnieniem i zaczekać na jego jednoznaczną akceptację w rozmowie",
-  )
-  expect(prompt).toContain(
-    "pokaż dokładny proponowany diff, krótko wyjaśnij każdą zmianę i zaczekaj na jednoznaczną akceptację użytkownika w kolejnej wiadomości",
-  )
-  expect(prompt).toContain(
-    "Po akceptacji zastosuj dokładnie ten diff bez ponownego pytania",
-  )
-  expect(prompt).toContain(
-    "Te narzędzia zapisują bezpośrednio i nie otwierają modala",
-  )
-  expect(prompt).toContain("Każde edits[].oldText kopiuj z aktualnego wyniku read")
-  expect(prompt).toContain("musi być unikalne w oryginalnym pliku")
-  expect(prompt).toContain("Używaj write tylko do nowych plików")
-  expect(prompt).toContain(
-    "Przed każdym wywołaniem Bash pokaż użytkownikowi dokładną komendę oraz timeout albo wyraźnie zaznacz jego brak",
-  )
-  expect(prompt).toContain("znaczenie programu/subkomend/flag/argumentów/operatorów")
-  expect(prompt).toContain("zaczekaj na jej jednoznaczną pisemną akceptację w kolejnej wiadomości")
-  expect(prompt).toContain("Akceptacja dotyczy wyłącznie dokładnie pokazanej komendy i timeoutu")
-  expect(prompt).toContain("Bash wykonuje komendę bezpośrednio i nie otwiera modala")
+  expect(prompt).toContain("You are not an autonomous executor")
+  expect(prompt).toContain("the user retains ownership of the code")
+  expect(prompt).toContain("generate an immutable proposal")
+  expect(prompt).toContain("do not modify workspace files")
+  expect(prompt).toContain("using apply_file_changes with its proposal ID")
+  expect(prompt).toContain("call reject_file_changes")
+  expect(prompt).toContain("Copy every edits[].oldText")
+  expect(prompt).toContain("Use write only for new files")
+  expect(prompt).toContain("Before every Bash call")
   expect(prompt).toContain("/bin/bash --noprofile --norc")
   expect(prompt).toContain("encoding=base64")
-  expect(prompt).toContain("nie traktuj inline preview jako pełnego wyniku")
-  expect(prompt).toContain("zwiększ limit albo zawęź pattern lub path")
-  expect(prompt).toContain("zwiększ limit albo zawęź pattern, glob lub path")
-  expect(prompt).toContain("ustaw path w find lub grep bezpośrednio na node_modules/<nazwa-pakietu>")
-  expect(prompt).not.toContain("samo wywołanie nie zmienia plików")
-  expect(prompt).not.toContain("dopiero osobne Apply w UI")
-  expect(prompt).not.toContain("apply_patch")
-  expect(prompt).not.toContain("read_file")
-  expect(prompt).not.toContain("Copy / Run once / Reject")
+  expect(prompt).toContain("increase the limit or narrow the pattern or path")
+  expect(prompt).not.toContain("modify workspace files directly")
   expect(prompt).not.toContain("<workspace_instructions")
+})
+
+test("describes direct mutation when proposal tools are unavailable", () => {
+  const prompt = systemPrompt("/workspace", [
+    descriptor("read"),
+    descriptor("edit"),
+    descriptor("write"),
+  ])
+
+  expect(prompt).toContain("modify workspace files directly")
+  expect(prompt).toContain("show the exact proposed diff")
+  expect(prompt).toContain("wait for the user's explicit acceptance")
+  expect(prompt).not.toContain("generate an immutable proposal")
+  expect(prompt).not.toContain("apply_file_changes")
+  expect(prompt).not.toContain("reject_file_changes")
+})
+
+test("fails closed for an incomplete proposal lifecycle", () => {
+  const prompt = systemPrompt("/workspace", [
+    descriptor("edit"),
+    descriptor("apply_file_changes"),
+  ])
+
+  expect(prompt).toContain("proposal lifecycle is incomplete")
+  expect(prompt).toContain(
+    "Do not use file-mutation tools until both apply_file_changes and reject_file_changes are available.",
+  )
+  expect(prompt).not.toContain("Apply a pending proposal")
+  expect(prompt).not.toContain("modify workspace files directly")
 })
 
 test("does not claim unavailable tool capabilities", () => {
   const prompt = systemPrompt("/workspace", [descriptor("review")])
 
-  expect(prompt).toContain("Aktywne narzędzia: review.")
-  expect(prompt).not.toContain("Do znajdowania plików używaj find")
-  expect(prompt).not.toContain("Te narzędzia zapisują bezpośrednio")
-  expect(prompt).not.toContain("Przed każdym wywołaniem Bash")
+  expect(prompt).toContain("Active tools: review.")
+  expect(prompt).not.toContain("Use find instead of shell commands")
+  expect(prompt).not.toContain("Use grep to search file contents")
+  expect(prompt).not.toContain("Before every Bash call")
+  expect(prompt).not.toContain("file-mutation tool")
+  expect(prompt).not.toContain("apply_file_changes")
+})
+
+test("gates instructions for individual file tools", () => {
+  const prompt = systemPrompt("/workspace", [descriptor("edit")])
+
+  expect(prompt).toContain("Use edit for precise changes")
+  expect(prompt).not.toContain("Use write only for new files")
+  expect(prompt).not.toContain("use read to ensure")
 })
 
 test("adds lower-priority workspace instructions before Buli policy", () => {
   const content = "Use the project formatter before committing."
   const prompt = systemPrompt(
     "/workspace",
-    [descriptor("edit"), descriptor("write")],
+    [descriptor("edit")],
     {
       source: ".buli/AGENTS.md",
       content,
@@ -96,14 +115,10 @@ test("adds lower-priority workspace instructions before Buli policy", () => {
   expect(prompt).toContain(
     '<workspace_instructions source=".buli/AGENTS.md">',
   )
-  expect(prompt).toContain(content)
   expect(prompt.match(/Use the project formatter before committing\./g)).toHaveLength(1)
-  expect(prompt).toContain("mają niższy priorytet niż instrukcje Buli")
+  expect(prompt).toContain("have lower priority than Buli's instructions")
   expect(prompt.indexOf("</workspace_instructions>")).toBeLessThan(
-    prompt.indexOf("Nie jesteś autonomicznym wykonawcą"),
+    prompt.indexOf("You are not an autonomous executor"),
   )
-  expect(prompt).toContain(
-    "przed pierwszym wywołaniem edit albo write nadal musisz pokazać użytkownikowi dokładny diff z wyjaśnieniem",
-  )
-  expect(prompt).toContain("jednoznaczną akceptację w rozmowie")
+  expect(prompt).toContain("modify workspace files directly")
 })

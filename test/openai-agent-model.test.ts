@@ -84,11 +84,15 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
   const manager = new InMemorySessionManager()
   manager.createSession(testSessionInfo())
   messages.forEach(manager.appendMessage)
+  const expectedSystemPrompt = systemPrompt(
+    WORKSPACE_ROOT,
+    createWorkspaceTools(WORKSPACE_ROOT),
+  )
   const session = new AgentSession({
     agentId: "test-agent",
     sessionId: "session-1",
     manager,
-    systemPrompt: systemPrompt(WORKSPACE_ROOT, createWorkspaceTools(WORKSPACE_ROOT)),
+    systemPrompt: expectedSystemPrompt,
     resolveRunConfiguration: () => ({
       model,
       reasoningEffort: "medium",
@@ -116,9 +120,7 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
   expect(body.stream).toBe(true)
   expect(body.reasoning).toMatchObject({ effort: "medium", summary: "detailed" })
   expect(body.instructions).toContain("pair programming")
-  expect(body.instructions).toContain(
-    `Aktualny katalog roboczy i root workspace: ${WORKSPACE_ROOT}.`,
-  )
+  expect(body.instructions).toBe(expectedSystemPrompt)
   const tools = body.tools as Array<{
     type: string
     name: string

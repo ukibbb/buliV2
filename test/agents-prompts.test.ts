@@ -38,7 +38,7 @@ test("builds proposal instructions from complete active capabilities", () => {
     expect(prompt).toContain(`</${sectionName}>`)
   }
   expect(prompt).toContain("You are not an autonomous executor")
-  expect(prompt).toContain("the user retains ownership of the code")
+  expect(prompt).toContain("The user owns the code by default")
   expect(prompt).toContain("generate an immutable proposal")
   expect(prompt).toContain("do not modify workspace files")
   expect(prompt).toContain("using apply_file_changes with its proposal ID")

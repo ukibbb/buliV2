@@ -119,7 +119,7 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
   expect(body.store).toBe(false)
   expect(body.stream).toBe(true)
   expect(body.reasoning).toMatchObject({ effort: "medium", summary: "detailed" })
-  expect(body.instructions).toContain("pair programming")
+  expect(body.instructions).toContain("pairing with the user")
   expect(body.instructions).toBe(expectedSystemPrompt)
   const tools = body.tools as Array<{
     type: string

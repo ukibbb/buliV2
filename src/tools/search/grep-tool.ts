@@ -4,7 +4,7 @@ import * as path from "node:path"
 import { createInterface } from "node:readline"
 import { Type } from "typebox"
 
-import type { IAgentTool } from "@/agent"
+import type { IAgentTool, IAgentToolResult } from "@/agent"
 import { resolveToCwd } from "@/tools/shared/path-utils"
 import {
     DEFAULT_MAX_BYTES,
@@ -57,7 +57,7 @@ export function createGrepTool(
         description: `Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects .gitignore. Output is truncated to ${DEFAULT_LIMIT} matches or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Long lines are truncated to ${GREP_MAX_LINE_LENGTH} chars.`,
         inputSchema: GREP_INPUT_SCHEMA,
         selfTruncatesOutput: true,
-        execute: (input, context) => new Promise<string>((resolve, reject) => {
+        execute: (input, context) => new Promise<IAgentToolResult>((resolve, reject) => {
             const signal = context.signal
             if (signal.aborted) {
                 reject(new Error("Operation aborted"))
@@ -260,7 +260,10 @@ export function createGrepTool(
                             return
                         }
                         if (matchCount === 0) {
-                            settle(() => resolve("No matches found"))
+                            settle(() => resolve({
+                                content: "No matches found",
+                                summary: "0 matches",
+                            }))
                             return
                         }
 
@@ -314,7 +317,8 @@ export function createGrepTool(
                         if (notices.length > 0) {
                             output += `\n\n[${notices.join(". ")}]`
                         }
-                        settle(() => resolve(output))
+                        const summary = `${matchCount} ${matchCount === 1 ? "match" : "matches"}${matchLimitReached ? ", limit reached" : ""}`
+                        settle(() => resolve({ content: output, summary }))
                     })
                 } catch (error) {
                     settle(() => reject(error))

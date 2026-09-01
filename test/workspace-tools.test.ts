@@ -111,12 +111,15 @@ test("find uses the injected fd executable and accepts a parent-relative path", 
       pattern: "src/*.ts",
       path: relative(workspace, outside),
       limit: 2,
-    }, context())).resolves.toBe([
-      "src/alpha.ts",
-      "src/beta.ts",
-      "",
-      "[2 results limit reached. Use limit=4 for more, or refine pattern]",
-    ].join("\n"))
+    }, context())).resolves.toEqual({
+      content: [
+        "src/alpha.ts",
+        "src/beta.ts",
+        "",
+        "[2 results limit reached. Use limit=4 for more, or refine pattern]",
+      ].join("\n"),
+      summary: "2 files, limit reached",
+    })
     expect(await readArguments(argsLog)).toEqual([
       "--glob",
       "--color=never",
@@ -166,13 +169,16 @@ test("grep uses the injected ripgrep executable and truncates lines to 500 chars
       literal: true,
       context: 1,
       limit: 1,
-    }, context())).resolves.toBe([
-      "long.txt-1- before",
-      `long.txt:2: ${longLine.slice(0, 500)}... [truncated]`,
-      "long.txt-3- after",
-      "",
-      "[1 matches limit reached. Use limit=2 for more, or refine pattern. Some lines truncated to 500 chars. Use read tool to see full lines]",
-    ].join("\n"))
+    }, context())).resolves.toEqual({
+      content: [
+        "long.txt-1- before",
+        `long.txt:2: ${longLine.slice(0, 500)}... [truncated]`,
+        "long.txt-3- after",
+        "",
+        "[1 matches limit reached. Use limit=2 for more, or refine pattern. Some lines truncated to 500 chars. Use read tool to see full lines]",
+      ].join("\n"),
+      summary: "1 match, limit reached",
+    })
     expect(await readArguments(argsLog)).toEqual([
       "--json",
       "--line-number",

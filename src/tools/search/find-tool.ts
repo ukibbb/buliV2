@@ -3,7 +3,7 @@ import * as path from "node:path"
 import { createInterface } from "node:readline"
 import { Type } from "typebox"
 
-import type { IAgentTool } from "@/agent"
+import type { IAgentTool, IAgentToolResult } from "@/agent"
 import { pathExists, resolveToCwd } from "@/tools/shared/path-utils"
 import {
     DEFAULT_MAX_BYTES,
@@ -36,7 +36,7 @@ export function createFindTool(
         description: `Search for files by glob pattern. Returns matching file paths relative to the search directory. Respects .gitignore. Output is truncated to ${DEFAULT_LIMIT} results or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first).`,
         inputSchema: FIND_INPUT_SCHEMA,
         selfTruncatesOutput: true,
-        execute: (input, context) => new Promise<string>((resolve, reject) => {
+        execute: (input, context) => new Promise<IAgentToolResult>((resolve, reject) => {
             const signal = context.signal
             if (signal.aborted) {
                 reject(new Error("Operation aborted"))
@@ -152,9 +152,10 @@ export function createFindTool(
                             }
                         }
                         if (!output) {
-                            settle(() => resolve(
-                                "No files found matching pattern",
-                            ))
+                            settle(() => resolve({
+                                content: "No files found matching pattern",
+                                summary: "0 files",
+                            }))
                             return
                         }
 
@@ -189,7 +190,9 @@ export function createFindTool(
                         if (notices.length > 0) {
                             resultOutput += `\n\n[${notices.join(". ")}]`
                         }
-                        settle(() => resolve(resultOutput))
+                        const resultCount = relativized.length
+                        const summary = `${resultCount} ${resultCount === 1 ? "file" : "files"}${resultLimitReached ? ", limit reached" : ""}`
+                        settle(() => resolve({ content: resultOutput, summary }))
                     })
                 } catch (error) {
                     if (signal.aborted) {

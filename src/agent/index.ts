@@ -73,11 +73,13 @@ export type {
     IAgentRunHandle,
     IAgentState,
 } from "@/agent/state"
+export { defineAgentTool } from "@/agent/tool"
 export type {
     IAgentTool,
     IAgentToolContext,
     IAgentToolDescriptor,
     IAgentToolResult,
+    IRuntimeAgentTool,
     TToolApprovalKind,
     TToolExecutionOutcome,
 } from "@/agent/tool"

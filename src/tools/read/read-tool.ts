@@ -3,7 +3,7 @@ import { constants } from "node:fs"
 import { access, readFile } from "node:fs/promises"
 import { Type } from "typebox"
 
-import type { IAgentTool } from "@/agent"
+import { defineAgentTool, type IAgentTool } from "@/agent"
 import { resolveReadPath } from "@/tools/shared/path-utils"
 import {
     DEFAULT_MAX_BYTES,
@@ -28,8 +28,8 @@ const READ_INPUT_SCHEMA = Type.Object({
 /** Creates the text-only Pi-style file reader. */
 export function createReadTool(
     workspaceRoot: string,
-): IAgentTool<typeof READ_INPUT_SCHEMA> {
-    return {
+): IAgentTool<typeof READ_INPUT_SCHEMA, "read"> {
+    return defineAgentTool({
         name: "read",
         description: `Read the contents of a text file. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
         inputSchema: READ_INPUT_SCHEMA,
@@ -126,5 +126,5 @@ export function createReadTool(
 
             void run()
         }),
-    }
+    })
 }

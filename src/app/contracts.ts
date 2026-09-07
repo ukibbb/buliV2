@@ -21,11 +21,11 @@ export interface IBuliPromptInput extends IUserInputContent {
 
 export type IBuliPathSuggestion = IFdPathSuggestion
 
-export interface IBuliPromptSubmission {
+export interface IBuliPromptRun {
     readonly sessionId: string
     readonly runId: string
-    readonly accepted: Promise<void>
-    readonly settled: Promise<void>
+    readonly promptPersisted: Promise<void>
+    readonly runFinished: Promise<void>
 }
 
 export interface IBuliQueuedMessages {
@@ -74,7 +74,7 @@ export interface IBuliApplication
         reasoningEffort: TReasoningEffort,
     ) => void
 
-    readonly submitPrompt: (prompt: IBuliPromptInput) => IBuliPromptSubmission
+    readonly submitPrompt: (prompt: IBuliPromptInput) => IBuliPromptRun
     readonly steer: (
         sessionId: string,
         text: string,

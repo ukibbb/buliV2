@@ -8,12 +8,12 @@ import type {
   IAgentModel,
   TAgentModelEvent,
   IAgentModelRequest,
-  IAgentTool,
   IAgentToolContext,
+  IRuntimeAgentTool,
   IToolOutputStore,
   IUserMessage,
 } from "@/agent"
-import { runAgentLoop } from "@/agent"
+import { defineAgentTool, runAgentLoop } from "@/agent"
 import { EphemeralToolOutputStore } from "@/tools"
 
 const RUN_ID = "run-1"
@@ -131,10 +131,10 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
   let maximumActiveToolCalls = 0
   const executionRunIds: string[] = []
   const executionMessages: Array<readonly unknown[] | undefined> = []
-  const readFileTool: IAgentTool = {
+  const readFileTool = defineAgentTool({
     name: "read_file",
     description: "Read a file",
-    inputSchema: { type: "object" },
+    inputSchema: Type.Object({ path: Type.String() }),
     async execute(input, context) {
       activeToolCalls += 1
       maximumActiveToolCalls = Math.max(maximumActiveToolCalls, activeToolCalls)
@@ -144,9 +144,9 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
       await Promise.resolve()
       executionOrder.push(`end:${context.toolCallId}`)
       activeToolCalls -= 1
-      return `contents:${String(input.path)}`
+      return `contents:${input.path}`
     },
-  }
+  })
   const events: TAgentEvent[] = []
 
   const result = await runAgentLoop(
@@ -296,15 +296,15 @@ test("does not execute tool calls from an output-limited response", async () => 
       ]
     : [{ type: "finish", reason: "stop" }])
   let executions = 0
-  const tool: IAgentTool = {
+  const tool = defineAgentTool({
     name: "write_something",
     description: "Mutate external state",
-    inputSchema: { type: "object" },
+    inputSchema: Type.Object({ content: Type.String() }),
     execute: async () => {
       executions += 1
       return "mutated"
     },
-  }
+  })
 
   const result = await runAgentLoop(
     userMessage("Write"),
@@ -355,16 +355,16 @@ test("supplies session, model, and conversation context to host tools", async ()
     },
   }
   let observedContext: IAgentToolContext | undefined
-  const tool: IAgentTool = {
+  const tool = defineAgentTool({
     name: "inspect_context",
     description: "Inspect host context",
-    inputSchema: { type: "object", additionalProperties: false },
+    inputSchema: Type.Object({}),
     requiresConversationContext: true,
     execute: async (_input, context) => {
       observedContext = context
       return "inspected"
     },
-  }
+  })
 
   await runAgentLoop(
     {
@@ -496,8 +496,7 @@ test("turns invalid structured tool results into errors", async () => {
   ]
 
   for (const testCase of cases) {
-    const execute = (async () => testCase.value) as unknown as IAgentTool["execute"]
-    const { toolResult } = await executeSingleTool(execute)
+    const { toolResult } = await executeSingleTool(async () => testCase.value)
     expect(toolResult).toMatchObject({
       content: testCase.error,
       isError: true,
@@ -608,11 +607,11 @@ test("always gives tools an approval bridge with exact execution context", async
       ]
     : [{ type: "finish", reason: "stop" }])
   const decisions: string[] = []
-  const tool: IAgentTool = {
+  const tool = defineAgentTool({
     name: "run_command",
     approvalKind: "command",
     description: "Run a command",
-    inputSchema: { type: "object", additionalProperties: false },
+    inputSchema: Type.Object({}),
     async execute(_input, context) {
       if (!context.requestApproval) throw new Error("Missing approval bridge")
       decisions.push(await context.requestApproval({
@@ -628,7 +627,7 @@ test("always gives tools an approval bridge with exact execution context", async
       }))
       return "complete"
     },
-  }
+  })
   const approvalContexts: Array<{
     sessionId: string
     runId: string
@@ -694,18 +693,18 @@ test("allows one approval request per tool call", async () => {
     : [{ type: "finish", reason: "stop" }])
   let approvals = 0
   const draft = commandApprovalDraft()
-  const tool: IAgentTool = {
+  const tool = defineAgentTool({
     name: "run_command",
     approvalKind: "command",
     description: "Run a command",
-    inputSchema: { type: "object", additionalProperties: false },
+    inputSchema: Type.Object({}),
     async execute(_input, context) {
       if (!context.requestApproval) throw new Error("Missing approval bridge")
       await context.requestApproval(draft)
       await context.requestApproval(draft)
       return "unexpected"
     },
-  }
+  })
 
   const result = await runAgentLoop(
     userMessage("Run the command"),
@@ -739,25 +738,25 @@ test("allows one approval request per tool call", async () => {
 })
 
 test("exposes every registered tool for every prompt", async () => {
-  const readTool: IAgentTool = {
+  const readTool = defineAgentTool({
     name: "read",
     description: "Read",
-    inputSchema: { type: "object" },
+    inputSchema: Type.Object({}),
     execute: async () => "read",
-  }
-  const editTool: IAgentTool = {
+  })
+  const editTool = defineAgentTool({
     name: "edit_file",
     description: "Edit",
-    inputSchema: { type: "object" },
+    inputSchema: Type.Object({}),
     execute: async () => "edit",
-  }
-  const commandTool: IAgentTool = {
+  })
+  const commandTool = defineAgentTool({
     name: "bash",
     approvalKind: "command",
     description: "Command",
-    inputSchema: { type: "object" },
+    inputSchema: Type.Object({}),
     execute: async () => "command",
-  }
+  })
   const prompts = [
     "Explain this",
     "Pokaż pełny kod parsera",
@@ -794,12 +793,12 @@ test("exposes every registered tool for every prompt", async () => {
 
 test("exposes action tools independently of message history", async () => {
   const model = new ScriptedModel([{ type: "finish", reason: "stop" }])
-  const editTool: IAgentTool = {
+  const editTool = defineAgentTool({
     name: "edit_file",
     description: "Edit",
-    inputSchema: { type: "object" },
+    inputSchema: Type.Object({}),
     execute: async () => "edit",
-  }
+  })
   const previousRequest = {
     ...userMessage("Please handle the old task"),
     id: "previous-user-message",
@@ -855,22 +854,22 @@ test("keeps all tools available across read and approval continuations", async (
     return [{ type: "finish", reason: "stop" }]
   })
   let approvals = 0
-  const readTool: IAgentTool = {
+  const readTool = defineAgentTool({
     name: "read",
     description: "Read",
-    inputSchema: { type: "object", additionalProperties: false },
+    inputSchema: Type.Object({}),
     execute: async () => "contents",
-  }
-  const commandTool: IAgentTool = {
+  })
+  const commandTool = defineAgentTool({
     name: "bash",
     approvalKind: "command",
     description: "Run a command",
-    inputSchema: { type: "object", additionalProperties: false },
+    inputSchema: Type.Object({}),
     async execute(_input, context) {
       if (!context.requestApproval) throw new Error("Missing approval bridge")
       return await context.requestApproval(commandApprovalDraft())
     },
-  }
+  })
 
   await runAgentLoop(
     userMessage("Implement the parser change"),
@@ -930,17 +929,17 @@ test("lets each action call request its own approval", async () => {
     : [{ type: "finish", reason: "stop" }])
   let executions = 0
   let approvals = 0
-  const tool: IAgentTool = {
+  const tool = defineAgentTool({
     name: "bash",
     approvalKind: "command",
     description: "Run a command",
-    inputSchema: { type: "object", additionalProperties: false },
+    inputSchema: Type.Object({}),
     async execute(_input, context) {
       executions += 1
       if (!context.requestApproval) throw new Error("Missing approval bridge")
       return await context.requestApproval(commandApprovalDraft())
     },
-  }
+  })
 
   const result = await runAgentLoop(
     userMessage("Run both commands"),
@@ -1002,15 +1001,15 @@ test("injects steering only after the complete tool batch", async () => {
         ]
       : [{ type: "finish", reason: "stop" }]
   })
-  const tool: IAgentTool = {
+  const tool = defineAgentTool({
     name: "read_file",
     description: "Read a file",
-    inputSchema: { type: "object" },
+    inputSchema: Type.Object({ path: Type.String() }),
     async execute(input) {
-      order.push(`tool:${String(input.path)}`)
-      return String(input.path)
+      order.push(`tool:${input.path}`)
+      return input.path
     },
-  }
+  })
   const events: TAgentEvent[] = []
 
   const result = await runAgentLoop(
@@ -1091,12 +1090,12 @@ test("delivers follow-up only after tool continuation and steering", async () =>
         { type: "finish", reason: "tool-calls" },
       ]
     : [{ type: "finish", reason: "stop" }])
-  const tool: IAgentTool = {
+  const tool = defineAgentTool({
     name: "read_file",
     description: "Read a file",
-    inputSchema: { type: "object" },
+    inputSchema: Type.Object({ path: Type.String() }),
     execute: async () => "contents",
-  }
+  })
 
   const result = await runAgentLoop(
     userMessage("Read the file"),
@@ -1275,12 +1274,12 @@ test("stops a tool continuation when aborted during turn_end", async () => {
     },
     { type: "finish", reason: "tool-calls" },
   ])
-  const tool: IAgentTool = {
+  const tool = defineAgentTool({
     name: "read_file",
     description: "Read a file",
-    inputSchema: { type: "object" },
+    inputSchema: Type.Object({ path: Type.String() }),
     execute: async () => "contents",
-  }
+  })
 
   const result = await runAgentLoop(
     userMessage("Read"),
@@ -1339,12 +1338,12 @@ test("gives abort precedence over a provider error during turn_end", async () =>
 
 test("rejects duplicate tool names before starting the model", async () => {
   const model = new ScriptedModel([{ type: "finish", reason: "stop" }])
-  const duplicate: IAgentTool = {
+  const duplicate = defineAgentTool({
     name: "read_file",
     description: "Read",
-    inputSchema: { type: "object" },
+    inputSchema: Type.Object({}),
     execute: async () => "unused",
-  }
+  })
   const events: TAgentEvent[] = []
 
   await expect(runAgentLoop(
@@ -1377,26 +1376,23 @@ test("turns invalid tool input into a model-visible result without executing", a
           type: "tool-call",
           toolCallId: "invalid-read",
           toolName: "read_file",
-          input: { path: 42, extra: true },
+          input: { path: {}, extra: true },
         },
         { type: "finish", reason: "tool-calls" },
       ]
     : [{ type: "finish", reason: "stop" }])
   let executionCount = 0
-  const tool: IAgentTool = {
+  const tool = defineAgentTool({
     name: "read_file",
     description: "Read",
-    inputSchema: {
-      type: "object",
-      properties: { path: { type: "string", minLength: 1 } },
-      required: ["path"],
-      additionalProperties: false,
-    },
+    inputSchema: Type.Object({
+      path: Type.String({ minLength: 1 }),
+    }),
     execute: async () => {
       executionCount += 1
       return "unused"
     },
-  }
+  })
 
   const result = await runAgentLoop(
     userMessage("Read"),
@@ -1445,7 +1441,7 @@ test("prepares arguments before normalizing optional nulls and converting values
       ]
     : [{ type: "finish", reason: "stop" }])
   let receivedInput: Record<string, unknown> | undefined
-  const tool: IAgentTool = {
+  const tool = defineAgentTool({
     name: "converted",
     description: "Convert arguments",
     inputSchema: Type.Object({
@@ -1454,14 +1450,15 @@ test("prepares arguments before normalizing optional nulls and converting values
       nested: Type.Object({ enabled: Type.Optional(Type.Boolean()) }),
     }),
     prepareArguments: (input) => {
-      const args = input as Record<string, unknown>
+      if (typeof input !== "object" || input === null) return input
+      const args = Object.fromEntries(Object.entries(input))
       return args.label === null ? { ...args, label: "prepared" } : args
     },
     execute: async (input) => {
       receivedInput = input
       return "converted"
     },
-  }
+  })
 
   await runAgentLoop(
     userMessage("Convert"),
@@ -1494,10 +1491,10 @@ test("serializes tool progress before the final result and ignores late updates"
       ]
     : [{ type: "finish", reason: "stop" }])
   let lateProgress: ((progress: string) => void) | undefined
-  const tool: IAgentTool = {
+  const tool = defineAgentTool({
     name: "scan",
     description: "Scan",
-    inputSchema: { type: "object", additionalProperties: false },
+    inputSchema: Type.Object({}),
     execute: async (_input, context) => {
       lateProgress = context.reportProgress
       context.reportProgress?.("first")
@@ -1505,7 +1502,7 @@ test("serializes tool progress before the final result and ignores late updates"
       context.reportProgress?.("second")
       return "complete"
     },
-  }
+  })
   const events: TAgentEvent[] = []
 
   await runAgentLoop(
@@ -1574,16 +1571,16 @@ test("retains complete custom tool output before bounded persistence and continu
         { type: "finish", reason: "tool-calls" },
       ]
     : [{ type: "finish", reason: "stop" }])
-  const tool: IAgentTool = {
+  const tool = defineAgentTool({
     name: "large",
     description: "Large output",
-    inputSchema: { type: "object", additionalProperties: false },
+    inputSchema: Type.Object({}),
     execute: async () => ({
       content: "x".repeat(100_001),
       outcome: "manual",
       summary: "y".repeat(100_001),
     }),
-  }
+  })
 
   const store = new EphemeralToolOutputStore()
   const result = await runAgentLoop(
@@ -1658,15 +1655,15 @@ test("returns a durable failure when oversized manual output cannot be stored", 
         { type: "finish", reason: "tool-calls" },
       ]
     : [{ type: "finish", reason: "stop" }])
-  const tool: IAgentTool = {
+  const tool = defineAgentTool({
     name: "large-manual",
     description: "Large manual output",
-    inputSchema: { type: "object", additionalProperties: false },
+    inputSchema: Type.Object({}),
     execute: async () => ({
       content: "x".repeat(100_001),
       outcome: "manual",
     }),
-  }
+  })
 
   const result = await runAgentLoop(
     userMessage("Run"),
@@ -1704,12 +1701,12 @@ test("bounds storage failure details and marks completed side effects unknown", 
         { type: "finish", reason: "tool-calls" },
       ]
     : [{ type: "finish", reason: "stop" }])
-  const tool: IAgentTool = {
+  const tool = defineAgentTool({
     name: "failed-store",
     description: "Fail output storage",
-    inputSchema: { type: "object", additionalProperties: false },
+    inputSchema: Type.Object({}),
     execute: async () => "x".repeat(100_001),
-  }
+  })
   const store: IToolOutputStore = {
     store: async () => {
       throw new Error("storage failure ".repeat(20_000))
@@ -1764,13 +1761,13 @@ test("keeps output from tools that declare their own truncation", async () => {
         { type: "finish", reason: "tool-calls" },
       ]
     : [{ type: "finish", reason: "stop" }])
-  const tool: IAgentTool = {
+  const tool = defineAgentTool({
     name: "self-truncated",
     description: "Self-truncated output",
-    inputSchema: { type: "object", additionalProperties: false },
+    inputSchema: Type.Object({}),
     selfTruncatesOutput: true,
     execute: async () => content,
-  }
+  })
 
   const result = await runAgentLoop(
     userMessage("Run"),
@@ -1792,7 +1789,7 @@ test("keeps output from tools that declare their own truncation", async () => {
 })
 
 async function executeSingleTool(
-  execute: IAgentTool["execute"],
+  execute: () => Promise<unknown>,
   signal: AbortSignal = new AbortController().signal,
 ) {
   const model = new ScriptedModel((iteration) => iteration === 0
@@ -1806,17 +1803,19 @@ async function executeSingleTool(
         { type: "finish", reason: "tool-calls" },
       ]
     : [{ type: "finish", reason: "stop" }])
+  const tool: IRuntimeAgentTool = {
+    name: "test_tool",
+    description: "Test tool",
+    inputSchema: Type.Object({}),
+    // @ts-expect-error This fake deliberately violates the adapter contract to test runtime result validation.
+    validateAndExecute: execute,
+  }
   const result = await runAgentLoop(
     userMessage("Run tool"),
     {
       systemPrompt: "System",
       messages: [],
-      tools: [{
-        name: "test_tool",
-        description: "Test tool",
-        inputSchema: { type: "object", additionalProperties: false },
-        execute,
-      }],
+      tools: [tool],
     },
     {
       sessionId: "session-1",

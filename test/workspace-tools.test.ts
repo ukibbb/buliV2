@@ -11,11 +11,11 @@ import { tmpdir } from "node:os"
 import { join, relative } from "node:path"
 
 import {
+  createToolIndex,
   executeToolCallsSequentially,
-  indexAgentTools,
 } from "@/agent/tool-executor"
-import type { IAgentTool, IAgentToolContext } from "@/agent/tool"
-import { createWorkspaceTools } from "@/tools"
+import type { IAgentToolContext } from "@/agent/tool"
+import { createWorkspaceTools, type TWorkspaceTool } from "@/tools"
 
 test("registers the exact Pi-style tool and schema contract", () => {
   const tools = createWorkspaceTools(process.cwd())
@@ -247,7 +247,7 @@ test("agent execution prepares legacy and serialized edit arguments", async () =
           edits: JSON.stringify({ oldText: "second", newText: "SECOND" }),
         },
       },
-    ], indexAgentTools([edit]), {
+    ], createToolIndex([edit]), {
       sessionId: "session-workspace-tools",
       runId: "run-workspace-tools",
       messages: [],
@@ -290,7 +290,14 @@ test("write creates parents and overwrites absolute and parent-relative paths", 
   })
 })
 
-function getTool(tools: readonly IAgentTool[], name: string): IAgentTool {
+function getTool<TName extends TWorkspaceTool["name"]>(
+  tools: readonly TWorkspaceTool[],
+  name: TName,
+): Extract<TWorkspaceTool, { readonly name: TName }>
+function getTool(
+  tools: readonly TWorkspaceTool[],
+  name: TWorkspaceTool["name"],
+): TWorkspaceTool {
   const tool = tools.find((candidate) => candidate.name === name)
   if (!tool) throw new Error(`Expected ${name} tool`)
   return tool

@@ -17,16 +17,16 @@ import type {
     IAgentLoopResult,
     TAgentRunEndReason,
 } from "@/agent/state"
-import type { IAgentTool } from "@/agent/tool"
+import type { IRuntimeAgentTool } from "@/agent/tool"
 import type { IToolOutputStore } from "@/agent/tool-output-store"
 import type {
     TToolApprovalDecision,
     TToolApprovalDraft,
 } from "@/agent/tool-approval"
 import {
+    createToolIndex,
     executeToolCallsSequentially,
     failToolCallsWithoutExecution,
-    indexAgentTools,
 } from "@/agent/tool-executor"
 
 const TRUNCATED_TOOL_CALL_MESSAGE =
@@ -71,7 +71,7 @@ export interface IAgentContext {
     readonly systemPrompt: string
     readonly messages: readonly TAgentMessage[]
     readonly contextSummary?: string
-    readonly tools: readonly IAgentTool[]
+    readonly tools: readonly IRuntimeAgentTool[]
     readonly selectedPathReferences?: readonly IUserPathReference[]
 }
 
@@ -94,16 +94,15 @@ export interface IAgentLoopConfig {
 /** Orchestrates provider turns, queued input, and sequential local tool batches. */
 export async function runAgentLoop(
     prompt: IUserMessage,
+
+    // data needed to build context send to model
     context: IAgentContext,
     config: IAgentLoopConfig,
 ): Promise<IAgentLoopResult> {
-    // dodac now i generateId do common i uzywac explict nie z obiektu ?
     const now = config.now ?? Date.now
     const generateId = config.generateId ?? (() => crypto.randomUUID())
 
-    // One registry keeps model descriptors and local executors in sync.
-    const toolsByName = indexAgentTools(context.tools)
-    const activeTools = [...toolsByName.values()]
+    const toolsByName = createToolIndex(context.tools)
     const messages = structuredClone([...context.messages, prompt])
     const newMessages: TAgentMessage[] = [structuredClone(prompt)]
     const selectedPathReferences = mergePathReferences(
@@ -174,7 +173,7 @@ export async function runAgentLoop(
                 ...(config.modelProfile === undefined
                     ? {}
                     : { modelProfile: config.modelProfile }),
-                tools: activeTools,
+                tools: context.tools,
                 reasoningEffort: config.reasoningEffort,
                 reportProviderAccountId: (accountId) => {
                     providerAccountId = accountId

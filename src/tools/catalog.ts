@@ -1,4 +1,4 @@
-import type { IAgentTool, IToolOutputStore } from "@/agent"
+import type { IToolOutputStore } from "@/agent"
 import { createBashTool } from "@/tools/command/bash-tool"
 import { createEditTool } from "@/tools/edit/edit-tool"
 import { createReadTool } from "@/tools/read/read-tool"
@@ -11,6 +11,16 @@ import {
 } from "@/tools/patch/file-change-proposal-tools"
 import { createWriteTool } from "@/tools/write/write-tool"
 
+export type TWorkspaceTool =
+    | ReturnType<typeof createReadTool>
+    | ReturnType<typeof createFindTool>
+    | ReturnType<typeof createGrepTool>
+    | ReturnType<typeof createEditTool>
+    | ReturnType<typeof createWriteTool>
+    | ReturnType<typeof createBashTool>
+    | ReturnType<typeof createApplyFileChangesTool>
+    | ReturnType<typeof createRejectFileChangesTool>
+
 /** Composes the model-facing tools that operate on one workspace. */
 export function createWorkspaceTools(
     workspaceRoot: string,
@@ -20,8 +30,8 @@ export function createWorkspaceTools(
         readonly toolOutputStore?: IToolOutputStore
         readonly fileChangeProposalStore?: FileChangeProposalStore
     } = {},
-): readonly IAgentTool[] {
-    const tools: IAgentTool[] = [
+): readonly TWorkspaceTool[] {
+    const tools: TWorkspaceTool[] = [
         createReadTool(workspaceRoot),
         createFindTool(workspaceRoot, options.fdExecutablePath),
         createGrepTool(workspaceRoot, options.ripgrepExecutablePath),

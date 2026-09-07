@@ -7,7 +7,7 @@ import {
 import { createTwoFilesPatch } from "diff"
 import { Type, type Static } from "typebox"
 
-import type { IAgentTool } from "@/agent"
+import { defineAgentTool, type IAgentTool } from "@/agent"
 import {
     withFileMutationQueue,
 } from "@/tools/shared/file-mutation"
@@ -116,8 +116,8 @@ export function prepareEditArguments(input: unknown): EditToolInput {
 export function createEditTool(
     cwd: string,
     proposalStore?: FileChangeProposalStore,
-): IAgentTool<typeof EDIT_INPUT_SCHEMA> {
-    return {
+): IAgentTool<typeof EDIT_INPUT_SCHEMA, "edit"> {
+    return defineAgentTool({
         name: "edit",
         description: proposalStore
             ? "Prepare an immutable proposal to edit one file using exact text replacement. This does not modify the file. Every edits[].oldText must match a unique, non-overlapping region of the original file."
@@ -193,7 +193,7 @@ export function createEditTool(
                 return `Successfully replaced ${edits.length} block(s) in ${path}.`
             })
         },
-    }
+    })
 }
 
 function validateEditInput(

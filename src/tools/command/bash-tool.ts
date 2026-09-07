@@ -1,9 +1,10 @@
 import { Type } from "typebox"
 
-import type {
-    IAgentTool,
-    IToolOutputStore,
-    IToolOutputWriter,
+import {
+    defineAgentTool,
+    type IAgentTool,
+    type IToolOutputStore,
+    type IToolOutputWriter,
 } from "@/agent"
 import {
     PROCESS_INTERPRETER_DISPLAY,
@@ -32,8 +33,8 @@ const BASH_INPUT_SCHEMA = Type.Object({
 export function createBashTool(
     workspaceRoot: string,
     toolOutputStore?: IToolOutputStore,
-): IAgentTool<typeof BASH_INPUT_SCHEMA> {
-    return {
+): IAgentTool<typeof BASH_INPUT_SCHEMA, "bash"> {
+    return defineAgentTool({
         name: "bash",
         description: `Execute one Bash command immediately in the workspace root using ${PROCESS_INTERPRETER_DISPLAY}. Returns separate stdout and stderr previews; timeout is optional and has no default. It is not a sandbox, and deliberately detached descendants may outlive the run. Obtain the conversational approval required by the system prompt before calling this tool. Prefer read, find, and grep for inspection, and edit or write for file changes.`,
         inputSchema: BASH_INPUT_SCHEMA,
@@ -105,7 +106,7 @@ export function createBashTool(
                 summary: commandSummary(result, timeout),
             }
         },
-    }
+    })
 }
 
 function formatResult(

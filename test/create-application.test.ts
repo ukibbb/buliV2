@@ -28,9 +28,9 @@ test("does not attach OpenAI web search to an injected provider-neutral model", 
   })
 
   try {
-    const submission = startup.runtime.submitPrompt({ text: "Search the web" })
-    await submission.accepted
-    await submission.settled
+    const promptRun = startup.runtime.submitPrompt({ text: "Search the web" })
+    await promptRun.promptPersisted
+    await promptRun.runFinished
 
     if (!modelRequest) throw new Error("Expected one model request")
     expect(modelRequest.tools.map((tool) => tool.name)).not.toContain("web_search")
@@ -52,7 +52,7 @@ test("does not attach OpenAI web search to an injected provider-neutral model", 
     )
     expect(startup.runtime.workspaceRoot).toBe(await realpath(workspace))
     const assistant = startup.runtime
-      .openSession(submission.sessionId)
+      .openSession(promptRun.sessionId)
       .getSnapshot()
       .messages.find((message) => message.role === "assistant")
     expect(assistant).not.toHaveProperty("model")

@@ -3,7 +3,11 @@ import * as path from "node:path"
 import { createInterface } from "node:readline"
 import { Type } from "typebox"
 
-import type { IAgentTool, IAgentToolResult } from "@/agent"
+import {
+    defineAgentTool,
+    type IAgentTool,
+    type IAgentToolResult,
+} from "@/agent"
 import { pathExists, resolveToCwd } from "@/tools/shared/path-utils"
 import {
     DEFAULT_MAX_BYTES,
@@ -30,8 +34,8 @@ const DEFAULT_LIMIT = 1_000
 export function createFindTool(
     workspaceRoot: string,
     executable = "fd",
-): IAgentTool<typeof FIND_INPUT_SCHEMA> {
-    return {
+): IAgentTool<typeof FIND_INPUT_SCHEMA, "find"> {
+    return defineAgentTool({
         name: "find",
         description: `Search for files by glob pattern. Returns matching file paths relative to the search directory. Respects .gitignore. Output is truncated to ${DEFAULT_LIMIT} results or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first).`,
         inputSchema: FIND_INPUT_SCHEMA,
@@ -208,7 +212,7 @@ export function createFindTool(
 
             void run()
         }),
-    }
+    })
 }
 
 function relativizeFindResultPath(

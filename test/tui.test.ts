@@ -19,7 +19,7 @@ import type {
   IBuliApplication,
   IBuliApplicationSnapshot,
   IBuliPromptInput,
-  IBuliPromptSubmission,
+  IBuliPromptRun,
 } from "@/app/contracts"
 import type { IAuthenticationService } from "@/authentication/contracts"
 import { BuliApplicationRuntime } from "@/app/runtime"
@@ -120,7 +120,7 @@ function findTextareaRenderable(root: Renderable): TextareaRenderable | undefine
 
 interface IFakeApplicationOptions {
   readonly sessionSnapshot?: ISessionSnapshot
-  readonly submitPrompt?: (prompt: IBuliPromptInput) => IBuliPromptSubmission
+  readonly submitPrompt?: (prompt: IBuliPromptInput) => IBuliPromptRun
   readonly steer?: (sessionId: string, text: string) => void
   readonly followUp?: (sessionId: string, text: string) => void
   readonly clearQueuedMessages?: IBuliApplication["clearQueuedMessages"]
@@ -177,8 +177,8 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
       return options.submitPrompt?.(prompt) ?? {
         sessionId: prompt.sessionId ?? "default",
         runId: `run-${++runCount}`,
-        accepted: Promise.resolve(),
-        settled: Promise.resolve(),
+        promptPersisted: Promise.resolve(),
+        runFinished: Promise.resolve(),
       }
     },
     steer: (sessionId, text) => {
@@ -427,14 +427,14 @@ test("preserves the chat draft while authentication opens and closes", async () 
   }
 })
 
-test("retains textarea input until acceptance and clears it afterward", async () => {
-  const acceptance = Promise.withResolvers<void>()
+test("retains textarea input until persistence and clears it afterward", async () => {
+  const persistence = Promise.withResolvers<void>()
   const fake = fakeApplication({
     submitPrompt: () => ({
       sessionId: "default",
       runId: "run-1",
-      accepted: acceptance.promise,
-      settled: acceptance.promise,
+      promptPersisted: persistence.promise,
+      runFinished: persistence.promise,
     }),
   })
   const setup = await testRender(
@@ -456,8 +456,8 @@ test("retains textarea input until acceptance and clears it afterward", async ()
     )
 
     await act(async () => {
-      acceptance.resolve()
-      await acceptance.promise
+      persistence.resolve()
+      await persistence.promise
       await Promise.resolve()
       await setup.renderOnce()
     })
@@ -472,13 +472,13 @@ test("retains textarea input until acceptance and clears it afterward", async ()
 })
 
 test("preserves a replacement draft when a second submission is pending", async () => {
-  const acceptance = Promise.withResolvers<void>()
+  const persistence = Promise.withResolvers<void>()
   const fake = fakeApplication({
     submitPrompt: () => ({
       sessionId: "default",
       runId: "run-1",
-      accepted: acceptance.promise,
-      settled: acceptance.promise,
+      promptPersisted: persistence.promise,
+      runFinished: persistence.promise,
     }),
   })
   const setup = await testRender(
@@ -521,8 +521,8 @@ test("preserves a replacement draft when a second submission is pending", async 
     )
 
     await act(async () => {
-      acceptance.resolve()
-      await acceptance.promise
+      persistence.resolve()
+      await persistence.promise
       await Promise.resolve()
       await setup.renderOnce()
     })
@@ -537,14 +537,14 @@ test("preserves a replacement draft when a second submission is pending", async 
   }
 })
 
-test("restores a replacement Home draft after acceptance opens its session", async () => {
-  const acceptance = Promise.withResolvers<void>()
+test("restores a replacement Home draft after persistence opens its session", async () => {
+  const persistence = Promise.withResolvers<void>()
   const fake = fakeApplication({
     submitPrompt: () => ({
       sessionId: "default",
       runId: "run-1",
-      accepted: acceptance.promise,
-      settled: acceptance.promise,
+      promptPersisted: persistence.promise,
+      runFinished: persistence.promise,
     }),
   })
   const controller = new BuliUiController({ application: fake.application })
@@ -572,8 +572,8 @@ test("restores a replacement Home draft after acceptance opens its session", asy
     expect(controller.getSnapshot().input).toBe("Replacement draft")
 
     await act(async () => {
-      acceptance.resolve()
-      await acceptance.promise
+      persistence.resolve()
+      await persistence.promise
       await Promise.resolve()
       await setup.renderOnce()
       await Promise.resolve()
@@ -594,14 +594,14 @@ test("restores a replacement Home draft after acceptance opens its session", asy
   }
 })
 
-test("retains textarea input when prompt acceptance fails", async () => {
-  const acceptance = Promise.withResolvers<void>()
+test("retains textarea input when prompt persistence fails", async () => {
+  const persistence = Promise.withResolvers<void>()
   const fake = fakeApplication({
     submitPrompt: () => ({
       sessionId: "default",
       runId: "run-1",
-      accepted: acceptance.promise,
-      settled: acceptance.promise,
+      promptPersisted: persistence.promise,
+      runFinished: persistence.promise,
     }),
   })
   const setup = await testRender(
@@ -615,7 +615,7 @@ test("retains textarea input when prompt acceptance fails", async () => {
       await setup.mockInput.typeText("Unpersisted prompt")
       setup.mockInput.pressEnter()
       await Promise.resolve()
-      acceptance.reject(new Error("Failed to persist prompt"))
+      persistence.reject(new Error("Failed to persist prompt"))
       await Promise.resolve()
       await setup.renderOnce()
     })
@@ -1500,7 +1500,7 @@ test("shows slash commands and executes the selected new command", async () => {
   await runtime.submitPrompt({
     sessionId: session.id,
     text: "Old prompt",
-  }).settled
+  }).runFinished
   const setup = await testRender(
     buliElement(runtime, session.id),
     { width: 80, height: 24 },
@@ -1657,7 +1657,7 @@ test("renders a submitted prompt and streamed response", async () => {
       await runtime.submitPrompt({
         sessionId: session.id,
         text: "Rendered prompt",
-      }).settled
+      }).runFinished
       await setup.renderOnce()
       await Promise.all(
         codeRenderables(setup.renderer.root).map((renderable) =>
@@ -1713,7 +1713,7 @@ test("renders the sessions picker and switches transcripts", async () => {
   await runtime.submitPrompt({
     sessionId: first.id,
     text: "First history",
-  }).settled
+  }).runFinished
   const second = runtime.createSession({
     agentId: TEST_AGENT_ID,
     title: "Second history",
@@ -1721,7 +1721,7 @@ test("renders the sessions picker and switches transcripts", async () => {
   await runtime.submitPrompt({
     sessionId: second.id,
     text: "Second history",
-  }).settled
+  }).runFinished
   const controller = new BuliUiController({ application: runtime })
   controller.activateSession(first.id)
   const setup = await testRender(

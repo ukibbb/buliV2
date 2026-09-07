@@ -1,6 +1,6 @@
 import type {
     IAgentModel,
-    IAgentTool,
+    IRuntimeAgentTool,
     IModelProfile,
     IToolOutputStore,
     TReasoningEffort,
@@ -14,7 +14,7 @@ import type {
     IBuliModelSelection,
     IBuliPathSuggestion,
     IBuliPromptInput,
-    IBuliPromptSubmission,
+    IBuliPromptRun,
     IBuliSessionCreationOptions,
     ISnapshotSource,
 } from "@/app/contracts"
@@ -35,7 +35,7 @@ type TBuliRuntimeSubscribe = () => void
 
 export interface IBuliAgentRuntimeConfig extends IBuliAgentDisplayInfo {
     readonly systemPrompt: string
-    readonly tools: readonly IAgentTool[]
+    readonly tools: readonly IRuntimeAgentTool[]
 }
 
 export interface IBuliModelRuntimeConfig extends IBuliModelDisplayInfo {
@@ -179,7 +179,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
         )
     }
 
-    readonly submitPrompt = (prompt: IBuliPromptInput): IBuliPromptSubmission => {
+    readonly submitPrompt = (prompt: IBuliPromptInput): IBuliPromptRun => {
         if (this.disposed) throw new Error("Buli runtime is disposed")
 
         const createdSession = prompt.sessionId === undefined
@@ -199,23 +199,31 @@ export class BuliApplicationRuntime implements IBuliApplication {
             }
             throw error
         }
-        const rollback = createdSession
-            ? run.accepted.then(
+        const rollbackOnInitialPromptFailure = createdSession
+            ? run.initialPromptProcessed.then(
                 () => undefined,
                 async () => {
-                    await run.settled.catch(() => { })
+                    await run.runFinished.catch(() => { })
                     await this.rollbackSession(sessionId, session)
                 },
             )
             : undefined
-        if (rollback) void rollback.catch(() => { })
-        const accepted = this.waitForRollback(run.accepted, rollback)
-        const settled = this.waitForRollback(run.settled, rollback)
+        if (rollbackOnInitialPromptFailure) {
+            void rollbackOnInitialPromptFailure.catch(() => { })
+        }
+        const promptPersisted = this.rejectAfterRollback(
+            run.initialPromptProcessed,
+            rollbackOnInitialPromptFailure,
+        )
+        const runFinished = this.rejectAfterRollback(
+            run.runFinished,
+            rollbackOnInitialPromptFailure,
+        )
         return {
             sessionId,
             runId: run.runId,
-            accepted,
-            settled,
+            promptPersisted,
+            runFinished,
         }
     }
 
@@ -510,14 +518,14 @@ export class BuliApplicationRuntime implements IBuliApplication {
         }
     }
 
-    private waitForRollback(
+    private rejectAfterRollback(
         phase: Promise<void>,
-        rollback: Promise<void> | undefined,
+        rollbackOnInitialPromptFailure: Promise<void> | undefined,
     ): Promise<void> {
-        if (!rollback) return phase
+        if (!rollbackOnInitialPromptFailure) return phase
         const wrapped = phase.catch(async (phaseError: unknown) => {
             try {
-                await rollback
+                await rollbackOnInitialPromptFailure
             } catch (rollbackError) {
                 throw new AggregateError(
                     [phaseError, rollbackError],

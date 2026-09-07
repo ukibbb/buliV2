@@ -1,6 +1,6 @@
-import type { ScrollBoxRenderable } from "@opentui/core"
+import { MacOSScrollAccel, type ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard } from "@opentui/react"
-import { useRef, type ReactNode } from "react"
+import { useMemo, useRef, type ReactNode } from "react"
 
 import { Chat } from "@/app/ui/chat/Chat"
 import { useSession } from "@/app/ui/context/application-context"
@@ -19,6 +19,10 @@ export function SessionScreen(props: ISessionScreenProps): ReactNode {
   const session = useSession(props.sessionId)
   const controller = useBuliUiController()
   const transcriptScrollRef = useRef<ScrollBoxRenderable | null>(null)
+  const transcriptScrollAcceleration = useMemo(
+    () => new MacOSScrollAccel({ A: 1, tau: 3, maxMultiplier: 8 }),
+    [],
+  )
 
   useKeyboard((key) => {
     const isAlt = key.meta || key.option
@@ -76,6 +80,7 @@ export function SessionScreen(props: ISessionScreenProps): ReactNode {
           minHeight={0}
           flexGrow={1}
           scrollY
+          scrollAcceleration={transcriptScrollAcceleration}
           stickyScroll
           stickyStart="bottom"
           viewportCulling

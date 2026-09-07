@@ -20,6 +20,13 @@ export interface ISessionManager {
     readonly listSessions: () => readonly ISessionInfo[]
     readonly getMessages: (sessionId: string) => readonly TAgentMessage[]
     readonly appendMessage: (message: TAgentMessage) => void
+    /**
+     * Invalidates cached proposal/checkpoint presentation after successful saves
+     * or session deletion/recreation, including same-ID replacements. Message
+     * appends do not change this revision: live Agent state owns that branch.
+     * Reading the revision must not clone the payload or perform storage I/O.
+     */
+    readonly getPresentationRevision: (sessionId: string) => number
     readonly getFileChangeProposals: (
         sessionId: string,
     ) => readonly IFileChangeProposalRecord[]

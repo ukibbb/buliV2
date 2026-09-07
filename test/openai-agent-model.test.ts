@@ -2,11 +2,11 @@ import { expect, test } from "bun:test"
 import { realpathSync } from "node:fs"
 
 import {
+    defineAgentTool,
     isModelContextOverflowError,
     runAgentLoop,
     type TAgentMessage,
     type TAgentModelEvent,
-    type IAgentTool,
     type IAgentToolDescriptor,
     type IUserMessage,
 } from "@/agent"
@@ -100,7 +100,7 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
     tools: createWorkspaceTools(WORKSPACE_ROOT),
   })
 
-  await session.prompt("Continue").settled
+  await session.prompt("Continue").runFinished
 
   const [firstRequest, secondRequest, thirdRequest, fourthRequest] = capturedRequests
   if (!firstRequest || !secondRequest || !thirdRequest || !fourthRequest) {
@@ -395,7 +395,7 @@ test("replays a local tool failure into the next OAuth iteration", async () => {
     tools: createWorkspaceTools(WORKSPACE_ROOT),
   })
 
-  await session.prompt("Read the missing file").settled
+  await session.prompt("Read the missing file").runFinished
 
   expect(capturedRequests).toHaveLength(2)
   const failedTool = manager
@@ -900,7 +900,7 @@ test("does not execute an OpenAI tool call from an output-limited response", asy
       ? incompleteToolCallResponse("dangerous_action", { value: "partial" })
       : streamResponse()
   })
-  const tool: IAgentTool = {
+  const tool = defineAgentTool({
     name: "dangerous_action",
     description: "Perform a local side effect",
     inputSchema: { type: "object" },
@@ -908,7 +908,7 @@ test("does not execute an OpenAI tool call from an output-limited response", asy
       executions += 1
       return "executed"
     },
-  }
+  })
 
   const result = await runAgentLoop(
     userMessage("Perform the action"),

@@ -8,6 +8,7 @@ import type {
 } from "@/agent/messages"
 import type { IModelProfile } from "@/agent/model-values"
 import type { Static, TSchema } from "typebox"
+import { Value } from "typebox/value"
 
 export type TToolApprovalKind = TToolApprovalDraft["kind"]
 
@@ -23,8 +24,9 @@ export type TToolExecutionOutcome =
 /** Model-visible tool definition without local execution code. */
 export interface IAgentToolDescriptor<
     TInputSchema extends TSchema = TSchema,
+    TName extends string = string,
 > {
-    readonly name: string
+    readonly name: TName
     readonly description: string
     readonly inputSchema: TInputSchema
 }
@@ -51,22 +53,67 @@ export interface IAgentToolResult {
     readonly summary?: string
 }
 
-/** Executable host tool paired with the descriptor exposed to a model. */
-export interface IAgentTool<
-    // `any` is the schema-erased form used by heterogeneous tool registries.
-    TInputSchema extends TSchema = any,
-> extends IAgentToolDescriptor<TInputSchema> {
+interface IAgentToolOptions {
     readonly approvalKind?: TToolApprovalKind
     readonly prepareArguments?: (input: unknown) => unknown
     readonly selfTruncatesOutput?: boolean
     readonly requiresConversationContext?: boolean
     readonly acceptsSelectedPathReferences?: boolean
-    readonly execute: {
-        bivarianceHack(
-            input: TSchema extends TInputSchema
-                ? Record<string, unknown>
-                : Static<TInputSchema>,
-            context: IAgentToolContext,
-        ): Promise<string | IAgentToolResult>
-    }["bivarianceHack"]
+}
+
+/** A tool definition whose executor input is derived from its exact schema. */
+interface IAgentToolDefinition<
+    TInputSchema extends TSchema,
+    TName extends string,
+> extends IAgentToolDescriptor<TInputSchema, TName>, IAgentToolOptions {
+    readonly execute: (
+        input: Static<TInputSchema>,
+        context: IAgentToolContext,
+    ) => Promise<string | IAgentToolResult>
+}
+
+/** A tool that safely crosses the heterogeneous runtime execution boundary. */
+export interface IRuntimeAgentTool
+    extends IAgentToolDescriptor, IAgentToolOptions {
+    readonly validateAndExecute: (
+        unvalidatedInput: unknown,
+        context: IAgentToolContext,
+    ) => Promise<string | IAgentToolResult>
+}
+
+/** A strictly defined tool together with its safe runtime executor. */
+export type IAgentTool<
+    TInputSchema extends TSchema,
+    TName extends string = string,
+> = IAgentToolDefinition<TInputSchema, TName> & IRuntimeAgentTool
+
+/** Defines a tool while deriving its executor input from its exact schema. */
+export function defineAgentTool<
+    const TInputSchema extends TSchema,
+    const TName extends string,
+>(
+    definition: IAgentToolDefinition<TInputSchema, TName>,
+): IAgentTool<TInputSchema, TName> {
+    return {
+        ...definition,
+        async validateAndExecute(unvalidatedInput, context) {
+            const convertedInput = Value.Convert(
+                definition.inputSchema,
+                unvalidatedInput,
+            )
+            if (!Value.Check(definition.inputSchema, convertedInput)) {
+                const details = Value.Errors(
+                    definition.inputSchema,
+                    convertedInput,
+                )
+                    .slice(0, 3)
+                    .map((error) => `${error.instancePath || "/"}: ${error.message}`)
+                    .join("; ")
+                throw new TypeError(
+                    `Invalid input for tool "${definition.name}": ${details || "schema validation failed"}`,
+                )
+            }
+            return definition.execute(convertedInput, context)
+        },
+    }
 }

@@ -1,6 +1,7 @@
 import { Type } from "typebox"
 
 import {
+    defineAgentTool,
     TOOL_OUTPUT_PARTS,
     type IAgentTool,
     type IToolOutputStore,
@@ -58,8 +59,8 @@ const TOOL_OUTPUT_INPUT_SCHEMA = Type.Object({
 /** Creates the read-only pager for complete outputs retained during this app lifetime. */
 export function createToolOutputTool(
     store: IToolOutputStore,
-): IAgentTool<typeof TOOL_OUTPUT_INPUT_SCHEMA> {
-    return {
+): IAgentTool<typeof TOOL_OUTPUT_INPUT_SCHEMA, "tool_output"> {
+    return defineAgentTool({
         name: "tool_output",
         description: "Read an exact page from a large tool result retained for the active Buli application. Continue with the returned byte offset; use base64 for non-UTF-8 output. Output IDs expire when the application closes.",
         inputSchema: TOOL_OUTPUT_INPUT_SCHEMA,
@@ -113,7 +114,7 @@ export function createToolOutputTool(
             }
             return lines.join("\n")
         },
-    }
+    })
 }
 
 function assertOnlyInputKeys(input: Record<string, unknown>): void {

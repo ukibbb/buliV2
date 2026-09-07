@@ -2,10 +2,10 @@ import { expect, test } from "bun:test"
 
 import {
   Agent,
+  defineAgentTool,
   type TAgentEvent,
   type IAgentModel,
   type IAgentModelRequest,
-  type IAgentTool,
   type TToolApprovalDecision,
   type TToolApprovalDraft,
   type TToolApprovalRequest,
@@ -34,11 +34,11 @@ test("Agent.prompt returns a synchronous handle and Agent owns live state", asyn
 
   expect(agent.state.isRunning).toBe(true)
   expect(agent.state.activeRunId).toBe(run.runId)
-  expect(run.accepted).toBeInstanceOf(Promise)
-  expect(run.settled).toBeInstanceOf(Promise)
+  expect(run.initialPromptProcessed).toBeInstanceOf(Promise)
+  expect(run.runFinished).toBeInstanceOf(Promise)
 
-  await run.accepted
-  await run.settled
+  await run.initialPromptProcessed
+  await run.runFinished
 
   expect(stateObservedDuringMessageEnd).toBe(true)
   expect(agent.state.isRunning).toBe(false)
@@ -58,7 +58,7 @@ test("Agent.prompt returns a synchronous handle and Agent owns live state", asyn
   })
 })
 
-test("accepted resolves after the critical sink handles the user message_end", async () => {
+test("initial prompt processing finishes after the critical sink handles the user message_end", async () => {
   const sinkEntered = Promise.withResolvers<void>()
   const releaseSink = Promise.withResolvers<void>()
   let sinkHandled = false
@@ -79,17 +79,17 @@ test("accepted resolves after the critical sink handles the user message_end", a
   })
 
   const run = agent.prompt("Question")
-  let acceptedResolved = false
-  void run.accepted.then(() => {
-    acceptedResolved = true
+  let initialPromptProcessed = false
+  void run.initialPromptProcessed.then(() => {
+    initialPromptProcessed = true
   })
   await sinkEntered.promise
 
-  expect(acceptedResolved).toBe(false)
+  expect(initialPromptProcessed).toBe(false)
   expect(agent.state.messages).toEqual([])
 
   releaseSink.resolve()
-  await run.accepted
+  await run.initialPromptProcessed
 
   expect(sinkHandled).toBe(true)
   expect(agent.state.messages[0]).toMatchObject({
@@ -99,10 +99,10 @@ test("accepted resolves after the critical sink handles the user message_end", a
     content: "Question",
   })
 
-  await run.settled
+  await run.runFinished
 })
 
-test("critical sink failure rejects accepted and settled without adding the user message", async () => {
+test("critical sink failure rejects initial prompt processing and run completion without adding the user message", async () => {
   const sinkFailure = new Error("Failed to persist prompt")
   const agent = new Agent({
     sessionId: "session-1",
@@ -120,23 +120,23 @@ test("critical sink failure rejects accepted and settled without adding the user
   })
 
   const run = agent.prompt("Question")
-  const acceptedFailure = run.accepted.then(
+  const initialPromptFailure = run.initialPromptProcessed.then(
     () => undefined,
     (error: unknown) => error,
   )
-  const settledFailure = run.settled.then(
+  const runFailure = run.runFinished.then(
     () => undefined,
     (error: unknown) => error,
   )
 
-  expect(await acceptedFailure).toBe(sinkFailure)
-  expect(await settledFailure).toBe(sinkFailure)
+  expect(await initialPromptFailure).toBe(sinkFailure)
+  expect(await runFailure).toBe(sinkFailure)
 
   expect(agent.state.messages).toEqual([])
   expect(agent.state.isRunning).toBe(false)
 })
 
-test("critical sink throwing undefined rejects accepted and settled", async () => {
+test("critical sink throwing undefined rejects initial prompt processing and run completion", async () => {
   const agent = new Agent({
     sessionId: "session-1",
     systemPrompt: "System",
@@ -155,15 +155,15 @@ test("critical sink throwing undefined rejects accepted and settled", async () =
   const run = agent.prompt("Question")
   const idle = agent.waitForIdle()
   const aborted = agent.abort()
-  const [accepted, settled, idleResult, abortResult] = await Promise.allSettled([
-    run.accepted,
-    run.settled,
+  const [initialPrompt, runFinished, idleResult, abortResult] = await Promise.allSettled([
+    run.initialPromptProcessed,
+    run.runFinished,
     idle,
     aborted,
   ])
 
-  expect(accepted.status).toBe("rejected")
-  expect(settled.status).toBe("rejected")
+  expect(initialPrompt.status).toBe("rejected")
+  expect(runFinished.status).toBe("rejected")
   expect(idleResult.status).toBe("rejected")
   expect(abortResult.status).toBe("rejected")
   expect(agent.state.isRunning).toBe(false)
@@ -193,8 +193,8 @@ test("public observer exceptions do not fail the run", async () => {
   })
 
   const run = agent.prompt("Question")
-  await run.accepted
-  await run.settled
+  await run.initialPromptProcessed
+  await run.runFinished
 
   expect(observerErrors).toEqual([observerFailure])
   expect(agent.state.messages.map((message) => message.role)).toEqual([
@@ -220,7 +220,7 @@ test("agent_settled appears exactly once and all events carry the runId", async 
   })
 
   const run = agent.prompt("Question")
-  await run.settled
+  await run.runFinished
 
   expect(events.every((event) => event.runId === run.runId)).toBe(true)
   expect(events.filter((event) => event.type === "agent_settled")).toEqual([
@@ -253,9 +253,9 @@ test("agent_settled observers can start a new run immediately", async () => {
 
   const first = agent.prompt("First")
   const idle = agent.waitForIdle()
-  await first.settled
+  await first.runFinished
   await idle
-  await continuation?.settled
+  await continuation?.runFinished
 
   expect(agent.state.messages.filter((message) => message.role === "user"))
     .toHaveLength(2)
@@ -302,7 +302,7 @@ test("Agent delivers queued steering FIFO one message per response", async () =>
   )
 
   const run = agent.prompt("Initial prompt")
-  await run.accepted
+  await run.initialPromptProcessed
   await firstStarted.promise
   agent.steer("First steering")
   agent.steer("Second steering")
@@ -329,7 +329,7 @@ test("Agent delivers queued steering FIFO one message per response", async () =>
   ])
 
   releaseSecond.resolve()
-  await run.settled
+  await run.runFinished
 
   expect(requests).toHaveLength(3)
   expect(requests[2]?.messages.at(-1)).toMatchObject({
@@ -376,7 +376,7 @@ test("Agent delivers follow-ups FIFO only after it would otherwise stop", async 
   )
 
   const run = agent.prompt("Initial prompt")
-  await run.accepted
+  await run.initialPromptProcessed
   await firstStarted.promise
   agent.followUp("First follow-up")
   agent.followUp("Second follow-up")
@@ -387,7 +387,7 @@ test("Agent delivers follow-ups FIFO only after it would otherwise stop", async 
   ])
 
   releaseFirst.resolve()
-  await run.settled
+  await run.runFinished
 
   expect(requests).toHaveLength(3)
   expect(requests[1]?.messages.at(-1)).toMatchObject({
@@ -454,11 +454,11 @@ test("Agent rejects steering until the initial prompt is durable", async () => {
     "Agent is not accepting steering messages",
   )
   releasePromptPersistence.resolve()
-  await run.accepted
+  await run.initialPromptProcessed
   await firstRequestStarted.promise
   agent.steer("Include this next")
   releaseFirstRequest.resolve()
-  await run.settled
+  await run.runFinished
 
   expect(requests).toHaveLength(2)
   expect(requests[0]?.messages.map((message) =>
@@ -498,15 +498,15 @@ test("Agent publishes an immutable approval and approve resumes the pending run"
     "No tool approval is pending",
   )
   const run = agent.prompt("tak")
-  await run.accepted
+  await run.initialPromptProcessed
   const request = await requested.promise
-  let settled = false
-  void run.settled.then(() => {
-    settled = true
+  let runFinished = false
+  void run.runFinished.then(() => {
+    runFinished = true
   })
   await Promise.resolve()
 
-  expect(settled).toBe(false)
+  expect(runFinished).toBe(false)
   expect(request).toMatchObject({
     sessionId: "session-1",
     runId: run.runId,
@@ -540,7 +540,7 @@ test("Agent publishes an immutable approval and approve resumes the pending run"
   agent.resolveToolApproval(request.id, "approve")
 
   expect(agent.state.pendingToolApproval).toBeUndefined()
-  await run.settled
+  await run.runFinished
   expect(decisions).toEqual(["approve"])
   expect(events.filter((event) => event.type.startsWith("tool_approval")))
     .toEqual([
@@ -591,7 +591,7 @@ test("Agent keeps mismatched approval IDs pending", async () => {
   expect(agent.state.pendingToolApproval).toBe(request)
 
   agent.resolveToolApproval(request.id, "reject")
-  await run.settled
+  await run.runFinished
 
   expect(decisions).toEqual(["reject"])
   expect(agent.state.pendingToolApproval).toBeUndefined()
@@ -600,7 +600,7 @@ test("Agent keeps mismatched approval IDs pending", async () => {
 test("Agent handles sequential command approvals and keeps the tool available", async () => {
   const requests: IAgentModelRequest[] = []
   const decisions: TToolApprovalDecision[] = []
-  const commandTool: IAgentTool = {
+  const commandTool = defineAgentTool({
     name: "bash",
     approvalKind: "command",
     description: "Run a command",
@@ -611,7 +611,7 @@ test("Agent handles sequential command approvals and keeps the tool available", 
       decisions.push(decision)
       return decision
     },
-  }
+  })
   const model: IAgentModel = {
     async *stream(request) {
       const index = requests.length
@@ -671,7 +671,7 @@ test("Agent handles sequential command approvals and keeps the tool available", 
   const secondApproval = await secondRequested.promise
   expect(secondApproval.toolCallId).toBe("second-command-call")
   agent.resolveToolApproval(secondApproval.id, "reject")
-  await commandRun.settled
+  await commandRun.runFinished
 
   expect(decisions).toEqual(["reject", "reject"])
   expect(requests[1]?.tools.map((tool) => tool.name)).toEqual([
@@ -706,7 +706,7 @@ test("Agent rejects unknown command decisions and delivers copy", async () => {
   expect(agent.state.pendingToolApproval).toBe(request)
 
   agent.resolveToolApproval(request.id, "copy")
-  await run.settled
+  await run.runFinished
 
   expect(decisions).toEqual(["copy"])
 })
@@ -726,7 +726,7 @@ test("Agent abort settles a waiting approval and clears pending state", async ()
   const run = agent.prompt("Run the command and stop")
   const request = await requested.promise
 
-  await Promise.all([agent.abort(), run.settled])
+  await Promise.all([agent.abort(), run.runFinished])
 
   expect(decisions).toEqual([])
   expect(agent.state.pendingToolApproval).toBeUndefined()
@@ -768,7 +768,7 @@ test("Agent rejects overlap, abort settles the active run, and can reset when id
     tools: [],
   })
   const first = agent.prompt("First")
-  await first.accepted
+  await first.initialPromptProcessed
   await started.promise
 
   expect(() => agent.prompt("Second")).toThrow(
@@ -776,7 +776,7 @@ test("Agent rejects overlap, abort settles the active run, and can reset when id
   )
   expect(() => agent.reset()).toThrow("Cannot reset while Agent is running")
 
-  await Promise.all([agent.abort(), first.settled])
+  await Promise.all([agent.abort(), first.runFinished])
 
   expect(agent.state.isRunning).toBe(false)
   expect(agent.state.lastRunReason).toBe("aborted")
@@ -790,7 +790,7 @@ test("Agent rejects overlap, abort settles the active run, and can reset when id
 test("selected path capabilities survive projection and reach only opted-in tools", async () => {
   const received: unknown[] = []
   const ordinary: unknown[] = []
-  const selectedTool: IAgentTool = {
+  const selectedTool = defineAgentTool({
     name: "selected_read",
     description: "Read selected paths",
     inputSchema: { type: "object", additionalProperties: false },
@@ -799,8 +799,8 @@ test("selected path capabilities survive projection and reach only opted-in tool
       received.push(context.selectedPathReferences)
       return "selected"
     },
-  }
-  const ordinaryTool: IAgentTool = {
+  })
+  const ordinaryTool = defineAgentTool({
     name: "ordinary",
     description: "Ordinary tool",
     inputSchema: { type: "object", additionalProperties: false },
@@ -808,7 +808,7 @@ test("selected path capabilities survive projection and reach only opted-in tool
       ordinary.push(context.selectedPathReferences)
       return "ordinary"
     },
-  }
+  })
   let turn = 0
   const model: IAgentModel = {
     async *stream() {
@@ -854,7 +854,7 @@ test("selected path capabilities survive projection and reach only opted-in tool
   await agent.prompt({
     text: "@path current",
     references: [currentReference],
-  }).settled
+  }).runFinished
 
   expect(received).toEqual([[previousReference, currentReference]])
   expect(ordinary).toEqual([undefined])
@@ -862,7 +862,7 @@ test("selected path capabilities survive projection and reach only opted-in tool
 
 test("selected path capability limit retains the newest prompt", async () => {
   const received: unknown[] = []
-  const selectedTool: IAgentTool = {
+  const selectedTool = defineAgentTool({
     name: "selected_read",
     description: "Read selected paths",
     inputSchema: { type: "object", additionalProperties: false },
@@ -871,7 +871,7 @@ test("selected path capability limit retains the newest prompt", async () => {
       received.push(context.selectedPathReferences)
       return "selected"
     },
-  }
+  })
   let turn = 0
   const model: IAgentModel = {
     async *stream() {
@@ -909,7 +909,7 @@ test("selected path capability limit retains the newest prompt", async () => {
   await agent.prompt({
     text: "@path",
     references: [pathReference("/outside/current.ts")],
-  }).settled
+  }).runFinished
 
   const references = received[0] as Array<{ readonly path: string }>
   expect(references).toHaveLength(500)
@@ -941,7 +941,7 @@ function approvalAgent(
   draft: TToolApprovalDraft,
   decisions: TToolApprovalDecision[],
 ): Agent {
-  const tool: IAgentTool = {
+  const tool = defineAgentTool({
     name: "approval_tool",
     approvalKind: draft.kind,
     description: "Request approval",
@@ -952,7 +952,7 @@ function approvalAgent(
       decisions.push(decision)
       return decision
     },
-  }
+  })
   let requestCount = 0
   const model: IAgentModel = {
     async *stream() {

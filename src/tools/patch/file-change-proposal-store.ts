@@ -181,10 +181,18 @@ function proposalRecord(
     })
 }
 
+// Stored proposals and their public projections are already deeply immutable.
+// Reuse the projection for this exact stored object so polling a live proposal
+// does not invalidate session/UI caches. A replacement object (even with the
+// same ID) gets a new projection; weak keys do not retain resolved private files.
+const publicProposalSnapshots = new WeakMap<IStoredFileChangeProposal, IFileChangeProposal>()
+
 function publicProposal(
     proposal: IStoredFileChangeProposal,
 ): IFileChangeProposal {
-    return deepFreeze({
+    const previous = publicProposalSnapshots.get(proposal)
+    if (previous) return previous
+    const snapshot = deepFreeze({
         id: proposal.id,
         sessionId: proposal.sessionId,
         runId: proposal.runId,
@@ -193,6 +201,8 @@ function publicProposal(
         path: proposal.path,
         diff: proposal.diff,
     })
+    publicProposalSnapshots.set(proposal, snapshot)
+    return snapshot
 }
 
 function deepFreeze<T>(value: T): T {

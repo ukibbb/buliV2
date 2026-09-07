@@ -7,7 +7,7 @@ import {
     type TAgentRunConfigurationResolver,
     type IAgentRunHandle,
     type IAgentState,
-    type IAgentTool,
+    type IRuntimeAgentTool,
     type IFileChangeProposalSource,
     type IToolOutputStore,
     type IModelProfile,
@@ -41,7 +41,7 @@ interface IAgentSessionOptions {
     readonly manager: ISessionManager
     readonly systemPrompt: string
     readonly resolveRunConfiguration: TAgentRunConfigurationResolver
-    readonly tools: readonly IAgentTool[]
+    readonly tools: readonly IRuntimeAgentTool[]
     readonly now?: () => number
     readonly generateId?: () => string
     readonly disposeTimeoutMs?: number
@@ -68,7 +68,7 @@ export class AgentSession {
     private readonly disposeTimeoutMs: number
     private readonly resolveRunConfiguration: TAgentRunConfigurationResolver
     private readonly systemPrompt: string
-    private readonly tools: readonly IAgentTool[]
+    private readonly tools: readonly IRuntimeAgentTool[]
     private readonly fileChangeProposalStore: IFileChangeProposalSource | undefined
     private readonly now: () => number
     private readonly generateId: () => string
@@ -78,6 +78,14 @@ export class AgentSession {
     }
     private pendingToolCallIdsSource: ReadonlySet<string> | undefined
     private pendingToolCallIdsSnapshot: readonly string[] = []
+    private presentationRevision: number | undefined
+    private presentationSource: Pick<
+        ISessionSnapshot, "fileChangeProposals" | "compactionCheckpoint"
+    > | undefined
+    private queuedMessagesRevision: number | undefined
+    private queuedMessagesSource: Pick<
+        ISessionSnapshot, "pendingSteeringMessages" | "pendingFollowUpMessages"
+    > | undefined
     private snapshot: ISessionSnapshot
     private contextUsage: IContextUsage | undefined
     private currentContextWindowTokens: number | undefined
@@ -618,13 +626,41 @@ export class AgentSession {
     private createSnapshot(): ISessionSnapshot {
         const state = this.agent.state
         const fileChangeProposal = this.fileChangeProposalStore?.getSnapshot(this.id)
-        const compactionCheckpoint = this.manager.getCompactionCheckpoint(this.id)
+
+        // Defensive manager getters return new objects, even for empty proposals.
+        // Feeding those straight to the identity-based freezer invalidated React's
+        // entire durable-history memo on each streamed delta. Cache private source
+        // copies by authoritative revision instead. Refresh both related branches
+        // on any metadata save; store the token only after every read succeeds.
+        // This also observes external manager writes on the next publication, not
+        // just writes performed by this AgentSession or changes to proposal IDs.
+        const presentationRevision = this.manager.getPresentationRevision(this.id)
+        if (this.presentationSource === undefined || presentationRevision !== this.presentationRevision) {
+            const fileChangeProposals = this.manager.getFileChangeProposals(this.id)
+            const compactionCheckpoint = this.manager.getCompactionCheckpoint(this.id)
+            this.presentationSource = {
+                fileChangeProposals,
+                ...(compactionCheckpoint === undefined ? {} : { compactionCheckpoint }),
+            }
+            this.presentationRevision = presentationRevision
+        }
+
+        // Queue consumption/restoration happens inside the Agent loop, not only in
+        // steer()/followUp(). Its mutation token covers all those paths while the
+        // freezer keeps older published snapshots detached and deeply immutable.
+        const queuedMessagesRevision = this.agent.queuedMessagesRevision
+        if (this.queuedMessagesSource === undefined || queuedMessagesRevision !== this.queuedMessagesRevision) {
+            this.queuedMessagesSource = {
+                pendingSteeringMessages: this.agent.pendingSteeringMessages,
+                pendingFollowUpMessages: this.agent.pendingFollowUpMessages,
+            }
+            this.queuedMessagesRevision = queuedMessagesRevision
+        }
 
         return freezeSessionSnapshot({
             messages: state.messages,
-            fileChangeProposals: this.manager.getFileChangeProposals(this.id),
-            pendingSteeringMessages: this.agent.pendingSteeringMessages,
-            pendingFollowUpMessages: this.agent.pendingFollowUpMessages,
+            ...this.presentationSource,
+            ...this.queuedMessagesSource,
             ...(state.streamingMessage
                 ? { streamingMessage: state.streamingMessage }
                 : {}),
@@ -634,9 +670,6 @@ export class AgentSession {
             ...(fileChangeProposal === undefined
                 ? {}
                 : { pendingFileChangeProposal: fileChangeProposal }),
-            ...(compactionCheckpoint === undefined
-                ? {}
-                : { compactionCheckpoint }),
             isRunning: state.isRunning,
             isCompacting: this.compactionTask !== undefined,
             ...(this.contextUsage === undefined
@@ -680,7 +713,7 @@ function estimatedRequestInputTokens(
 
 function estimatedProjectionInputTokens(
     systemPrompt: string,
-    tools: readonly IAgentTool[],
+    tools: readonly IRuntimeAgentTool[],
     messages: readonly TAgentMessage[],
     checkpoint: ICompactionCheckpoint | undefined,
     modelProfile?: IModelProfile,

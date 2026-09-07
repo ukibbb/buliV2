@@ -261,6 +261,69 @@ test("stores the latest defensive file-change proposal state", () => {
   }))).toThrow("Session does not exist: missing-session")
 })
 
+test("presentation revisions track successful metadata saves without reusing deleted session tokens", () => {
+  const manager = new InMemorySessionManager()
+  expect(manager.getPresentationRevision("session-1")).toBe(-1)
+  manager.createSession(sessionInfo())
+  const createdRevision = manager.getPresentationRevision("session-1")
+  expect(createdRevision).toBeGreaterThan(-1)
+  manager.createSession(sessionInfo("session-2"))
+  const otherRevision = manager.getPresentationRevision("session-2")
+  expect(otherRevision).toBe(createdRevision + 1)
+
+  manager.appendMessage(userMessage("Question"))
+  manager.appendMessage(userMessage("Replacement question"))
+  manager.appendMessage(completedAssistant([{ type: "text", text: "Answer" }]))
+  expect(manager.getPresentationRevision("session-1")).toBe(createdRevision)
+  const checkpoint = {
+    id: "checkpoint-1",
+    sessionId: "session-1",
+    createdAt: 3,
+    reason: "manual" as const,
+    compactedMessageCount: 2,
+    throughMessageId: "assistant-1",
+    summary: "Preserved context",
+  }
+  let revision = otherRevision
+  // Successful saves invalidate even identical payloads; IDs are not cache keys.
+  for (const save of [
+    () => manager.saveFileChangeProposal(fileChangeProposal()),
+    () => manager.saveFileChangeProposal(fileChangeProposal()),
+    () => manager.saveCompactionCheckpoint(checkpoint),
+    () => manager.saveCompactionCheckpoint(checkpoint),
+  ]) {
+    save()
+    expect(manager.getPresentationRevision("session-1")).toBe(++revision)
+    expect(manager.getPresentationRevision("session-2")).toBe(otherRevision)
+  }
+
+  for (const invalidSave of [
+    () => manager.createSession(sessionInfo()),
+    () => manager.saveFileChangeProposal(fileChangeProposal({ diff: "" })),
+    () => manager.saveFileChangeProposal(fileChangeProposal({ sessionId: "missing" })),
+    () => manager.saveCompactionCheckpoint({ ...checkpoint, summary: "" }),
+    () => manager.saveCompactionCheckpoint({ ...checkpoint, throughMessageId: "missing" }),
+    () => manager.saveCompactionCheckpoint({ ...checkpoint, sessionId: "missing" }),
+  ]) {
+    expect(invalidSave).toThrow()
+    expect(manager.getPresentationRevision("session-1")).toBe(revision)
+    expect(manager.getPresentationRevision("missing")).toBe(-1)
+  }
+  const returnedCheckpoint = manager.getCompactionCheckpoint("session-1")
+  ;(returnedCheckpoint as { summary: string }).summary = "Mutated getter copy"
+  expect(manager.getCompactionCheckpoint("session-1")).toEqual(checkpoint)
+  expect(manager.getFileChangeProposals("session-1")).toEqual([fileChangeProposal()])
+  expect(manager.getPresentationRevision("session-1")).toBe(revision)
+
+  manager.deleteSession("session-1")
+  expect(manager.getPresentationRevision("session-1")).toBe(-1)
+  manager.createSession(sessionInfo())
+  expect(manager.getPresentationRevision("session-1")).toBe(revision + 1)
+  expect(manager.getPresentationRevision("session-2")).toBe(otherRevision)
+  expect(manager.getFileChangeProposals("session-1")).toEqual([])
+  expect(manager.getCompactionCheckpoint("session-1")).toBeUndefined()
+})
+
 test("delete removes selected metadata, messages, and proposals without affecting other sessions", () => {
   const manager = new InMemorySessionManager()
   manager.createSession(sessionInfo("session-1"))

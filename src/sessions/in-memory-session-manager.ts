@@ -34,6 +34,12 @@ export class InMemorySessionManager implements ISessionManager {
         TSessionId,
         readonly IFileChangeProposalRecord[]
     >()
+    // Presentation getters remain defensive. A separate revision lets live
+    // sessions skip those clones during text streaming. Tokens are allocated
+    // across this manager, not reset per ID, so delete/recreate cannot reuse a
+    // cached session's old token. Only successful authoritative writes advance it.
+    private readonly presentationRevisions = new Map<TSessionId, number>()
+    private nextPresentationRevision = 0
 
     readonly createSession = (info: ISessionInfo): void => {
         assertSessionInfo(info)
@@ -42,6 +48,7 @@ export class InMemorySessionManager implements ISessionManager {
         }
 
         this.sessionsById.set(info.id, structuredClone(info))
+        this.presentationRevisions.set(info.id, ++this.nextPresentationRevision)
     }
 
     readonly getSessionInfo = (sessionId: string): ISessionInfo | undefined => {
@@ -81,6 +88,10 @@ export class InMemorySessionManager implements ISessionManager {
         })
     }
 
+    readonly getPresentationRevision = (sessionId: string): number => {
+        return this.presentationRevisions.get(sessionId) ?? -1
+    }
+
     readonly getFileChangeProposals = (
         sessionId: string,
     ): readonly IFileChangeProposalRecord[] => {
@@ -105,6 +116,7 @@ export class InMemorySessionManager implements ISessionManager {
         else updated[existingIndex] = structuredClone(proposal)
 
         this.proposalsBySession.set(proposal.sessionId, updated)
+        this.presentationRevisions.set(proposal.sessionId, ++this.nextPresentationRevision)
     }
 
     readonly getCompactionCheckpoint = (
@@ -131,6 +143,7 @@ export class InMemorySessionManager implements ISessionManager {
             checkpoint.sessionId,
             structuredClone(checkpoint),
         )
+        this.presentationRevisions.set(checkpoint.sessionId, ++this.nextPresentationRevision)
     }
 
     readonly deleteSession = (sessionId: string): void => {
@@ -138,6 +151,7 @@ export class InMemorySessionManager implements ISessionManager {
         this.messagesBySession.delete(sessionId)
         this.checkpointsBySession.delete(sessionId)
         this.proposalsBySession.delete(sessionId)
+        this.presentationRevisions.delete(sessionId)
     }
 
     getAllMessages(): readonly TAgentMessage[] {

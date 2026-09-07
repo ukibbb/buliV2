@@ -1,5 +1,6 @@
 /** Public API for workspace inspection and local actions. */
 export { createWorkspaceTools } from "@/tools/catalog"
+export type { TWorkspaceTool } from "@/tools/catalog"
 export { createBashTool } from "@/tools/command/bash-tool"
 export { createEditTool } from "@/tools/edit/edit-tool"
 export {

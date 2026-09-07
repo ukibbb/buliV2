@@ -3,7 +3,7 @@ import { dirname } from "node:path"
 import { createTwoFilesPatch } from "diff"
 import { Type } from "typebox"
 
-import type { IAgentTool } from "@/agent"
+import { defineAgentTool, type IAgentTool } from "@/agent"
 import {
     withFileMutationQueue,
 } from "@/tools/shared/file-mutation"
@@ -22,8 +22,8 @@ const WRITE_INPUT_SCHEMA = Type.Object({
 export function createWriteTool(
     cwd: string,
     proposalStore?: FileChangeProposalStore,
-): IAgentTool<typeof WRITE_INPUT_SCHEMA> {
-    return {
+): IAgentTool<typeof WRITE_INPUT_SCHEMA, "write"> {
+    return defineAgentTool({
         name: "write",
         description: proposalStore
             ? "Prepare an immutable proposal to create or fully overwrite one file. This does not modify the file."
@@ -73,7 +73,7 @@ export function createWriteTool(
                 return `Successfully wrote ${content.length} bytes to ${path}`
             })
         },
-    }
+    })
 }
 
 async function readOptionalFile(path: string): Promise<string | undefined> {

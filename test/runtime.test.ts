@@ -9,7 +9,7 @@ import type {
   TAgentModelEvent,
   IAgentModelRequest,
 } from "@/agent/model"
-import type { IAgentTool } from "@/agent/tool"
+import { defineAgentTool } from "@/agent/tool"
 import {
   InMemorySessionManager,
   type ISessionManager,
@@ -87,11 +87,11 @@ test("application runtime submits prompts into its session view", async () => {
   const view = createSession(runtime)
   const initial = view.getSnapshot()
 
-  const submission = runtime.submitPrompt(input)
-  await submission.accepted
-  await submission.settled
+  const promptRun = runtime.submitPrompt(input)
+  await promptRun.promptPersisted
+  await promptRun.runFinished
 
-  expect(submission.sessionId).toBe("session-1")
+  expect(promptRun.sessionId).toBe("session-1")
   expect(view.getSnapshot()).not.toBe(initial)
   expect(view.getSnapshot().messages.map((message) => message.role)).toEqual([
     "user",
@@ -102,10 +102,10 @@ test("application runtime submits prompts into its session view", async () => {
   )
   expect(view.getSnapshot().messages).toEqual([
     expect.objectContaining({
-      runId: submission.runId,
+      runId: promptRun.runId,
       source: "prompt",
     }),
-    expect.objectContaining({ runId: submission.runId }),
+    expect.objectContaining({ runId: promptRun.runId }),
   ])
 
   await runtime.dispose()
@@ -174,11 +174,11 @@ test("application runtime queues and clears steering and follow-up", async () =>
     },
   })
   const view = createSession(runtime)
-  const submission = runtime.submitPrompt({
+  const promptRun = runtime.submitPrompt({
     sessionId: "session-1",
     text: "Initial prompt",
   })
-  await submission.accepted
+  await promptRun.promptPersisted
   await firstStarted.promise
 
   runtime.steer("session-1", "Restore this")
@@ -191,30 +191,30 @@ test("application runtime queues and clears steering and follow-up", async () =>
   runtime.followUp("session-1", "Then summarize it")
   expect(view.getSnapshot().pendingSteeringMessages).toEqual([
     expect.objectContaining({
-      runId: submission.runId,
+      runId: promptRun.runId,
       source: "steer",
       content: "Adjust the answer",
     }),
   ])
   expect(view.getSnapshot().pendingFollowUpMessages).toEqual([
     expect.objectContaining({
-      runId: submission.runId,
+      runId: promptRun.runId,
       source: "followUp",
       content: "Then summarize it",
     }),
   ])
 
   releaseFirst.resolve()
-  await submission.settled
+  await promptRun.runFinished
 
   expect(requests).toHaveLength(3)
   expect(requests[1]?.messages.at(-1)).toMatchObject({
-    runId: submission.runId,
+    runId: promptRun.runId,
     source: "steer",
     content: "Adjust the answer",
   })
   expect(requests[2]?.messages.at(-1)).toMatchObject({
-    runId: submission.runId,
+    runId: promptRun.runId,
     source: "followUp",
     content: "Then summarize it",
   })
@@ -280,12 +280,12 @@ test("application runtime auto-opens persisted history when submitting", async (
   })
   const runtime = runtimeWith(model, TEST_AGENTS, manager)
 
-  const submission = runtime.submitPrompt({
+  const promptRun = runtime.submitPrompt({
     sessionId: "stored-session",
     text: "New prompt",
   })
-  await submission.accepted
-  await submission.settled
+  await promptRun.promptPersisted
+  await promptRun.runFinished
   const first = runtime.openSession("stored-session")
   const second = runtime.openSession("stored-session")
 
@@ -294,10 +294,10 @@ test("application runtime auto-opens persisted history when submitting", async (
     expect.objectContaining({ content: "Stored prompt", runId: "stored-run" }),
     expect.objectContaining({
       content: "New prompt",
-      runId: submission.runId,
+      runId: promptRun.runId,
       source: "prompt",
     }),
-    expect.objectContaining({ role: "assistant", runId: submission.runId }),
+    expect.objectContaining({ role: "assistant", runId: promptRun.runId }),
   ])
 
   await runtime.dispose()
@@ -305,12 +305,12 @@ test("application runtime auto-opens persisted history when submitting", async (
 
 test("application runtime resolves fixed prompt and tools from an agent", async () => {
   const requests: IAgentModelRequest[] = []
-  const reviewTool: IAgentTool = {
+  const reviewTool = defineAgentTool({
     name: "review",
     description: "Review code",
     inputSchema: {},
     execute: async () => "reviewed",
-  }
+  })
   const agents: readonly IBuliAgentRuntimeConfig[] = [
     ...TEST_AGENTS,
     {
@@ -331,12 +331,12 @@ test("application runtime resolves fixed prompt and tools from an agent", async 
     title: "Review this",
   })
 
-  const submission = runtime.submitPrompt({
+  const promptRun = runtime.submitPrompt({
     sessionId: reviewSession.id,
     text: "Review this",
   })
-  await submission.accepted
-  await submission.settled
+  await promptRun.promptPersisted
+  await promptRun.runFinished
 
   expect(requests[0]?.systemPrompt).toBe("Review system")
   expect(requests[0]?.tools).toEqual([{
@@ -400,27 +400,27 @@ test("application runtime applies global selection to the next prompt", async ()
     notifications += 1
   })
 
-  const firstSubmission = runtime.submitPrompt({
+  const firstRun = runtime.submitPrompt({
     sessionId: "session-1",
     text: "First",
   })
-  await firstSubmission.accepted
-  await firstSubmission.settled
+  await firstRun.promptPersisted
+  await firstRun.runFinished
   runtime.selectModel("second")
   const modelSnapshot = runtime.getSnapshot()
-  const secondSubmission = runtime.submitPrompt({
+  const secondRun = runtime.submitPrompt({
     sessionId: "session-1",
     text: "Second",
   })
-  await secondSubmission.accepted
-  await secondSubmission.settled
+  await secondRun.promptPersisted
+  await secondRun.runFinished
   runtime.selectReasoningEffort("high")
-  const thirdSubmission = runtime.submitPrompt({
+  const thirdRun = runtime.submitPrompt({
     sessionId: "session-1",
     text: "Third",
   })
-  await thirdSubmission.accepted
-  await thirdSubmission.settled
+  await thirdRun.promptPersisted
+  await thirdRun.runFinished
 
   expect(runs).toEqual([
     "first:medium",
@@ -793,26 +793,26 @@ test("model refresh keeps an active run on its captured adapter", async () => {
     generateId: () => "session-1",
   })
   createSession(runtime)
-  const first = runtime.submitPrompt({
+  const firstRun = runtime.submitPrompt({
     sessionId: "session-1",
     text: "First",
   })
-  await first.accepted
+  await firstRun.promptPersisted
   await firstStarted.promise
 
   await runtime.refreshModels()
   expect(runtime.openSession("session-1").getSnapshot().contextUsage)
     .toMatchObject({ contextWindowTokens: 1_000 })
   releaseFirst.resolve()
-  await first.settled
+  await firstRun.runFinished
   expect(runtime.openSession("session-1").getSnapshot().contextUsage)
     .toMatchObject({ contextWindowTokens: 200_000 })
-  const second = runtime.submitPrompt({
+  const secondRun = runtime.submitPrompt({
     sessionId: "session-1",
     text: "Second",
   })
-  await second.accepted
-  await second.settled
+  await secondRun.promptPersisted
+  await secondRun.runFinished
 
   expect(runs).toEqual(["initial", "loaded"])
   expect(runtime.getSnapshot().selection).toEqual({
@@ -976,9 +976,9 @@ test("submitPrompt creates a default-agent session when sessionId is omitted", a
     },
   })
 
-  const submission = runtime.submitPrompt({ text: "  New\n session  " })
+  const promptRun = runtime.submitPrompt({ text: "  New\n session  " })
 
-  expect(submission.sessionId).toBe("session-1")
+  expect(promptRun.sessionId).toBe("session-1")
   expect(runtime.listSessions()).toEqual([{
     id: "session-1",
     agentId: TEST_AGENT_ID,
@@ -987,20 +987,20 @@ test("submitPrompt creates a default-agent session when sessionId is omitted", a
     updatedAt: 101,
   }])
 
-  await submission.accepted
-  await submission.settled
-  expect(runtime.openSession(submission.sessionId).getSnapshot().messages[0])
+  await promptRun.promptPersisted
+  await promptRun.runFinished
+  expect(runtime.openSession(promptRun.sessionId).getSnapshot().messages[0])
     .toMatchObject({
       role: "user",
       source: "prompt",
-      runId: submission.runId,
+      runId: promptRun.runId,
       content: "  New\n session  ",
     })
 
   await runtime.dispose()
 })
 
-test("submitPrompt rolls back a new session when its first prompt is not accepted", async () => {
+test("submitPrompt rolls back a new session when its first prompt is not persisted", async () => {
   const memory = new InMemorySessionManager()
   const persistenceFailure = new Error("Disk write failed")
   const deletedSessionIds: string[] = []
@@ -1012,6 +1012,7 @@ test("submitPrompt rolls back a new session when its first prompt is not accepte
     appendMessage: () => {
       throw persistenceFailure
     },
+    getPresentationRevision: memory.getPresentationRevision,
     getFileChangeProposals: memory.getFileChangeProposals,
     saveFileChangeProposal: memory.saveFileChangeProposal,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
@@ -1023,32 +1024,32 @@ test("submitPrompt rolls back a new session when its first prompt is not accepte
   }
   const runtime = runtimeWith(model, TEST_AGENTS, manager)
 
-  const submission = runtime.submitPrompt({ text: "New session" })
-  const acceptanceFailure = submission.accepted.then(
+  const promptRun = runtime.submitPrompt({ text: "New session" })
+  const persistenceResult = promptRun.promptPersisted.then(
     () => undefined,
     (error: unknown) => error,
   )
-  const settlementFailure = submission.settled.then(
+  const runResult = promptRun.runFinished.then(
     () => undefined,
     (error: unknown) => error,
   )
-  expect(manager.getSessionInfo(submission.sessionId)).toBeDefined()
+  expect(manager.getSessionInfo(promptRun.sessionId)).toBeDefined()
 
-  expect(await acceptanceFailure).toBe(persistenceFailure)
-  expect(await settlementFailure).toBe(persistenceFailure)
-  expect(deletedSessionIds).toEqual([submission.sessionId])
+  expect(await persistenceResult).toBe(persistenceFailure)
+  expect(await runResult).toBe(persistenceFailure)
+  expect(deletedSessionIds).toEqual([promptRun.sessionId])
   expect(runtime.listSessions()).toEqual([])
   expect(manager.listSessions()).toEqual([])
-  expect(manager.getSessionInfo(submission.sessionId)).toBeUndefined()
-  expect(manager.getMessages(submission.sessionId)).toEqual([])
-  expect(() => runtime.openSession(submission.sessionId)).toThrow(
-    `Session does not exist: ${submission.sessionId}`,
+  expect(manager.getSessionInfo(promptRun.sessionId)).toBeUndefined()
+  expect(manager.getMessages(promptRun.sessionId)).toEqual([])
+  expect(() => runtime.openSession(promptRun.sessionId)).toThrow(
+    `Session does not exist: ${promptRun.sessionId}`,
   )
 
   await runtime.dispose()
 })
 
-test("new-session settled waits for rollback before exposing failure", async () => {
+test("new-session runFinished waits for rollback before exposing failure", async () => {
   const memory = new InMemorySessionManager()
   const persistenceFailure = new Error("Disk write failed")
   const manager: ISessionManager = {
@@ -1059,6 +1060,7 @@ test("new-session settled waits for rollback before exposing failure", async () 
     appendMessage: () => {
       throw persistenceFailure
     },
+    getPresentationRevision: memory.getPresentationRevision,
     getFileChangeProposals: memory.getFileChangeProposals,
     saveFileChangeProposal: memory.saveFileChangeProposal,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
@@ -1081,32 +1083,32 @@ test("new-session settled waits for rollback before exposing failure", async () 
     await rollbackSession(sessionId, session)
   }
 
-  const submission = runtime.submitPrompt({ text: "New session" })
-  let settlementObserved = false
-  const settlementFailure = submission.settled.then(
+  const promptRun = runtime.submitPrompt({ text: "New session" })
+  let runFinishedObserved = false
+  const runResult = promptRun.runFinished.then(
     () => {
-      settlementObserved = true
+      runFinishedObserved = true
       return undefined
     },
     (error: unknown) => {
-      settlementObserved = true
+      runFinishedObserved = true
       return error
     },
   )
 
   await rollbackStarted.promise
-  expect(settlementObserved).toBe(false)
+  expect(runFinishedObserved).toBe(false)
   expect(runtime.listSessions().map((session) => session.id)).toEqual([
-    submission.sessionId,
+    promptRun.sessionId,
   ])
 
   releaseRollback.resolve()
 
-  expect(await settlementFailure).toBe(persistenceFailure)
+  expect(await runResult).toBe(persistenceFailure)
   expect(runtime.listSessions()).toEqual([])
-  expect(manager.getSessionInfo(submission.sessionId)).toBeUndefined()
-  expect(() => runtime.openSession(submission.sessionId)).toThrow(
-    `Session does not exist: ${submission.sessionId}`,
+  expect(manager.getSessionInfo(promptRun.sessionId)).toBeUndefined()
+  expect(() => runtime.openSession(promptRun.sessionId)).toThrow(
+    `Session does not exist: ${promptRun.sessionId}`,
   )
 
   await runtime.dispose()
@@ -1128,7 +1130,7 @@ test("runtime resolves approval only in the addressed session and dispose releas
   const secondApprovalStarted = Promise.withResolvers<void>()
   const decisions: string[] = []
   let approvalCount = 0
-  const tool: IAgentTool = {
+  const tool = defineAgentTool({
     name: "run_command",
     approvalKind: "command",
     description: "Run a command",
@@ -1153,7 +1155,7 @@ test("runtime resolves approval only in the addressed session and dispose releas
       decisions.push(decision)
       return decision
     },
-  }
+  })
   const continuedRuns = new Set<string>()
   const runtime = runtimeWith({
     async *stream(request) {
@@ -1178,7 +1180,7 @@ test("runtime resolves approval only in the addressed session and dispose releas
   }])
   const firstView = createSession(runtime)
   const secondView = createSession(runtime)
-  const firstSubmission = runtime.submitPrompt({
+  const firstRun = runtime.submitPrompt({
     sessionId: "session-1",
     text: "Run the tests",
   })
@@ -1195,17 +1197,17 @@ test("runtime resolves approval only in the addressed session and dispose releas
   expect(secondView.getSnapshot().pendingToolApproval).toBeUndefined()
 
   runtime.resolveToolApproval("session-1", firstRequest.id, "copy")
-  await firstSubmission.settled
+  await firstRun.runFinished
   expect(decisions).toEqual(["copy"])
 
-  const secondSubmission = runtime.submitPrompt({
+  const secondRun = runtime.submitPrompt({
     sessionId: "session-1",
     text: "Run the tests again",
   })
   await secondApprovalStarted.promise
   expect(firstView.getSnapshot().pendingToolApproval).toBeDefined()
 
-  await Promise.all([runtime.dispose(), secondSubmission.settled])
+  await Promise.all([runtime.dispose(), secondRun.runFinished])
 
   expect(decisions).toEqual(["copy"])
   expect(firstView.getSnapshot().pendingToolApproval).toBeUndefined()
@@ -1221,12 +1223,12 @@ test("treats slash input as prompts", async () => {
   })
   const view = createSession(runtime)
 
-  const slashSubmission = runtime.submitPrompt({
+  const slashRun = runtime.submitPrompt({
     sessionId: "session-1",
     text: "/not-a-runtime-command",
   })
-  await slashSubmission.accepted
-  await slashSubmission.settled
+  await slashRun.promptPersisted
+  await slashRun.runFinished
 
   expect(interactionCount).toBe(1)
   expect(view.getSnapshot().messages.map((message) => message.role)).toEqual([

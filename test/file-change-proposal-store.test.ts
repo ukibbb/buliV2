@@ -25,10 +25,16 @@ test("stores one immutable public proposal per session", () => {
         path: "src/example.ts",
         diff: "--- a/src/example.ts\n+++ b/src/example.ts\n",
     })
-    expect(store.getSnapshot("session-1")).toEqual(proposal)
+    // Stable identity prevents unchanged proposals from invalidating UI snapshots.
+    expect(store.getSnapshot("session-1")).toBe(proposal)
+    expect(store.getSnapshot("session-1")).toBe(proposal)
     expect(Object.isFrozen(proposal)).toBe(true)
     expect(proposal).not.toHaveProperty("baseContent")
     expect(proposal).not.toHaveProperty("targetContent")
+    expect(proposal).not.toHaveProperty("createdAt")
+    expect(() => {
+        (proposal as { path: string }).path = "mutated.ts"
+    }).toThrow()
 })
 
 test("persists pending and resolved states without private contents", () => {
@@ -72,17 +78,18 @@ test("persists pending and resolved states without private contents", () => {
     expect(records[0]).not.toHaveProperty("targetContent")
 })
 
-test("expires a replaced proposal before persisting its replacement", () => {
+test.each([false, true])("expires a replaced proposal before persisting its replacement (same ID: %s)", (sameId) => {
     const records: IFileChangeProposalRecord[] = []
     let id = 0
     let timestamp = 0
     const store = new FileChangeProposalStore({
-        generateId: () => `proposal-${id += 1}`,
+        generateId: () => sameId ? "proposal-1" : `proposal-${id += 1}`,
         now: () => timestamp += 1,
         saveProposal: (proposal) => records.push(proposal),
     })
 
-    store.propose(proposalInput("session-1", "first.ts"))
+    const original = store.propose(proposalInput("session-1", "first.ts"))
+    const originalValue = structuredClone(original)
     const replacement = store.propose(
         proposalInput("session-1", "replacement.ts"),
     )
@@ -93,9 +100,23 @@ test("expires a replaced proposal before persisting its replacement", () => {
     }))).toEqual([
         { id: "proposal-1", status: "pending" },
         { id: "proposal-1", status: "expired" },
-        { id: "proposal-2", status: "pending" },
+        { id: sameId ? "proposal-1" : "proposal-2", status: "pending" },
     ])
-    expect(store.getSnapshot("session-1")).toEqual(replacement)
+    // Cache by immutable stored object, not by a potentially reused proposal ID.
+    expect(replacement).not.toBe(original)
+    expect(replacement.path).toBe("replacement.ts")
+    expect(store.getSnapshot("session-1")).toBe(replacement)
+    store.resolve("session-1", replacement.id)
+    expect(store.getSnapshot("session-1")).toBeUndefined()
+    expect(original).toEqual(originalValue)
+    for (const projection of [original, replacement]) {
+        expect(Object.isFrozen(projection)).toBe(true)
+        expect(projection).not.toHaveProperty("baseContent")
+        expect(projection).not.toHaveProperty("targetContent")
+        expect(projection).not.toHaveProperty("createdAt")
+        expect(projection).not.toHaveProperty("status")
+        expect(projection).not.toHaveProperty("resolvedAt")
+    }
 })
 
 test("keeps an active proposal when resolved-state persistence fails", () => {
@@ -113,7 +134,7 @@ test("keeps an active proposal when resolved-state persistence fails", () => {
         proposal.id,
         "applied",
     )).toThrow("disk full")
-    expect(store.getSnapshot("session-1")).toEqual(proposal)
+    expect(store.getSnapshot("session-1")).toBe(proposal)
 })
 
 test("replaces only the active proposal from the same session", () => {
@@ -128,7 +149,7 @@ test("replaces only the active proposal from the same session", () => {
         proposalInput("session-1", "replacement.ts"),
     )
 
-    expect(store.getSnapshot("session-1")).toEqual(replacement)
+    expect(store.getSnapshot("session-1")).toBe(replacement)
     expect(store.getSnapshot("session-2")).toMatchObject({
         id: "proposal-2",
         path: "other.ts",
@@ -190,7 +211,7 @@ test("does not resolve a replaced proposal through a stale ID", () => {
         "session-1",
         "proposal-1",
     )).toThrow("File-change proposal ID mismatch")
-    expect(store.getSnapshot("session-1")).toEqual(replacement)
+    expect(store.getSnapshot("session-1")).toBe(replacement)
 
     store.resolve("session-1", replacement.id)
     expect(store.getSnapshot("session-1")).toBeUndefined()

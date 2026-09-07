@@ -1,13 +1,14 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 
-import type {
-  IAgentModel,
-  IAgentModelRequest,
-  IAgentTool,
-  IAssistantMessage,
-  TToolApprovalDecision,
-  IToolResultMessage,
-  IUserMessage,
+import {
+  defineAgentTool,
+  type IAgentModel,
+  type IAgentModelRequest,
+  type IAssistantMessage,
+  type IFileChangeProposalRecord,
+  type TToolApprovalDecision,
+  type IToolResultMessage,
+  type IUserMessage,
 } from "@/agent"
 import {
   AgentSession,
@@ -16,6 +17,7 @@ import {
   type ISessionManager,
   type ISessionSnapshot,
 } from "@/sessions"
+import { FileChangeProposalStore } from "@/tools"
 
 test("AgentSession restores history, persists completion barriers, and publishes stable snapshots", async () => {
   const manager = new InMemorySessionManager()
@@ -50,8 +52,8 @@ test("AgentSession restores history, persists completion barriers, and publishes
   })
 
   const run = session.prompt("Question")
-  await run.accepted
-  await run.settled
+  await run.initialPromptProcessed
+  await run.runFinished
 
   expect(persistedBeforeModel).toEqual([2])
   expect(manager.getMessages("session-1")).toHaveLength(3)
@@ -121,19 +123,34 @@ test("AgentSession expires durable pending proposals that cannot be reapplied", 
   await session.dispose()
 })
 
-test("AgentSession structurally shares immutable history across streaming snapshots", async () => {
+test.each([false, true])("AgentSession structurally shares immutable streaming branches (populated: %s)", async (populated) => {
   const manager = new InMemorySessionManager()
   manager.createSession(sessionInfo("session-1", "test-agent", "Streaming"))
   seedConversation(manager, 1)
+  const checkpoint = compactionCheckpoint()
+  manager.saveCompactionCheckpoint(checkpoint)
+  const proposalStore = new FileChangeProposalStore({
+    generateId: () => "proposal-1",
+    now: () => 10,
+    saveProposal: manager.saveFileChangeProposal,
+  })
+  if (populated) {
+    proposalStore.propose({
+      sessionId: "session-1",
+      runId: "run-1",
+      toolCallId: "edit-1",
+      operation: "edit",
+      path: "src/example.ts",
+      baseContent: "private before\n",
+      targetContent: "private after\n",
+      diff: "-before\n+after\n",
+    })
+  }
   const releaseFirstDelta = Promise.withResolvers<void>()
   const releaseSecondDelta = Promise.withResolvers<void>()
   const releaseFinish = Promise.withResolvers<void>()
-  type TPublication = {
-    snapshot: ISessionSnapshot
-    stateMessage: IAssistantMessage | undefined
-  }
-  const firstDeltaPublished = Promise.withResolvers<TPublication>()
-  const secondDeltaPublished = Promise.withResolvers<TPublication>()
+  const firstDeltaPublished = Promise.withResolvers<void>()
+  const secondDeltaPublished = Promise.withResolvers<void>()
   const toolInput = { path: { directory: "src", file: "index.ts" } }
   const model: IAgentModel = {
     async *stream() {
@@ -146,12 +163,16 @@ test("AgentSession structurally shares immutable history across streaming snapsh
       yield { type: "text-start", id: "answer" }
       await releaseFirstDelta.promise
       yield { type: "text-delta", id: "answer", delta: "First" }
+      // Resuming after yield acknowledges processing without timers or polling.
+      firstDeltaPublished.resolve()
       await releaseSecondDelta.promise
       yield { type: "text-delta", id: "answer", delta: " second" }
+      secondDeltaPublished.resolve()
       await releaseFinish.promise
       yield { type: "finish", reason: "error" }
     },
   }
+  const proposalReads = spyOn(manager, "getFileChangeProposals")
   const session = new AgentSession({
     agentId: "test-agent",
     sessionId: "session-1",
@@ -159,92 +180,153 @@ test("AgentSession structurally shares immutable history across streaming snapsh
     systemPrompt: "System",
     resolveRunConfiguration: () => ({ model, reasoningEffort: "medium" }),
     tools: [],
+    fileChangeProposalStore: proposalStore,
   })
+  const initial = session.getSnapshot()
+  let publication = {
+    snapshot: initial,
+    stateMessage: session.state.streamingMessage,
+  }
   session.subscribe(() => {
-    const snapshot = session.getSnapshot()
-    const text = streamingText(snapshot)
-    const publication = {
-      snapshot,
+    publication = {
+      snapshot: session.getSnapshot(),
       stateMessage: session.state.streamingMessage,
     }
-    if (text === "First") firstDeltaPublished.resolve(publication)
-    if (text === "First second") secondDeltaPublished.resolve(publication)
   })
 
-  const run = session.prompt("Continue")
-  await run.accepted
-  releaseFirstDelta.resolve()
-  const firstPublication = await firstDeltaPublished.promise
-  const first = firstPublication.snapshot
-  releaseSecondDelta.resolve()
-  const secondPublication = await secondDeltaPublished.promise
-  const second = secondPublication.snapshot
-
-  expect(second).not.toBe(first)
-  expect(second.streamingMessage).not.toBe(first.streamingMessage)
-  expect(first.streamingMessage).toBe(firstPublication.stateMessage)
-  expect(second.streamingMessage).toBe(secondPublication.stateMessage)
-  expect(second.messages).toBe(first.messages)
-  expect(second.pendingToolCallIds).toBe(first.pendingToolCallIds)
-  expect(second.contextUsage).toBe(first.contextUsage)
-  expect(second.messages).toHaveLength(3)
-  expect(streamingText(first)).toBe("First")
-  expect(streamingText(second)).toBe("First second")
-  expect(Object.isFrozen(second)).toBe(true)
-  expect(Object.isFrozen(second.messages)).toBe(true)
-  expect(Object.isFrozen(second.messages[0])).toBe(true)
-  expect(Object.isFrozen(second.messages[1])).toBe(true)
-  expect(Object.isFrozen(second.contextUsage)).toBe(true)
-  const completedAssistant = second.messages[1]
-  if (completedAssistant?.role !== "assistant") {
-    throw new Error("Expected completed assistant history")
-  }
-  expect(Object.isFrozen(completedAssistant.content)).toBe(true)
-  expect(Object.isFrozen(completedAssistant.content[0])).toBe(true)
-  expect(Object.isFrozen(second.streamingMessage)).toBe(true)
-  expect(Object.isFrozen(second.streamingMessage?.content)).toBe(true)
-  expect(second.streamingMessage?.content.every(Object.isFrozen)).toBe(true)
-  expect(() => (second.messages as unknown[]).push({})).toThrow()
-  const streamedText = second.streamingMessage?.content.find(
-    (item) => item.type === "text",
-  )
-  expect(() => {
-    if (streamedText?.type === "text") {
-      (streamedText as { text: string }).text = "Changed"
+  try {
+    const run = session.prompt("Continue")
+    await run.initialPromptProcessed
+    if (populated) {
+      session.steer("Adjust the answer")
+      session.followUp("Then summarize it")
     }
-  }).toThrow()
+    releaseFirstDelta.resolve()
+    await Promise.race([firstDeltaPublished.promise, run.runFinished])
+    const firstPublication = publication
+    const first = firstPublication.snapshot
+    const firstValue = structuredClone(first)
+    const readsBeforeDelta = proposalReads.mock.calls.length
+    expect(readsBeforeDelta).toBeGreaterThan(0)
+    releaseSecondDelta.resolve()
+    await Promise.race([secondDeltaPublished.promise, run.runFinished])
+    const secondPublication = publication
+    const second = secondPublication.snapshot
+    const secondValue = structuredClone(second)
 
-  const toolCall = first.streamingMessage?.content.find(
-    (item) => item.type === "toolCall",
-  )
-  if (!toolCall) throw new Error("Expected a streaming tool call")
-  toolInput.path.file = "changed.ts"
+    expect(second).not.toBe(first)
+    expect(second.streamingMessage).not.toBe(first.streamingMessage)
+    expect(first.streamingMessage).toBe(firstPublication.stateMessage)
+    expect(second.streamingMessage).toBe(secondPublication.stateMessage)
+    expect(second.messages).toBe(first.messages)
+    expect(second.pendingToolCallIds).toBe(first.pendingToolCallIds)
+    expect(second.contextUsage).toBe(first.contextUsage)
+    // Equal-but-recloned branches still invalidate UI history/queue memoization.
+    expect(proposalReads.mock.calls.length).toBe(readsBeforeDelta)
+    for (const branch of [
+      "fileChangeProposals",
+      "compactionCheckpoint",
+      "pendingFileChangeProposal",
+      "pendingSteeringMessages",
+      "pendingFollowUpMessages",
+    ] as const) {
+      expect(second[branch]).toBe(first[branch])
+      expect(Object.isFrozen(second[branch])).toBe(true)
+    }
+    expect(first.compactionCheckpoint).toEqual(checkpoint)
+    expect(first.compactionCheckpoint).toBe(initial.compactionCheckpoint)
+    expect(first.fileChangeProposals).toBe(initial.fileChangeProposals)
+    expect(first.pendingFileChangeProposal).toEqual(proposalStore.getSnapshot("session-1"))
+    for (const items of [
+      first.fileChangeProposals,
+      first.pendingSteeringMessages,
+      first.pendingFollowUpMessages,
+    ]) {
+      expect(items).toHaveLength(populated ? 1 : 0)
+      expect(items.every(Object.isFrozen)).toBe(true)
+      expect(() => (items as unknown[]).push({})).toThrow()
+    }
+    expect(second.messages).toHaveLength(3)
+    expect(streamingText(first)).toBe("First")
+    expect(streamingText(second)).toBe("First second")
+    expect(Object.isFrozen(second)).toBe(true)
+    expect(Object.isFrozen(second.messages)).toBe(true)
+    expect(Object.isFrozen(second.messages[0])).toBe(true)
+    expect(Object.isFrozen(second.messages[1])).toBe(true)
+    expect(Object.isFrozen(second.contextUsage)).toBe(true)
+    const completedAssistant = second.messages[1]
+    if (completedAssistant?.role !== "assistant") {
+      throw new Error("Expected completed assistant history")
+    }
+    expect(Object.isFrozen(completedAssistant.content)).toBe(true)
+    expect(Object.isFrozen(completedAssistant.content[0])).toBe(true)
+    expect(Object.isFrozen(second.streamingMessage)).toBe(true)
+    expect(Object.isFrozen(second.streamingMessage?.content)).toBe(true)
+    expect(second.streamingMessage?.content.every(Object.isFrozen)).toBe(true)
+    expect(() => (second.messages as unknown[]).push({})).toThrow()
+    const streamedText = second.streamingMessage?.content.find(
+      (item) => item.type === "text",
+    )
+    expect(() => {
+      if (streamedText?.type === "text") {
+        (streamedText as { text: string }).text = "Changed"
+      }
+    }).toThrow()
 
-  expect(streamingText(first)).toBe("First")
-  expect(streamingText(second)).toBe("First second")
-  expect(toolCall.input).toEqual({
-    path: { directory: "src", file: "index.ts" },
-  })
-  expect(Object.isFrozen(toolCall)).toBe(true)
-  expect(Object.isFrozen(toolCall.input)).toBe(true)
-  expect(Object.isFrozen(toolCall.input.path)).toBe(true)
-  expect(() => {
-    (toolCall.input.path as { file: string }).file = "mutated.ts"
-  }).toThrow()
+    const toolCall = first.streamingMessage?.content.find(
+      (item) => item.type === "toolCall",
+    )
+    if (!toolCall) throw new Error("Expected a streaming tool call")
+    toolInput.path.file = "changed.ts"
 
-  releaseFinish.resolve()
-  await run.settled
-  const settled = session.getSnapshot()
-  expect(streamingText(first)).toBe("First")
-  expect(streamingText(second)).toBe("First second")
-  expect(toolCall.input).toEqual({
-    path: { directory: "src", file: "index.ts" },
-  })
-  expect(settled.messages).not.toBe(second.messages)
-  expect(Object.isFrozen(settled.messages)).toBe(true)
-  expect(Object.isFrozen(settled.messages.at(-1))).toBe(true)
+    expect(streamingText(first)).toBe("First")
+    expect(streamingText(second)).toBe("First second")
+    expect(toolCall.input).toEqual({
+      path: { directory: "src", file: "index.ts" },
+    })
+    expect(Object.isFrozen(toolCall)).toBe(true)
+    expect(Object.isFrozen(toolCall.input)).toBe(true)
+    expect(Object.isFrozen(toolCall.input.path)).toBe(true)
+    expect(() => {
+      (toolCall.input.path as { file: string }).file = "mutated.ts"
+    }).toThrow()
 
-  await session.dispose()
+    releaseFinish.resolve()
+    await run.runFinished
+    const settled = session.getSnapshot()
+    expect(streamingText(first)).toBe("First")
+    expect(streamingText(second)).toBe("First second")
+    expect(toolCall.input).toEqual({
+      path: { directory: "src", file: "index.ts" },
+    })
+    expect(settled.messages).not.toBe(second.messages)
+    expect(Object.isFrozen(settled.messages)).toBe(true)
+    expect(Object.isFrozen(settled.messages.at(-1))).toBe(true)
+
+    expect(session.clearQueuedMessages()).toEqual({
+      steering: populated ? ["Adjust the answer"] : [],
+      followUp: populated ? ["Then summarize it"] : [],
+    })
+    const cleared = session.getSnapshot()
+    expect(cleared.pendingSteeringMessages).toEqual([])
+    expect(cleared.pendingFollowUpMessages).toEqual([])
+    if (populated) {
+      expect(cleared.pendingSteeringMessages).not.toBe(second.pendingSteeringMessages)
+      expect(cleared.pendingFollowUpMessages).not.toBe(second.pendingFollowUpMessages)
+    } else {
+      expect(cleared).toBe(settled)
+    }
+    expect(first).toEqual(firstValue)
+    expect(second).toEqual(secondValue)
+    expect(initial.pendingSteeringMessages).toEqual([])
+    expect(initial.pendingFollowUpMessages).toEqual([])
+  } finally {
+    releaseFirstDelta.resolve()
+    releaseSecondDelta.resolve()
+    releaseFinish.resolve()
+    proposalReads.mockRestore()
+    await session.dispose()
+  }
 
   function streamingText(snapshot: ISessionSnapshot): string | undefined {
     return snapshot.streamingMessage?.content.find(
@@ -253,22 +335,72 @@ test("AgentSession structurally shares immutable history across streaming snapsh
   }
 })
 
-test("freezeSessionSnapshot freezes and structurally shares checkpoints", () => {
-  const checkpoint = {
-    id: "checkpoint-1",
+test("AgentSession refreshes grouped presentation after external same-ID saves and session recreation", async () => {
+  const manager = new InMemorySessionManager()
+  const info = sessionInfo("session-1", "test-agent", "External writes")
+  manager.createSession(info)
+  seedConversation(manager, 1)
+  const checkpoint = compactionCheckpoint()
+  const proposal: IFileChangeProposalRecord = {
+    id: "proposal-1",
     sessionId: "session-1",
+    runId: "run-1",
+    toolCallId: "edit-1",
+    operation: "edit",
+    path: "src/example.ts",
+    diff: "-before\n+after\n",
+    status: "expired",
     createdAt: 10,
-    reason: "automatic" as const,
-    compactedMessageCount: 2,
-    throughMessageId: "seed-assistant-0",
-    summary: "Preserved context",
-    model: {
-      providerId: "test",
-      modelId: "model-1",
-      contextWindowTokens: 100_000,
-    },
-    usage: { inputTokens: 30, outputTokens: 4, totalTokens: 34 },
+    resolvedAt: 20,
   }
+  manager.saveFileChangeProposal(proposal)
+  manager.saveCompactionCheckpoint(checkpoint)
+  const session = openAgentSession(manager)
+
+  try {
+    const initial = session.getSnapshot()
+    const initialValue = structuredClone(initial)
+    const replacement = { ...proposal, status: "applied" as const, resolvedAt: 30 }
+    manager.saveFileChangeProposal(replacement)
+    expect(session.getSnapshot()).toBe(initial)
+    session.refreshContextUsage()
+    const afterProposal = session.getSnapshot()
+    const afterProposalValue = structuredClone(afterProposal)
+    expect(afterProposal.fileChangeProposals).toEqual([replacement])
+    expect(afterProposal.fileChangeProposals).not.toBe(initial.fileChangeProposals)
+    // One grouped revision intentionally refreshes both branches on either save.
+    expect(afterProposal.compactionCheckpoint).not.toBe(initial.compactionCheckpoint)
+    expect(afterProposal.compactionCheckpoint).toEqual(checkpoint)
+
+    const replacementCheckpoint = { ...checkpoint, summary: "Latest context" }
+    manager.saveCompactionCheckpoint(replacementCheckpoint)
+    expect(session.getSnapshot()).toBe(afterProposal)
+    session.refreshContextUsage()
+    const afterCheckpoint = session.getSnapshot()
+    expect(afterCheckpoint.compactionCheckpoint).toEqual(replacementCheckpoint)
+    expect(afterCheckpoint.compactionCheckpoint).not.toBe(afterProposal.compactionCheckpoint)
+    expect(afterCheckpoint.fileChangeProposals).not.toBe(afterProposal.fileChangeProposals)
+    expect(afterCheckpoint.fileChangeProposals).toEqual([replacement])
+    expect(Object.isFrozen(afterCheckpoint.fileChangeProposals[0])).toBe(true)
+    expect(Object.isFrozen(afterCheckpoint.compactionCheckpoint)).toBe(true)
+
+    // Recreate between publications: the cache never gets to observe the -1 token.
+    manager.deleteSession("session-1")
+    manager.createSession(info)
+    session.refreshContextUsage()
+    expect(session.getSnapshot().fileChangeProposals).toEqual([])
+    expect(session.getSnapshot().compactionCheckpoint).toBeUndefined()
+    expect(initial).toEqual(initialValue)
+    expect(afterProposal).toEqual(afterProposalValue)
+    expect(afterCheckpoint.fileChangeProposals).toEqual([replacement])
+    expect(afterCheckpoint.compactionCheckpoint).toEqual(replacementCheckpoint)
+  } finally {
+    await session.dispose()
+  }
+})
+
+test("freezeSessionSnapshot freezes and structurally shares checkpoints", () => {
+  const checkpoint = compactionCheckpoint()
   const cache = {
     source: undefined,
     value: undefined,
@@ -313,7 +445,7 @@ test("AgentSession publishes immutable approval request and resolution snapshots
   manager.createSession(sessionInfo("session-1", "test-agent", "Approval"))
   const approvalStarted = Promise.withResolvers<void>()
   const decisions: TToolApprovalDecision[] = []
-  const tool: IAgentTool = {
+  const tool = defineAgentTool({
     name: "bash",
     approvalKind: "command",
     description: "Run a command",
@@ -336,7 +468,7 @@ test("AgentSession publishes immutable approval request and resolution snapshots
       decisions.push(decision)
       return decision
     },
-  }
+  })
   let requestCount = 0
   const session = new AgentSession({
     agentId: "test-agent",
@@ -403,7 +535,7 @@ test("AgentSession publishes immutable approval request and resolution snapshots
 
   expect(session.getSnapshot().pendingToolApproval).toBeUndefined()
   expect(approvalTransitions).toEqual([request.id, undefined])
-  await run.settled
+  await run.runFinished
   expect(decisions).toEqual(["approve"])
   expect(session.getSnapshot()).not.toHaveProperty("pendingToolApproval")
 
@@ -445,7 +577,7 @@ test("AgentSession persists steering and follow-up before each model request", a
   })
 
   const run = session.prompt("Initial prompt")
-  await run.accepted
+  await run.initialPromptProcessed
   await firstStarted.promise
   session.steer("Adjust the answer")
   session.followUp("Then summarize it")
@@ -466,7 +598,7 @@ test("AgentSession persists steering and follow-up before each model request", a
   ])
 
   releaseFirst.resolve()
-  await run.settled
+  await run.runFinished
 
   expect(requests).toHaveLength(3)
   expect(requests[1]?.messages.at(-1)).toMatchObject({
@@ -519,6 +651,7 @@ test("AgentSession restores steering to the queue when persistence fails", async
       }
       memory.appendMessage(message)
     },
+    getPresentationRevision: memory.getPresentationRevision,
     getFileChangeProposals: memory.getFileChangeProposals,
     saveFileChangeProposal: memory.saveFileChangeProposal,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
@@ -548,16 +681,16 @@ test("AgentSession restores steering to the queue when persistence fails", async
   })
 
   const run = session.prompt("Initial prompt")
-  await run.accepted
+  await run.initialPromptProcessed
   await firstStarted.promise
   session.steer("Recover this steering")
   releaseFirst.resolve()
-  const settlementFailure = await run.settled.then(
+  const runFailure = await run.runFinished.then(
     () => undefined,
     (error: unknown) => error,
   )
 
-  expect(settlementFailure).toBe(persistenceFailure)
+  expect(runFailure).toBe(persistenceFailure)
   expect(providerInvocations).toBe(1)
   expect(memory.getMessages("session-1").map((message) => message.role)).toEqual([
     "user",
@@ -593,6 +726,7 @@ test("AgentSession restores follow-up to the queue when persistence fails", asyn
       }
       memory.appendMessage(message)
     },
+    getPresentationRevision: memory.getPresentationRevision,
     getFileChangeProposals: memory.getFileChangeProposals,
     saveFileChangeProposal: memory.saveFileChangeProposal,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
@@ -622,16 +756,16 @@ test("AgentSession restores follow-up to the queue when persistence fails", asyn
   })
 
   const run = session.prompt("Initial prompt")
-  await run.accepted
+  await run.initialPromptProcessed
   await firstStarted.promise
   session.followUp("Recover this follow-up")
   releaseFirst.resolve()
-  const settlementFailure = await run.settled.then(
+  const runFailure = await run.runFinished.then(
     () => undefined,
     (error: unknown) => error,
   )
 
-  expect(settlementFailure).toBe(persistenceFailure)
+  expect(runFailure).toBe(persistenceFailure)
   expect(providerInvocations).toBe(1)
   expect(memory.getMessages("session-1").map((message) => message.role)).toEqual([
     "user",
@@ -664,6 +798,7 @@ test("AgentSession rejects acceptance without invoking the provider or diverging
     appendMessage: () => {
       throw persistenceFailure
     },
+    getPresentationRevision: memory.getPresentationRevision,
     getFileChangeProposals: memory.getFileChangeProposals,
     saveFileChangeProposal: memory.saveFileChangeProposal,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
@@ -688,17 +823,17 @@ test("AgentSession rejects acceptance without invoking the provider or diverging
   })
 
   const run = session.prompt("Question")
-  const acceptanceFailure = run.accepted.then(
+  const initialPromptProcessingFailure = run.initialPromptProcessed.then(
     () => undefined,
     (error: unknown) => error,
   )
-  const settlementFailure = run.settled.then(
+  const runFailure = run.runFinished.then(
     () => undefined,
     (error: unknown) => error,
   )
 
-  expect(await acceptanceFailure).toBe(persistenceFailure)
-  expect(await settlementFailure).toBe(persistenceFailure)
+  expect(await initialPromptProcessingFailure).toBe(persistenceFailure)
+  expect(await runFailure).toBe(persistenceFailure)
 
   expect(providerInvocations).toBe(0)
   expect(session.getSnapshot().messages).toEqual(
@@ -927,11 +1062,11 @@ test("AgentSession dispose times out and unsubscribes from a non-cooperative mod
     notifications += 1
   })
   const run = session.prompt("Question")
-  const settlementFailure = run.settled.then(
+  const runFailure = run.runFinished.then(
     () => undefined,
     (error: unknown) => error,
   )
-  await run.accepted
+  await run.initialPromptProcessed
   await modelStarted.promise
   const notificationsBeforeDispose = notifications
 
@@ -943,7 +1078,7 @@ test("AgentSession dispose times out and unsubscribes from a non-cooperative mod
     releaseModel.resolve()
   }
 
-  expect(await settlementFailure).toEqual(
+  expect(await runFailure).toEqual(
     new Error("AgentSession stopped accepting events during shutdown"),
   )
   expect(notifications).toBe(notificationsBeforeDispose)
@@ -1049,7 +1184,7 @@ test("AgentSession compacts durable history into one cumulative checkpoint", asy
   expect(await session.compact()).toBeUndefined()
 
   const run = session.prompt("Continue")
-  await run.settled
+  await run.runFinished
   const promptRequest = requests.find(
     (request) => !request.runId.startsWith("compaction-"),
   )
@@ -1109,7 +1244,7 @@ test("AgentSession does not compact after settlement from reported usage", async
   })
 
   const run = session.prompt("Trigger automatic compaction")
-  await run.settled
+  await run.runFinished
   await session.waitForIdle()
 
   expect(compactionRequests).toBe(0)
@@ -1122,6 +1257,24 @@ test("AgentSession does not compact after settlement from reported usage", async
 
   await session.dispose()
 })
+
+function compactionCheckpoint() {
+  return {
+    id: "checkpoint-1",
+    sessionId: "session-1",
+    createdAt: 10,
+    reason: "automatic" as const,
+    compactedMessageCount: 2,
+    throughMessageId: "seed-assistant-0",
+    summary: "Preserved context",
+    model: {
+      providerId: "test",
+      modelId: "model-1",
+      contextWindowTokens: 100_000,
+    },
+    usage: { inputTokens: 30, outputTokens: 4, totalTokens: 34 },
+  }
+}
 
 function sessionSnapshotWithCheckpoint(
   compactionCheckpoint: NonNullable<ISessionSnapshot["compactionCheckpoint"]>,

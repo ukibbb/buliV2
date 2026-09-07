@@ -23,8 +23,8 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.16",
-    "@opentui/core": "^0.5.8",
-    "@opentui/react": "^0.5.8",
+    "@opentui/core": "0.5.10",
+    "@opentui/react": "0.5.10",
     "ai": "^7.0.31",
     "diff": "9.0.0",
     "open": "10.1.2",
@@ -37,5 +37,8 @@
     "@types/react": "^19",
     "@types/yargs": "^17.0.35",
     "typescript": "^5"
+  },
+  "patchedDependencies": {
+    "@opentui/core@0.5.10": "patches/@opentui%2Fcore@0.5.10.patch"
   }
 }

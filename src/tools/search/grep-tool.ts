@@ -4,7 +4,11 @@ import * as path from "node:path"
 import { createInterface } from "node:readline"
 import { Type } from "typebox"
 
-import type { IAgentTool, IAgentToolResult } from "@/agent"
+import {
+    defineAgentTool,
+    type IAgentTool,
+    type IAgentToolResult,
+} from "@/agent"
 import { resolveToCwd } from "@/tools/shared/path-utils"
 import {
     DEFAULT_MAX_BYTES,
@@ -51,8 +55,8 @@ interface IGrepMatch {
 export function createGrepTool(
     workspaceRoot: string,
     executable = "rg",
-): IAgentTool<typeof GREP_INPUT_SCHEMA> {
-    return {
+): IAgentTool<typeof GREP_INPUT_SCHEMA, "grep"> {
+    return defineAgentTool({
         name: "grep",
         description: `Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects .gitignore. Output is truncated to ${DEFAULT_LIMIT} matches or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Long lines are truncated to ${GREP_MAX_LINE_LENGTH} chars.`,
         inputSchema: GREP_INPUT_SCHEMA,
@@ -327,5 +331,5 @@ export function createGrepTool(
 
             void run()
         }),
-    }
+    })
 }

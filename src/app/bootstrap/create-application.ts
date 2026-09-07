@@ -1,7 +1,11 @@
 import { realpath } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
 
-import { systemPrompt, type IAgentModel, type IAgentTool } from "@/agent"
+import {
+    systemPrompt,
+    type IAgentModel,
+    type IRuntimeAgentTool,
+} from "@/agent"
 import type { IAuthenticationService } from "@/authentication"
 import { createAuthentication } from "@/app/bootstrap/create-authentication"
 import { loadWorkspaceInstructions } from "@/app/bootstrap/load-workspace-instructions"
@@ -38,7 +42,7 @@ function defaultWorkspaceTools(
     workspaceRoot: string,
     toolOutputStore: EphemeralToolOutputStore,
     fileChangeProposalStore: FileChangeProposalStore,
-): readonly IAgentTool[] {
+): readonly IRuntimeAgentTool[] {
     if (process.env.BULI_DEVELOPMENT === "1") {
         return createWorkspaceTools(workspaceRoot, {
             toolOutputStore,
@@ -93,7 +97,7 @@ export interface IBuliApplicationOptions {
     readonly workspaceRoot?: string
     readonly manager?: ISessionManager
     readonly model?: IAgentModel
-    readonly tools?: readonly IAgentTool[]
+    readonly tools?: readonly IRuntimeAgentTool[]
 }
 
 /** Composes provider, tools, persistence, sessions, and the UI boundary. */
@@ -157,7 +161,7 @@ export async function createBuliApplication(
             modelId: DEFAULT_OPENAI_MODEL_ID,
             reasoningEffort: "medium",
         }
-        const baseTools: readonly IAgentTool[] = options.tools
+        const baseTools: readonly IRuntimeAgentTool[] = options.tools
             ?? [
                 ...defaultWorkspaceTools(
                     workspaceRoot,
@@ -171,7 +175,7 @@ export async function createBuliApplication(
         if (baseTools.some((tool) => tool.name === "tool_output")) {
             throw new Error("The tool name \"tool_output\" is reserved by Buli")
         }
-        const tools: readonly IAgentTool[] = [
+        const tools: readonly IRuntimeAgentTool[] = [
             ...baseTools,
             createToolOutputTool(toolOutputStore),
         ]

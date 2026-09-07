@@ -2,7 +2,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
 import { Type } from "typebox"
 
-import type { IAgentTool } from "@/agent"
+import { defineAgentTool, type IAgentTool } from "@/agent"
 import type { FileChangeProposalStore } from "@/tools/patch/file-change-proposal-store"
 import { withFileMutationQueue } from "@/tools/shared/file-mutation"
 import { resolveToCwd } from "@/tools/shared/path-utils"
@@ -17,8 +17,8 @@ const PROPOSAL_INPUT_SCHEMA = Type.Object({
 export function createApplyFileChangesTool(
     cwd: string,
     proposalStore: FileChangeProposalStore,
-): IAgentTool<typeof PROPOSAL_INPUT_SCHEMA> {
-    return {
+): IAgentTool<typeof PROPOSAL_INPUT_SCHEMA, "apply_file_changes"> {
+    return defineAgentTool({
         name: "apply_file_changes",
         description:
             "Apply an active file-change proposal only after the user accepts it in a later message. The file must still match the version shown in the proposal.",
@@ -88,14 +88,14 @@ export function createApplyFileChangesTool(
                 return `Applied file-change proposal ${proposal.id} to ${proposal.path}.`
             })
         },
-    }
+    })
 }
 
 /** Discards the active proposal without modifying its file. */
 export function createRejectFileChangesTool(
     proposalStore: FileChangeProposalStore,
-): IAgentTool<typeof PROPOSAL_INPUT_SCHEMA> {
-    return {
+): IAgentTool<typeof PROPOSAL_INPUT_SCHEMA, "reject_file_changes"> {
+    return defineAgentTool({
         name: "reject_file_changes",
         description:
             "Reject the active file-change proposal when the user declines it or requests a different change.",
@@ -109,7 +109,7 @@ export function createRejectFileChangesTool(
             )
             return `Rejected file-change proposal ${proposalId}.`
         },
-    }
+    })
 }
 
 async function readOptionalFile(path: string): Promise<string | undefined> {

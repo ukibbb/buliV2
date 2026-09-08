@@ -7,7 +7,10 @@ import {
     type IRuntimeAgentTool,
 } from "@/agent"
 import type { IAuthenticationService } from "@/authentication"
-import { createAuthentication } from "@/app/bootstrap/create-authentication"
+import {
+    createAuthentication,
+    type IAuthenticationComposition,
+} from "@/app/bootstrap/create-authentication"
 import { loadWorkspaceInstructions } from "@/app/bootstrap/load-workspace-instructions"
 import type { IBuliModelSelection } from "@/app/contracts"
 import type { IBuliApplication } from "@/app/contracts"
@@ -18,10 +21,12 @@ import {
 } from "@/app/runtime"
 import {
     DEFAULT_OPENAI_MODEL_ID,
+    DEFAULT_OPENAI_REASONING_EFFORTS,
     OPENAI_PROVIDER_ID,
     OpenAiAgentModel,
     createOpenAiModelCatalog,
     createOpenAiWebSearchTool,
+    type IOpenAiModelCatalog,
 } from "@/providers/openai"
 import {
     defaultSessionFilePath,
@@ -98,6 +103,11 @@ export interface IBuliApplicationOptions {
     readonly manager?: ISessionManager
     readonly model?: IAgentModel
     readonly tools?: readonly IRuntimeAgentTool[]
+    // Startup owns injected services just like its defaults. Supplying a catalog
+    // and auth transport also lets integration tests verify real registration and
+    // SDK serialization without reading credentials or contacting an account.
+    readonly authentication?: IAuthenticationComposition
+    readonly modelCatalog?: IOpenAiModelCatalog
 }
 
 /** Composes provider, tools, persistence, sessions, and the UI boundary. */
@@ -117,7 +127,7 @@ export async function createBuliApplication(
         options.signal,
     )
 
-    const auth = createAuthentication()
+    const auth = options.authentication ?? createAuthentication()
     const authentication = auth.service
     const toolOutputStore = new EphemeralToolOutputStore()
     // Od tego miejsca startup posiada auth. Jeśli późniejszy etap rzuci, rollback
@@ -134,10 +144,17 @@ export async function createBuliApplication(
         const model: IAgentModel = options.model ?? new OpenAiAgentModel({
             auth: auth.openAi,
         })
-        const modelCatalog = createOpenAiModelCatalog({ auth: auth.openAi })
+        const modelCatalog = options.modelCatalog
+            ?? createOpenAiModelCatalog({ auth: auth.openAi })
+        const defaultReasoningEffort = options.model === undefined
+            ? DEFAULT_OPENAI_REASONING_EFFORTS[0]
+            : "medium"
+        // This base registration is provisional for Codex startup, not a grant to
+        // call Fast or use a public API context limit. Discovery supplies the real
+        // account-bound adapters, capabilities, limits and initial selection.
         const models: readonly IBuliModelRuntimeConfig[] = [{
             id: DEFAULT_OPENAI_MODEL_ID,
-            name: "GPT-5.6 Sol",
+            name: options.model === undefined ? "GPT-6 Astra" : "Injected model",
             model,
             ...(options.model === undefined
                 ? {
@@ -147,19 +164,14 @@ export async function createBuliApplication(
                     },
                 }
                 : {}),
-            reasoningEfforts: [
-                "none",
-                "low",
-                "medium",
-                "high",
-                "xhigh",
-                "max",
-            ],
-            defaultReasoningEffort: "medium",
+            reasoningEfforts: options.model === undefined
+                ? DEFAULT_OPENAI_REASONING_EFFORTS
+                : ["none", "low", "medium", "high", "xhigh", "max"],
+            defaultReasoningEffort,
         }]
         const selection: IBuliModelSelection = {
             modelId: DEFAULT_OPENAI_MODEL_ID,
-            reasoningEffort: "medium",
+            reasoningEffort: defaultReasoningEffort,
         }
         const baseTools: readonly IRuntimeAgentTool[] = options.tools
             ?? [
@@ -203,6 +215,7 @@ export async function createBuliApplication(
             fileChangeProposalStore,
             ...(options.model === undefined
                 ? {
+                    preferredModelIds: [`${DEFAULT_OPENAI_MODEL_ID}::fast`, DEFAULT_OPENAI_MODEL_ID],
                     loadModels: async (signal: AbortSignal) => (
                         await modelCatalog.load(signal)
                     ).map((entry): IBuliModelRuntimeConfig => ({
@@ -212,6 +225,9 @@ export async function createBuliApplication(
                             auth: auth.openAi,
                             modelId: entry.modelId,
                             expectedAccountId: entry.accountId,
+                            ...(entry.supportsReasoning === undefined
+                                ? {}
+                                : { supportsReasoning: entry.supportsReasoning }),
                             ...(entry.serviceTier === undefined
                                 ? {}
                                 : { serviceTier: entry.serviceTier }),
@@ -274,10 +290,13 @@ export async function createBuliApplication(
         if (options.signal.aborted) disposeOnAbort()
 
         if (options.model === undefined && !options.signal.aborted) {
-            // Context-window metadata is an enhancement; auth/catalog failures must
-            // not prevent the application from starting with its fallback model.
-            void applicationRuntime.refreshModels(options.signal).catch(() => { })
+            // Resolve account availability before exposing the first prompt editor:
+            // otherwise its first run could silently capture Standard instead of
+            // the preferred Fast adapter. The runtime records discovery failures
+            // and blocks generation, but startup still opens the login/model UI.
+            await applicationRuntime.refreshModels(options.signal).catch(() => { })
         }
+        options.signal.throwIfAborted()
 
         return { runtime: applicationRuntime, authentication, dispose }
     } catch (startupError) {

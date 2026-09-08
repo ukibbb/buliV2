@@ -118,6 +118,7 @@ test("reports the fixed 80 percent threshold and optional context usage", () => 
   expect(CONTEXT_COMPACTION_THRESHOLD).toBe(0.8)
   expect(contextCompactionThresholdTokens(100)).toBe(80)
   expect(contextCompactionThresholdTokens(101)).toBe(81)
+  expect(shouldCompactContext(0, 100)).toBe(false)
   expect(shouldCompactContext(79, 100)).toBe(false)
   expect(shouldCompactContext(80, 100)).toBe(true)
   expect(shouldCompactContext(100)).toBe(false)
@@ -130,10 +131,12 @@ test("reports the fixed 80 percent threshold and optional context usage", () => 
   const estimatedInputTokens = estimateContextInputTokens(input)
   expect(estimateContextUsage(input)).toEqual({
     estimatedInputTokens,
+    compactionInputTokens: estimatedInputTokens * ESTIMATED_BYTES_PER_TOKEN,
     shouldCompact: false,
   })
   expect(estimateContextUsage(input, estimatedInputTokens)).toEqual({
     estimatedInputTokens,
+    compactionInputTokens: estimatedInputTokens * ESTIMATED_BYTES_PER_TOKEN,
     contextWindowTokens: estimatedInputTokens,
     compactionThresholdTokens: Math.ceil(estimatedInputTokens * 0.8),
     remainingTokens: 0,
@@ -142,23 +145,45 @@ test("reports the fixed 80 percent threshold and optional context usage", () => 
   })
 })
 
-test("uses retained provider input usage as a conservative estimate floor", () => {
+test("uses cache-inclusive provider input plus safety margins without doubling the anchor", () => {
   const measured: TAgentMessage = {
     ...assistant("measured-assistant", [{ type: "text", text: "Short answer" }]),
-    usage: { inputTokens: 238_000, outputTokens: 200, totalTokens: 238_200 },
+    usage: {
+      inputTokens: 238_000,
+      outputTokens: 200,
+      totalTokens: 238_200,
+      cacheReadTokens: 200_000,
+      cacheWriteTokens: 1_000,
+    },
   }
-
-  const usage = estimateContextUsage({
+  const input = {
     systemPrompt: "System",
     messages: [user("user-1", "Short question"), measured],
     tools: [],
-  }, 272_000)
+  }
+  const expectedInputTokens = 238_000
+    + estimateMessagesInputTokens([measured]) * ESTIMATED_BYTES_PER_TOKEN
+    + estimateContextInputTokens({
+      systemPrompt: input.systemPrompt,
+      messages: [],
+      tools: input.tools,
+    }) * ESTIMATED_BYTES_PER_TOKEN
+  const usage = estimateContextUsage(input, 272_000)
 
-  expect(usage).toMatchObject({
+  expect(usage).toEqual({
+    estimatedInputTokens: expectedInputTokens,
+    compactionInputTokens: expectedInputTokens,
+    contextWindowTokens: 272_000,
     compactionThresholdTokens: 217_600,
+    remainingTokens: 272_000 - expectedInputTokens,
+    usageRatio: expectedInputTokens / 272_000,
     shouldCompact: true,
   })
-  expect(usage.estimatedInputTokens).toBeGreaterThan(238_000)
+  expect(estimateContextUsage(input)).toEqual({
+    estimatedInputTokens: expectedInputTokens,
+    compactionInputTokens: expectedInputTokens,
+    shouldCompact: false,
+  })
 
   const appendedOutput = estimateContextUsage({
     systemPrompt: "System",
@@ -172,6 +197,7 @@ test("uses retained provider input usage as a conservative estimate floor", () =
     tools: [],
   }, 272_000)
   expect(appendedOutput.estimatedInputTokens).toBeGreaterThan(217_600)
+  expect(appendedOutput.compactionInputTokens).toBe(appendedOutput.estimatedInputTokens)
   expect(appendedOutput.shouldCompact).toBe(true)
 
   const changedPrefix = estimateContextUsage({
@@ -183,18 +209,38 @@ test("uses retained provider input usage as a conservative estimate floor", () =
     }],
     tools: [],
   }, 100_000)
+  expect(changedPrefix.compactionInputTokens).toBe(changedPrefix.estimatedInputTokens)
   expect(changedPrefix.shouldCompact).toBe(true)
 })
 
 test("uses a byte-level safety bound before provider usage is available", () => {
-  const usage = estimateContextUsage({
+  const input = {
     systemPrompt: "System",
     messages: [user("large-first-user", "X".repeat(220_000))],
     tools: [],
-  }, 272_000)
+  }
+  const usage = estimateContextUsage(input, 272_000)
 
   expect(usage.estimatedInputTokens).toBeLessThan(217_600)
+  expect(usage.compactionInputTokens).toBe(
+    usage.estimatedInputTokens * ESTIMATED_BYTES_PER_TOKEN,
+  )
+  expect(usage.usageRatio).toBeCloseTo(0.4, 2)
+  expect(usage.remainingTokens).toBe(272_000 - usage.estimatedInputTokens)
   expect(usage.shouldCompact).toBe(true)
+
+  const thresholdWindow = Math.floor(
+    usage.compactionInputTokens / CONTEXT_COMPACTION_THRESHOLD,
+  )
+  expect(estimateContextUsage(input, thresholdWindow)).toMatchObject({
+    compactionInputTokens: usage.compactionInputTokens,
+    compactionThresholdTokens: usage.compactionInputTokens,
+    shouldCompact: true,
+  })
+  expect(estimateContextUsage(input, thresholdWindow + 2)).toMatchObject({
+    compactionInputTokens: usage.compactionInputTokens,
+    shouldCompact: false,
+  })
 })
 
 test("discards a provider usage anchor after the model changes", () => {
@@ -218,6 +264,9 @@ test("discards a provider usage anchor after the model changes", () => {
   }, 1_000)
 
   expect(usage.estimatedInputTokens).toBeLessThan(800)
+  expect(usage.compactionInputTokens).toBe(
+    usage.estimatedInputTokens * ESTIMATED_BYTES_PER_TOKEN,
+  )
   expect(usage.shouldCompact).toBe(true)
 })
 

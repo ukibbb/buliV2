@@ -61,6 +61,9 @@ export interface IBuliRuntimeOptions {
     readonly models: readonly IBuliModelRuntimeConfig[]
     readonly selection: IBuliModelSelection
     readonly loadModels?: TBuliModelRegistrationLoader
+    // Opts into discovery-gated startup (requires loadModels). This in-memory
+    // priority order applies only to the first successful catalog and is not persisted.
+    readonly preferredModelIds?: readonly string[]
     readonly searchPaths?: TBuliPathSearcher
     readonly now?: () => number
     readonly generateId?: () => string
@@ -79,6 +82,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
     private readonly defaultAgentId: string
     private models: readonly IBuliModelRuntimeConfig[]
     private readonly loadModels: TBuliModelRegistrationLoader | undefined
+    private readonly preferredModelIds: readonly string[] | undefined
     private readonly pathSearcher: TBuliPathSearcher | undefined
     private readonly now: () => number
     private readonly generateId: () => string
@@ -88,6 +92,11 @@ export class BuliApplicationRuntime implements IBuliApplication {
 
     private selection: IBuliModelSelection
     private modelRefreshTask: Promise<void> | undefined
+    private modelCatalog: IBuliApplicationSnapshot["modelCatalog"]
+    // Even selecting the current value is explicit intent, unlike the private
+    // bootstrap defaults. Keep model and effort intent separate during discovery.
+    private modelManuallySelected = false
+    private manuallySelectedReasoningEffort: TReasoningEffort | undefined
 
     // What are agent sesions what is thier responsibility
     private readonly sessions = new Map<string, AgentSession>()
@@ -116,6 +125,15 @@ export class BuliApplicationRuntime implements IBuliApplication {
         this.defaultAgentId = options.defaultAgentId
         this.models = copyModelRegistrations(options.models)
         this.loadModels = options.loadModels
+        if (options.preferredModelIds !== undefined && !this.loadModels) {
+            throw new Error("preferredModelIds requires loadModels")
+        }
+        this.preferredModelIds = options.preferredModelIds === undefined
+            ? undefined
+            : [...options.preferredModelIds]
+        this.modelCatalog = this.preferredModelIds === undefined
+            ? undefined
+            : { status: "loading" }
         this.pathSearcher = options.searchPaths
         this.selection = { ...options.selection }
         this.now = options.now ?? Date.now
@@ -181,6 +199,9 @@ export class BuliApplicationRuntime implements IBuliApplication {
 
     readonly submitPrompt = (prompt: IBuliPromptInput): IBuliPromptRun => {
         if (this.disposed) throw new Error("Buli runtime is disposed")
+        // Reject synchronously before creating a session or persisting a prompt;
+        // the startup registration is not permission to execute an unknown model.
+        this.assertModelCatalogReady()
 
         const createdSession = prompt.sessionId === undefined
         const sessionId = prompt.sessionId ?? this.createSession({
@@ -231,6 +252,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
         sessionId: string,
     ): ReturnType<AgentSession["compact"]> => {
         if (this.disposed) throw new Error("Buli runtime is disposed")
+        this.assertModelCatalogReady()
         return this.getOrOpenAgentSession(sessionId).compact("manual")
     }
 
@@ -303,11 +325,24 @@ export class BuliApplicationRuntime implements IBuliApplication {
             return waitWithSignal(this.modelRefreshTask, signal)
         }
 
-        const task = this.refreshModelsInternal(signal).finally(() => {
+        const completion = Promise.withResolvers<void>()
+        const task = completion.promise.finally(() => {
             if (this.modelRefreshTask === task) this.modelRefreshTask = undefined
         })
+        // Loading observers (and injected loaders) can call refreshModels again.
+        // Install the shared flight and cancellation waiter before invoking either.
         this.modelRefreshTask = task
-        return waitWithSignal(task, signal)
+        const result = waitWithSignal(task, signal)
+        if (this.modelCatalog && this.modelCatalog.status !== "ready") {
+            this.modelCatalog = { status: "loading" }
+            this.snapshot = this.createSnapshot()
+            this.notifyListeners()
+        }
+        void this.refreshModelsInternal(signal).then(
+            completion.resolve,
+            completion.reject,
+        )
+        return result
     }
 
     readonly selectModel = (modelId: string): void => {
@@ -325,7 +360,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
             )
                 ? this.selection.reasoningEffort
                 : registration.defaultReasoningEffort,
-        })
+        }, "modelId")
         // Zastosuj zmianę atomowo albo rzuć błąd bez modyfikowania stanu.
     }
 
@@ -342,7 +377,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
             // Zachowaj ID aktualnie wybranego modelu.
             reasoningEffort,
             // Nadpisz wyłącznie reasoning effort.
-        })
+        }, "reasoningEffort")
         // Zastosuj zmianę atomowo albo rzuć błąd bez modyfikowania stanu.
     }
 
@@ -393,14 +428,22 @@ export class BuliApplicationRuntime implements IBuliApplication {
         }
     }
 
-    private setSelection(selection: IBuliModelSelection): void {
+    private setSelection(
+        selection: IBuliModelSelection,
+        field: keyof IBuliModelSelection,
+    ): void {
         // Odbierz kompletną kandydacką selekcję modelu i reasoning effort.
         this.resolveSelectedModel(selection)
         // Sprawdź model oraz effort przed zmianą jakiegokolwiek stanu runtime.
 
+        if (field === "modelId") this.modelManuallySelected = true
+        else this.manuallySelectedReasoningEffort = selection.reasoningEffort
+        const dismissNotice = this.modelCatalog?.status === "ready"
+            && this.modelCatalog.message !== undefined
         if (
             selection.modelId === this.selection.modelId
             && selection.reasoningEffort === this.selection.reasoningEffort
+            && !dismissNotice
         ) {
             // Rozpoznaj, że kandydacka selekcja jest identyczna z aktualną.
             return
@@ -409,6 +452,9 @@ export class BuliApplicationRuntime implements IBuliApplication {
 
         this.selection = { ...selection }
         // Zapisz bezpieczną kopię nowej globalnej selekcji.
+        // A valid manual choice acknowledges a non-blocking catalog notice, even
+        // when the chosen value is unchanged. It cannot bypass initial readiness.
+        if (dismissNotice) this.modelCatalog = { status: "ready" }
         this.snapshot = this.createSnapshot()
         // Utwórz nowy immutable snapshot widoczny dla UI.
 
@@ -416,19 +462,36 @@ export class BuliApplicationRuntime implements IBuliApplication {
             session.refreshContextUsage()
         }
 
-        for (const listener of [...this.listeners]) listener()
+        this.notifyListeners()
         // Powiadom kopię listy subskrybentów o gotowym snapshotcie.
+    }
+
+    private notifyListeners(): void {
+        for (const listener of [...this.listeners]) {
+            if (this.disposed) break
+            try {
+                listener()
+            } catch (error) {
+                // Observers cannot turn a committed catalog into a failed refresh
+                // or prevent other subscribers from seeing the same ready state.
+                console.error("Runtime observer failed", error)
+            }
+        }
     }
 
     private createSnapshot(
         modelsSource: readonly IBuliModelRuntimeConfig[] = this.models,
         selection: IBuliModelSelection = this.selection,
+        modelCatalog = this.modelCatalog,
     ): IBuliApplicationSnapshot {
         const agents = this.agents.map((registration) => Object.freeze({
             id: registration.id,
             name: registration.name,
         }))
-        const models = modelsSource.map(
+        const visibleModels = modelCatalog && modelCatalog.status !== "ready"
+            ? []
+            : modelsSource
+        const models = visibleModels.map(
             (registration: IBuliModelRuntimeConfig) => Object.freeze({
                 id: registration.id,
                 name: registration.name,
@@ -443,6 +506,9 @@ export class BuliApplicationRuntime implements IBuliApplication {
             defaultAgentId: this.defaultAgentId,
             models: Object.freeze(models),
             selection: Object.freeze({ ...selection }),
+            ...(modelCatalog === undefined
+                ? {}
+                : { modelCatalog: Object.freeze({ ...modelCatalog }) }),
         })
     }
 
@@ -453,29 +519,73 @@ export class BuliApplicationRuntime implements IBuliApplication {
             ? AbortSignal.any([signal, this.lifetime.signal])
             : this.lifetime.signal
 
-        const registrations = copyModelRegistrations(
-            await loadModels(refreshSignal),
-        )
-        refreshSignal.throwIfAborted()
-        const previousRegistration = this.models.find(
-            (model) => model.id === this.selection.modelId,
-        )
-        const selection = reconcileSelection(
-            registrations,
-            this.selection,
-            previousRegistration?.fallbackSelectionId,
-        )
-        const snapshot = this.createSnapshot(registrations, selection)
-        refreshSignal.throwIfAborted()
-        if (this.disposed) throw new Error("Buli runtime is disposed")
+        try {
+            refreshSignal.throwIfAborted()
+            const loaded = await loadModels(refreshSignal)
+            refreshSignal.throwIfAborted()
+            const registrations = copyModelRegistrations(loaded)
+            const initialDiscovery = this.modelCatalog !== undefined
+                && this.modelCatalog.status !== "ready"
+            const previousRegistration = this.models.find(
+                (model) => model.id === this.selection.modelId,
+            )
+            const manualModelAvailable = this.modelManuallySelected
+                && registrations.some((model) => model.id === this.selection.modelId)
+            // Read intent after awaiting the loader so a picker change made during
+            // the request wins. Provisional effort is not a user choice: the first
+            // discovered model supplies its default unless effort was explicit.
+            // A model switch's provisional effort downgrade must not erase intent.
+            const selection = reconcileSelection(
+                registrations,
+                this.selection,
+                previousRegistration?.fallbackSelectionId,
+                initialDiscovery && !manualModelAvailable
+                    ? this.preferredModelIds
+                    : undefined,
+                initialDiscovery
+                    ? this.manuallySelectedReasoningEffort
+                    : this.selection.reasoningEffort,
+            )
+            const requestedModelId = initialDiscovery && !this.modelManuallySelected
+                ? this.preferredModelIds?.[0] ?? this.selection.modelId
+                : this.selection.modelId
+            const modelCatalog: IBuliApplicationSnapshot["modelCatalog"] =
+                this.modelCatalog === undefined ? undefined : {
+                    status: "ready",
+                    ...(requestedModelId === selection.modelId ? {} : {
+                        message: `Model "${requestedModelId}" is unavailable. Using "${selection.modelId}" instead.`,
+                    }),
+                }
+            const snapshot = this.createSnapshot(registrations, selection, modelCatalog)
+            refreshSignal.throwIfAborted()
+            if (this.disposed) throw new Error("Buli runtime is disposed")
 
-        this.models = registrations
-        this.selection = selection
-        this.snapshot = snapshot
+            // Validate everything before replacing private adapters and public data
+            // together. Only this successful commit consumes the initial preference;
+            // active Agent runs keep their already-captured configuration.
+            this.models = registrations
+            this.selection = selection
+            this.modelCatalog = modelCatalog
+            this.snapshot = snapshot
+        } catch (error) {
+            if (!this.disposed && this.modelCatalog) {
+                const ready = this.modelCatalog.status === "ready"
+                const message = error instanceof Error ? error.message : String(error)
+                this.modelCatalog = {
+                    status: ready ? "ready" : "error",
+                    message: ready
+                        ? `Model catalog refresh failed; using the previous catalog. ${message}`
+                        : `Model catalog unavailable. Retry discovery after signing in if needed. ${message}`,
+                }
+                this.snapshot = this.createSnapshot()
+                this.notifyListeners()
+            }
+            throw error
+        }
         for (const session of this.sessions.values()) {
             session.refreshContextUsage()
         }
-        for (const listener of [...this.listeners]) listener()
+        this.notifyListeners()
     }
 
     private getOrOpenAgentSession(sessionId: string): AgentSession {
@@ -548,6 +658,9 @@ export class BuliApplicationRuntime implements IBuliApplication {
             manager: this.manager,
             systemPrompt: agent.systemPrompt,
             resolveRunConfiguration: () => {
+                // Session browsing tolerates an unresolved configuration. Throwing
+                // here also keeps provisional context limits out of its telemetry.
+                this.assertModelCatalogReady()
                 const registration = this.resolveSelectedModel()
 
                 return {
@@ -583,6 +696,13 @@ export class BuliApplicationRuntime implements IBuliApplication {
         if (!registration) throw new Error(`Unknown agent: ${agentId}`)
 
         return registration
+    }
+
+    private assertModelCatalogReady(): void {
+        if (this.modelCatalog && this.modelCatalog.status !== "ready") {
+            throw new Error(this.modelCatalog.message
+                ?? "Model catalog is loading. Wait for discovery before generating.")
+        }
     }
 
     private resolveSelectedModel(
@@ -677,8 +797,13 @@ function reconcileSelection(
     registrations: readonly IBuliModelRuntimeConfig[],
     selection: IBuliModelSelection,
     fallbackSelectionId?: string,
+    preferredModelIds?: readonly string[],
+    reasoningEffort?: TReasoningEffort,
 ): IBuliModelSelection {
-    const registration = registrations.find(
+    const preferred = preferredModelIds?.map((id) => registrations.find(
+        (model) => model.id === id,
+    )).find((model) => model !== undefined)
+    const registration = preferred ?? registrations.find(
         (model) => model.id === selection.modelId,
     ) ?? registrations.find(
         (model) => model.id === fallbackSelectionId,
@@ -687,10 +812,10 @@ function reconcileSelection(
 
     return {
         modelId: registration.id,
-        reasoningEffort: registration.reasoningEfforts.includes(
-            selection.reasoningEffort,
+        reasoningEffort: reasoningEffort !== undefined && registration.reasoningEfforts.includes(
+            reasoningEffort,
         )
-            ? selection.reasoningEffort
+            ? reasoningEffort
             : registration.defaultReasoningEffort,
     }
 }

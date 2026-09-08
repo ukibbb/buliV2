@@ -56,6 +56,13 @@ export interface IBuliApplicationSnapshot {
     readonly defaultAgentId: string
     readonly models: readonly IBuliModelDisplayInfo[]
     readonly selection: IBuliModelSelection
+    // Present only when initial catalog discovery is required. Loading/error
+    // hides provisional models and blocks generation; a ready message is advisory.
+    // Until ready, selection may reference a provisional ID absent from models.
+    readonly modelCatalog?: {
+        readonly status: "loading" | "ready" | "error"
+        readonly message?: string
+    }
 }
 
 // Resolve fixed prompt and tools from the registered agent when creating a session.

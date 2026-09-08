@@ -27,12 +27,13 @@ import {
     ModelContextOverflowError,
 } from "@/agent"
 import {
+    DEFAULT_OPENAI_MODEL_ID,
     OPENAI_CODEX_BASE_URL,
     OPENAI_CODEX_RESPONSES_URL,
     OPENAI_OAUTH_DUMMY_API_KEY,
 } from "@/providers/openai/constants"
 
-export const DEFAULT_OPENAI_MODEL_ID = "gpt-5.6-sol"
+export { DEFAULT_OPENAI_MODEL_ID } from "@/providers/openai/constants"
 
 /** Narrow authentication transport required by the OpenAI model adapter. */
 export interface IOpenAiModelTransport {
@@ -51,6 +52,8 @@ export interface IOpenAiAgentModelOptions {
     readonly modelId?: string
     readonly expectedAccountId?: string
     readonly serviceTier?: "priority"
+    /** Known capability; otherwise use the built-in default's capability or SDK inference. */
+    readonly supportsReasoning?: boolean
 }
 
 // ?? please explain me this types line by line how it works
@@ -78,12 +81,18 @@ export class OpenAiAgentModel implements IAgentModel {
     private readonly modelId: string
     private readonly expectedAccountId: string | undefined
     private readonly serviceTier: "priority" | undefined
+    private readonly supportsReasoning: boolean | undefined
 
     constructor(options: IOpenAiAgentModelOptions) {
         this.auth = options.auth
         this.modelId = options.modelId ?? DEFAULT_OPENAI_MODEL_ID
         this.expectedAccountId = options.expectedAccountId
         this.serviceTier = options.serviceTier
+        // The installed SDK's older model-ID heuristics do not recognize Astra.
+        // Trust explicit capability metadata or this verified built-in model,
+        // never a blanket GPT-6 prefix; unknown IDs keep the SDK's own inference.
+        this.supportsReasoning = options.supportsReasoning
+            ?? (this.modelId === DEFAULT_OPENAI_MODEL_ID ? true : undefined)
     }
 
     async *stream(
@@ -130,13 +139,16 @@ export class OpenAiAgentModel implements IAgentModel {
                 openai: {
                     store: false,
                     instructions: request.systemPrompt,
-                    // TODO: Verify with a live gpt-5.6-sol request that one response can
+                    // TODO: Verify with a live gpt-6-astra request that one response can
                     // contain multiple local calls. Buli intentionally executes that
                     // returned batch sequentially; benchmark before adding concurrency.
                     ...(request.tools.length === 0
                         ? {}
                         : { parallelToolCalls: true }),
                     reasoningEffort: request.reasoningEffort,
+                    ...(this.supportsReasoning === undefined
+                        ? {}
+                        : { forceReasoning: this.supportsReasoning }),
                     ...(request.reasoningEffort === "none"
                         ? {}
                         : { reasoningSummary: "detailed" as const }),
@@ -159,7 +171,11 @@ export class OpenAiAgentModel implements IAgentModel {
     }
 }
 
-/** Applies account-authorized tiers after the SDK's static model allowlist. */
+/**
+ * The older SDK drops priority for IDs outside its static model allowlist.
+ * Inject the account-authorized tier after serialization, only for the Codex
+ * Responses POST. Fast keeps the base wire model ID, never Buli's ::fast ID.
+ */
 function withServiceTier(
     fetcher: typeof fetch,
     serviceTier: "priority",

@@ -18,6 +18,7 @@ import type {
 } from "@/authentication/credentials"
 import { OpenAiAuth } from "@/providers/openai/auth/openai-auth"
 import {
+  DEFAULT_OPENAI_MODEL_ID,
   OpenAiAgentModel,
   type IOpenAiAgentModelOptions,
 } from "@/providers/openai/model/openai-agent-model"
@@ -25,6 +26,7 @@ import { OPENAI_CODEX_RESPONSES_URL } from "@/providers/openai/constants"
 import { AgentSession } from "@/sessions/agent-session"
 import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
 import { createWorkspaceTools } from "@/tools"
+import { MODELS_DEV_ASTRA_REFERENCE } from "./fixtures/openai-astra-reference"
 
 const WORKSPACE_ROOT = realpathSync(process.cwd())
 
@@ -670,6 +672,101 @@ test("sends the priority service tier for a Fast model registration", async () =
   expect(body.model).toBe("gpt-5.4-nano-catalog")
   expect(body.service_tier).toBe("priority")
 })
+
+test.each([...MODELS_DEV_ASTRA_REFERENCE.reasoning_options[0].values])(
+  "serializes catalog-backed Astra standard and Fast requests at %s effort",
+  async (reasoningEffort) => {
+    for (const serviceTier of [undefined, "priority"] as const) {
+      let capturedRequest: Request | undefined
+      // Capture after the real SDK has serialized the request. Inspecting only
+      // providerOptions would miss its older reasoning/tier allowlist filters.
+      const model = createModel(async (...args) => {
+        capturedRequest = new Request(...args)
+        return streamResponse()
+      }, {
+        modelId: "gpt-6-astra",
+        supportsReasoning: true,
+        ...(serviceTier === undefined ? {} : { serviceTier }),
+      })
+      const events: TAgentModelEvent[] = []
+
+      for await (const event of model.stream({
+        sessionId: "session-1",
+        runId: "run-1",
+        systemPrompt: "System",
+        messages: [userMessage("Selected effort")],
+        tools: [],
+        reasoningEffort,
+        signal: new AbortController().signal,
+      })) {
+        events.push(event)
+      }
+
+      if (!capturedRequest) throw new Error("Expected one provider request")
+      expect(capturedRequest.url).toBe(OPENAI_CODEX_RESPONSES_URL)
+      const body = (await capturedRequest.json()) as Record<string, unknown>
+      expect(body.model).toBe("gpt-6-astra")
+      expect(body.reasoning).toEqual({ effort: reasoningEffort, summary: "detailed" })
+      if (serviceTier === undefined) {
+        expect(body).not.toHaveProperty("service_tier")
+      } else {
+        expect(body.service_tier).toBe("priority")
+      }
+      expect(body).not.toHaveProperty("max_output_tokens")
+      expect(body).not.toHaveProperty("forceReasoning")
+      expect(events.at(-1)?.type).toBe("finish")
+    }
+  },
+)
+
+test("defaults to reasoning-capable Astra without a model ID or capability metadata", async () => {
+  let capturedRequest: Request | undefined
+  const model = createModel(async (...args) => {
+    capturedRequest = new Request(...args)
+    return streamResponse()
+  })
+
+  await collectEvents(model, [userMessage("Default model")], [])
+
+  expect(DEFAULT_OPENAI_MODEL_ID).toBe("gpt-6-astra")
+  if (!capturedRequest) throw new Error("Expected one provider request")
+  const body = (await capturedRequest.json()) as Record<string, unknown>
+  expect(body.model).toBe("gpt-6-astra")
+  expect(body.reasoning).toEqual({ effort: "medium", summary: "detailed" })
+})
+
+// Negative controls intentionally retain SDK warnings and omit wire reasoning;
+// missing metadata must not become either a forced false or a GPT-6 prefix guess.
+test.each([
+  ["gpt-6-catalog-model", true, true],
+  ["gpt-6-catalog-model", undefined, false],
+  ["account-reasoner", true, true],
+  ["gpt-5.6-sol", undefined, true],
+  ["gpt-6-astra", false, false],
+] as const)(
+  "preserves capability trust for %s with supportsReasoning=%s",
+  async (modelId, supportsReasoning, expectsReasoning) => {
+    let capturedRequest: Request | undefined
+    const model = createModel(async (...args) => {
+      capturedRequest = new Request(...args)
+      return streamResponse()
+    }, {
+      modelId,
+      ...(supportsReasoning === undefined ? {} : { supportsReasoning }),
+    })
+
+    await collectEvents(model, [userMessage("Reasoning capability")], [])
+
+    if (!capturedRequest) throw new Error("Expected one provider request")
+    const body = (await capturedRequest.json()) as Record<string, unknown>
+    expect(body.model).toBe(modelId)
+    if (expectsReasoning) {
+      expect(body.reasoning).toEqual({ effort: "medium", summary: "detailed" })
+    } else {
+      expect(body).not.toHaveProperty("reasoning")
+    }
+  },
+)
 
 test("normalizes cache and reasoning usage without double-counting totals", async () => {
   const model = createModel(async () => streamResponse({

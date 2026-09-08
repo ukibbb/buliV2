@@ -5,6 +5,7 @@ import {
   type TAgentMessage,
   type IAgentModel,
   type IAgentModelRequest,
+  type IAgentRunConfiguration,
   type IRuntimeAgentTool,
   ModelContextOverflowError,
 } from "@/agent"
@@ -94,7 +95,7 @@ test("AgentSession compacts at preflight and dispatches the same durable prompt"
 
   expect(summaryRequests).toHaveLength(1)
   expect(summaryRequests.every((request) => (
-    request.reasoningEffort === "none"
+    request.reasoningEffort === "medium"
     && request.tools.length === 0
     && request.messages.length === 1
     && request.messages[0]?.role === "user"
@@ -191,6 +192,99 @@ test("AgentSession uses the active run model for automatic compaction", async ()
 
   await session.dispose()
 })
+
+for (const reasoningEffort of ["high", "max"] as const) {
+  test(`AgentSession retains the captured model and ${reasoningEffort} effort after selection changes during a run`, async () => {
+    const manager = managerWithSession()
+    seedLargeTurns(manager, 2)
+    const requestStarted = Promise.withResolvers<void>()
+    const selectionChanged = Promise.withResolvers<void>()
+    const activeRequests: IAgentModelRequest[] = []
+    const replacementRequests: IAgentModelRequest[] = []
+    const activeModel: IAgentModel = {
+      async *stream(request) {
+        activeRequests.push(cloneRequest(request))
+        if (isCompactionRequest(request)) {
+          yield {
+            type: "text-delta",
+            id: "summary",
+            delta: structuredSummary("Captured model checkpoint"),
+          }
+        } else if (activeRequests.length === 1) {
+          requestStarted.resolve()
+          await selectionChanged.promise
+          throw new ModelContextOverflowError("overflow after selection changed")
+        }
+        yield { type: "finish", reason: "stop" }
+      },
+    }
+    const replacementModel: IAgentModel = {
+      async *stream(request) {
+        replacementRequests.push(cloneRequest(request))
+        yield { type: "finish", reason: "stop" }
+      },
+    }
+    const capturedConfiguration: IAgentRunConfiguration = {
+      model: activeModel,
+      modelProfile: { ...MODEL_PROFILE, contextWindowTokens: 100_000 },
+      reasoningEffort,
+    }
+    let selectedConfiguration = capturedConfiguration
+    const session = new AgentSession({
+      agentId: "test-agent",
+      sessionId: "session-1",
+      manager,
+      systemPrompt: "System",
+      resolveRunConfiguration: () => selectedConfiguration,
+      tools: [],
+    })
+
+    const run = session.prompt("Keep this prompt")
+    try {
+      await requestStarted.promise
+      expect(session.getSnapshot().isRunning).toBe(true)
+      // Standard/Fast adapters can share a model profile. Change the instance
+      // and effort before recovery, not just after the summary was requested.
+      selectedConfiguration = {
+        ...capturedConfiguration,
+        model: replacementModel,
+        reasoningEffort: "low",
+      }
+      session.refreshContextUsage()
+      selectionChanged.resolve()
+      await run.runFinished
+
+      expect(activeRequests).toHaveLength(3)
+      expect(activeRequests.map((request) => request.reasoningEffort)).toEqual([
+        reasoningEffort,
+        reasoningEffort,
+        reasoningEffort,
+      ])
+      expect(activeRequests.filter(isCompactionRequest)).toHaveLength(1)
+      expect(activeRequests[1]).toMatchObject({ reasoningEffort, tools: [] })
+      expect(activeRequests[1]).not.toHaveProperty("maxOutputTokens")
+      expect(activeRequests[2]).toMatchObject({
+        runId: run.runId,
+        contextSummary: structuredSummary("Captured model checkpoint"),
+        messages: [expect.objectContaining({ role: "user", content: "Keep this prompt" })],
+      })
+      expect(replacementRequests).toHaveLength(0)
+      expect(manager.getCompactionCheckpoint("session-1")).toMatchObject({
+        model: capturedConfiguration.modelProfile,
+        summary: structuredSummary("Captured model checkpoint"),
+      })
+
+      // The changed selection takes effect for the next run, not this recovery.
+      await session.prompt("Use the new selection").runFinished
+      expect(replacementRequests).toHaveLength(1)
+      expect(replacementRequests[0]?.reasoningEffort).toBe("low")
+      expect(activeRequests).toHaveLength(3)
+    } finally {
+      selectionChanged.resolve()
+      await session.dispose()
+    }
+  })
+}
 
 test("AgentSession keeps an unprocessed image prompt out of the checkpoint", async () => {
   const manager = managerWithSession()

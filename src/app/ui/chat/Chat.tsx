@@ -15,6 +15,7 @@ import type {
 } from "@/agent"
 import type { IContextUsage } from "@/sessions"
 import { useTerminalClipboard } from "@/terminal/clipboard/ClipboardOverlay"
+import { theme } from "@/terminal/theme"
 
 interface IChatProps {
     readonly isRunning?: boolean
@@ -36,8 +37,13 @@ function ChatView(props: IChatProps) {
     const selectedModel = application.models.find(
         (model) => model.id === application.selection.modelId,
     )
-    const selectedModelName = selectedModel?.name
-        ?? application.selection.modelId
+    const catalog = application.modelCatalog
+    const catalogReady = catalog === undefined || catalog.status === "ready"
+    const selectedModelName = catalogReady
+        ? selectedModel?.name ?? application.selection.modelId
+        : catalog.status === "loading" ? "Loading models" : "Model unavailable"
+    const catalogMessage = catalog?.message
+        ?? (catalog?.status === "loading" ? "Loading available account models..." : undefined)
 
     useEffect(() => {
         if (props.pendingToolApproval) controller.dismissMenu()
@@ -62,6 +68,15 @@ function ChatView(props: IChatProps) {
                 onActivateMenuItem={controller.activateSelectedMenuItem}
                 onError={controller.setExternalUiError}
             />
+            {/* Runtime readiness blocks generation, not editing or slash commands:
+                login and catalog retry must remain usable after discovery fails.
+                Do not present a provisional model as available, or hide a change
+                from the requested Fast tier to an account-supported fallback. */}
+            {catalogMessage && catalogMessage !== ui.inputError ? <text
+                fg={catalog?.status === "error" ? theme.red : theme.amber}
+                minWidth={0}
+                wrapMode="word"
+            >{catalogMessage}</text> : null}
             <ChatStatus
                 isRunning={props.isRunning}
                 isCompacting={props.isCompacting}
@@ -73,7 +88,7 @@ function ChatView(props: IChatProps) {
                 errorMessage={props.errorMessage}
                 inputError={ui.inputError}
                 selectedModelName={selectedModelName}
-                reasoningEffort={application.selection.reasoningEffort}
+                reasoningEffort={catalogReady ? application.selection.reasoningEffort : "--"}
             />
             <CommandMenu menu={menu} />
         </box>

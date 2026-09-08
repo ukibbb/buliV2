@@ -1,11 +1,15 @@
 import type { IOAuthCredential } from "@/authentication"
 import type { TReasoningEffort } from "@/agent"
 import {
+    DEFAULT_OPENAI_MODEL_ID,
+    DEFAULT_OPENAI_REASONING_EFFORTS,
     MODELS_DEV_API_URL,
     OPENAI_MODEL_CATALOG_TIMEOUT_MS,
     OPENAI_MODEL_CATALOG_TTL_MS,
 } from "@/providers/openai/constants"
 
+// Keep only native request efforts. Codex can also advertise orchestration
+// levels such as "ultra", which must never become Responses reasoning.effort.
 const REASONING_EFFORTS: readonly TReasoningEffort[] = [
     "none",
     "minimal",
@@ -29,6 +33,8 @@ export interface IOpenAiCatalogModel {
     readonly accountId: string
     readonly name: string
     readonly serviceTier?: "priority"
+    /** Positive effort evidence establishes reasoning; absence is not false. */
+    readonly supportsReasoning?: boolean
     readonly reasoningEfforts: readonly TReasoningEffort[]
     readonly defaultReasoningEffort: TReasoningEffort
     readonly contextWindowTokens?: number
@@ -326,6 +332,8 @@ function parseAccountModel(
         ? value.priority
         : Number.MAX_SAFE_INTEGER
     const name = displayName(value.display_name)
+    // Use the account's active window, not max_context_window or public API
+    // limits: those describe other configurations, not this account's budget.
     const contextWindowTokens = positiveInteger(value.context_window)
     const fastServiceTier = accountFastServiceTier(value)
     return {
@@ -382,15 +390,26 @@ function mergeCatalog(
     )
     return sortedModels.flatMap((account): IOpenAiCatalogModel[] => {
         const published = metadata.get(account.id)
-        const reasoningEfforts = mergedReasoningEfforts(account, published)
+        const mergedEfforts = mergedReasoningEfforts(account, published)
+        // The account grants model/tier availability, not support for invalid wire
+        // parameters. Reject incompatible native efforts for the verified Astra ID
+        // instead of publishing a selectable none that forceReasoning would send.
+        const reasoningEfforts = account.id === DEFAULT_OPENAI_MODEL_ID
+            ? mergedEfforts?.filter((effort) => DEFAULT_OPENAI_REASONING_EFFORTS.some(
+                (supported) => supported === effort,
+            ))
+            : mergedEfforts
         if (!reasoningEfforts || reasoningEfforts.length === 0) return []
 
         const defaultReasoningEffort = account.defaultReasoningEffort
             && reasoningEfforts.includes(account.defaultReasoningEffort)
             ? account.defaultReasoningEffort
-            : reasoningEfforts.includes("medium")
-                ? "medium"
-                : reasoningEfforts[0]
+            : account.id === DEFAULT_OPENAI_MODEL_ID
+                && reasoningEfforts.includes(DEFAULT_OPENAI_REASONING_EFFORTS[0])
+                ? DEFAULT_OPENAI_REASONING_EFFORTS[0]
+                : reasoningEfforts.includes("medium")
+                    ? "medium"
+                    : reasoningEfforts[0]
         if (!defaultReasoningEffort) return []
 
         const accountName = account.name
@@ -405,11 +424,18 @@ function mergeCatalog(
             name,
             reasoningEfforts: frozenReasoningEfforts,
             defaultReasoningEffort,
+            // A non-"none" normalized effort is positive capability evidence.
+            // Missing or none-only metadata must not disable SDK inference.
+            ...(reasoningEfforts.some((effort) => effort !== "none")
+                ? { supportsReasoning: true }
+                : {}),
             ...(account.contextWindowTokens === undefined
                 ? {}
                 : { contextWindowTokens: account.contextWindowTokens }),
         })
         const fastId = `${account.id}${FAST_SELECTION_SUFFIX}`
+        // Public speed metadata is not an entitlement. Only the account
+        // catalog can authorize Fast, and its selection ID stays local to Buli.
         if (
             account.fastServiceTier === undefined
             || baseModelIds.has(fastId)
@@ -417,6 +443,7 @@ function mergeCatalog(
             return [base]
         }
         const fast: IOpenAiCatalogModel = Object.freeze({
+            // Inherit the base wire ID, context window and reasoning capability.
             ...base,
             id: fastId,
             name: fastDisplayName(name),
@@ -475,7 +502,12 @@ function mergedReasoningEfforts(
         ? [account.defaultReasoningEffort]
         : publishedEfforts?.length
             ? publishedEfforts
-            : ["none"]
+            // Optional enrichment may be offline while Codex still lists Astra.
+            // Its verified native settings are safe fallback metadata; retaining
+            // the generic none fallback here would produce invalid requests.
+            : account.id === DEFAULT_OPENAI_MODEL_ID
+                ? DEFAULT_OPENAI_REASONING_EFFORTS
+                : ["none"]
 }
 
 function accountReasoningEfforts(

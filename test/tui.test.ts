@@ -119,6 +119,7 @@ function findTextareaRenderable(root: Renderable): TextareaRenderable | undefine
 }
 
 interface IFakeApplicationOptions {
+  readonly applicationSnapshot?: IBuliApplicationSnapshot
   readonly sessionSnapshot?: ISessionSnapshot
   readonly submitPrompt?: (prompt: IBuliPromptInput) => IBuliPromptRun
   readonly steer?: (sessionId: string, text: string) => void
@@ -159,7 +160,7 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
   const application: IBuliApplication = {
     workspaceRoot: WORKSPACE_ROOT,
     subscribe: () => () => undefined,
-    getSnapshot: () => APPLICATION_SNAPSHOT,
+    getSnapshot: () => options.applicationSnapshot ?? APPLICATION_SNAPSHOT,
     refreshModels: async (signal) => options.refreshModels?.(signal),
     selectModel: () => undefined,
     selectReasoningEffort: () => undefined,
@@ -322,6 +323,62 @@ test("provides the runtime above Buli", async () => {
     act(() => {
       setup.renderer.destroy()
     })
+  }
+})
+
+test.each([
+  { status: "loading", message: "Loading account models", label: "Loading models" },
+  { status: "error", message: "Catalog unavailable", label: "Model unavailable" },
+  { status: "ready", message: "Fast unavailable; using Astra Standard", label: "GPT-6 Astra" },
+] as const)("keeps catalog $status visible without disabling login or editing", async ({ status, message, label }) => {
+  const fake = fakeApplication({
+    applicationSnapshot: {
+      ...APPLICATION_SNAPSHOT,
+      models: status === "ready" ? [{
+        id: "gpt-6-astra",
+        name: "GPT-6 Astra",
+        reasoningEfforts: ["low"],
+      }] : [],
+      selection: { modelId: "gpt-6-astra", reasoningEffort: "low" },
+      modelCatalog: { status, message },
+    },
+  })
+  const controller = new BuliUiController({ application: fake.application })
+  const setup = await testRender(buliElementWithController(fake.application, controller), {
+    width: 80,
+    height: 24,
+  })
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+      await setup.mockInput.typeText("draft")
+      await setup.renderOnce()
+    })
+    expect(setup.captureCharFrame()).toContain(message)
+    expect(setup.captureCharFrame()).toContain(label)
+    expect(setup.captureCharFrame()).not.toContain("GPT-6 Astra Fast / low")
+    expect(textareaRenderable(setup.renderer.root).plainText).toBe("draft")
+    expect(textareaRenderable(setup.renderer.root).focused).toBe(true)
+
+    await act(async () => {
+      setup.resize(36, 24)
+      await setup.renderOnce()
+    })
+    expect(setup.captureCharFrame()).toContain(label)
+    expect(setup.captureCharFrame()).not.toMatch(/undefined|NaN/)
+
+    // Readiness is enforced by runtime, not by disabling the editor. The actual
+    // command dispatch must still open authentication when no model is available.
+    await act(async () => {
+      await controller.submitInput("/login")
+      await setup.renderOnce()
+    })
+    expect(controller.getSnapshot().authenticationMode).toBe("login")
+    expect(fake.prompts).toEqual([])
+  } finally {
+    controller.dispose()
+    act(() => setup.renderer.destroy())
   }
 })
 

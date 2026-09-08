@@ -309,6 +309,38 @@ may overwrite each other.
 The file is keyed by provider and supports OAuth and API-key credentials;
 the current OpenAI/ChatGPT integration accepts OAuth only.
 
+## Models and compaction
+
+Buli prefers **GPT-6 Astra Fast** after loading the models available to the
+signed-in ChatGPT/Codex account. Fast uses the same `gpt-6-astra` model with
+`service_tier: "priority"`, not a different model or reasoning effort. If Fast
+is unavailable, Buli selects Astra Standard when available, otherwise another
+account model, and shows an explicit fallback notice. Fast may consume more
+account usage than Standard.
+
+Startup waits for the first catalog lookup. An authentication/catalog error
+still opens the UI so `/login` and `/model` can recover it, but normal prompts and
+manual compaction are blocked until discovery succeeds. Provisional models are
+not shown as available. Later catalog refreshes preserve a manual model choice
+when it is still available; ongoing runs retain their captured configuration.
+
+Automatic compaction uses the **same model, Standard/Fast tier, and reasoning
+effort as the active run**. Manual compaction uses the current selection. There
+is no separate compaction model or automatic switch to a cheaper one.
+
+The status separates `ctx ~used/window (percentage)` from
+`compact safety-input/threshold (percentage budget)`. The first is an estimated
+next-request context, not a raw provider token counter. The second includes the
+existing conservative safety margins and is what triggers compaction at the
+80%-of-window threshold. Without a retained provider usage anchor, safety input
+is twice the displayed estimate, so compaction can occur at about 40% `ctx` while
+the displayed budget reaches 100%. Unknown limits remain explicitly unknown.
+
+Context windows come from the account's active Codex metadata. Buli does not
+automatically substitute public API limits or raise a model to its maximum
+configurable window. See [`docs/openai-models.md`](docs/openai-models.md) for
+discovery, request settings, provenance, and budget details.
+
 ## Session persistence
 
 Buli stores multiple conversations per workspace. The app starts on Home without creating a session; the first non-empty prompt creates one, using that prompt as its title. Completed messages and session metadata are appended to a JSONL file under `~/.buli/sessions/`; the filename is the SHA-256 hash of the canonical workspace path.

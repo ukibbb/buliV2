@@ -236,6 +236,8 @@ async function summarizeCompactionHistory(
         content: promptContent,
         createdAt: options.now(),
     }
+    // Reuse the run's captured model (including Standard/Fast tier) and effort:
+    // global selection can change mid-run, and Astra does not support "none".
     const stream = options.runConfiguration.model.stream({
         sessionId: options.sessionId,
         runId,
@@ -244,7 +246,7 @@ async function summarizeCompactionHistory(
         messages: [summaryPrompt],
         tools: [],
         signal: options.signal,
-        reasoningEffort: "none",
+        reasoningEffort: options.runConfiguration.reasoningEffort,
     })
 
     let summary = ""

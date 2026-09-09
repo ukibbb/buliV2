@@ -1,9 +1,10 @@
 import { Type } from "typebox"
 import { Value } from "typebox/value"
 
-import type {
-    TAgentMessage,
-    IAgentTool,
+import {
+    defineAgentTool,
+    type TAgentMessage,
+    type IAgentTool,
 } from "@/agent"
 import { OPENAI_PROVIDER_ID } from "@/providers/openai/auth/openai-auth"
 import type { TOpenAiCodexSearch } from "@/providers/openai/transport/codex-fetch"
@@ -109,8 +110,8 @@ export interface IOpenAiWebSearchToolOptions {
 /** Creates the host-owned standalone web search tool backed by ChatGPT OAuth. */
 export function createOpenAiWebSearchTool(
     options: IOpenAiWebSearchToolOptions,
-): IAgentTool<typeof WEB_SEARCH_INPUT_SCHEMA> {
-    return {
+): IAgentTool<typeof WEB_SEARCH_INPUT_SCHEMA, "web_search"> {
+    return defineAgentTool({
         name: "web_search",
         description: WEB_SEARCH_DESCRIPTION,
         inputSchema: WEB_SEARCH_INPUT_SCHEMA,
@@ -148,7 +149,7 @@ export function createOpenAiWebSearchTool(
             })
             return `${EXTERNAL_CONTENT_WARNING}\n\n${response.output}`
         },
-    }
+    })
 }
 
 function assertSearchInput(input: Record<string, unknown>): void {

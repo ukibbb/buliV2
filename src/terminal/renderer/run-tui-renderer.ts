@@ -10,6 +10,7 @@ import { createElement, type ReactNode } from "react"
 import { TerminalSelectionClipboardRoot } from "@/terminal/clipboard/ClipboardOverlay"
 import { registerTerminalParsers } from "@/terminal/parsers"
 import { Lifetime } from "@/terminal/renderer/lifetime"
+import { theme } from "@/terminal/theme"
 
 type TRendererComposition = (
     lifetime: Lifetime,
@@ -49,6 +50,9 @@ export async function runTuiRenderer(
         lifetime.addCleanup(() => {
             if (!renderer.isDestroyed) renderer.destroy()
         })
+
+        // Erase cells no longer covered by transparent renderables.
+        renderer.setBackgroundColor(theme.surface)
 
         const clipboard = createClipboard({
             host: createHostClipboard(),

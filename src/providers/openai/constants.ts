@@ -11,7 +11,10 @@ export const OPENAI_OAUTH_DEVICE_AUTHORIZATION_URL =
 export const OPENAI_OAUTH_DEVICE_REDIRECT_URL =
     "https://auth.openai.com/deviceauth/callback"
 export const OPENAI_OAUTH_ORIGINATOR = "buli"
-export const OPENAI_CODEX_CLIENT_VERSION = "0.144.1"
+// The authenticated catalog uses this version to select compatible models.
+// Astra requires 0.153.0; Codex 0.153.4 is the stable release that lists it.
+// https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/models-manager/models.json
+export const OPENAI_CODEX_CLIENT_VERSION = "0.153.4"
 export const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 export const OPENAI_CODEX_MODELS_URL =
     `${OPENAI_CODEX_BASE_URL}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`
@@ -23,3 +26,10 @@ export const OPENAI_OAUTH_DUMMY_API_KEY = "buli-oauth-dummy-key"
 export const MODELS_DEV_API_URL = "https://models.dev/api.json"
 export const OPENAI_MODEL_CATALOG_TTL_MS = 5 * 60 * 1000
 export const OPENAI_MODEL_CATALOG_TIMEOUT_MS = 10 * 1000
+
+// Verified native Astra settings, shared by provisional startup and sparse
+// account metadata fallback. They never grant account availability, Fast, or a
+// context window. Codex's default effort is low; none/ultra are not native efforts.
+// https://developers.openai.com/api/docs/models/gpt-6-astra.md (2026-09-07)
+export const DEFAULT_OPENAI_MODEL_ID = "gpt-6-astra"
+export const DEFAULT_OPENAI_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const

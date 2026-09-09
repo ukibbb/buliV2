@@ -6,6 +6,7 @@ import {
     MarkdownRenderable,
     RGBA,
     type Renderable,
+    type ScrollBoxRenderable,
     TextAttributes,
     TextRenderable,
     TextTableRenderable,
@@ -1135,6 +1136,179 @@ test("repairs completed diff counts before creating the diff viewer", async () =
         })
     }
 })
+
+test.each(["proposal", "markdown"] as const)(
+    "clips %s diff backgrounds and numbered text when scrolling the transcript",
+    async (kind) => {
+        const patch = [
+            "--- a/example.txt",
+            "+++ b/example.txt",
+            "@@ -1232,27 +1232,27 @@",
+            " context before 1232",
+            "-removed 1233 with enough words to wrap on a narrow screen",
+            "+added 1233 with enough words to wrap on a narrow screen",
+            " context after 1234",
+            ...Array.from({ length: 24 }, (_, i) => ` context tail ${1235 + i}`),
+        ].join("\n")
+        const messages: TAgentMessage[] = [{
+            id: "diff-message",
+            sessionId: "default",
+            runId: "run-diff",
+            role: "assistant",
+            createdAt: 1,
+            stopReason: "stop",
+            content: kind === "markdown"
+                ? [{ type: "text", text: `\`\`\`diff\n${patch}\n\`\`\`` }]
+                : [],
+        }, {
+            id: "later-message",
+            sessionId: "default",
+            runId: "run-diff",
+            role: "assistant",
+            createdAt: 3,
+            stopReason: "stop",
+            content: [{
+                type: "text",
+                text: Array.from({ length: 20 }, (_, i) => `Later assistant row ${i}`)
+                    .join("\n\n"),
+            }],
+        }]
+        let scrollbox!: ScrollBoxRenderable
+        const setup = await testRender(<scrollbox
+            ref={(renderable) => { if (renderable) scrollbox = renderable }}
+            width="100%"
+            height="100%"
+            scrollX={false}
+            scrollY
+        >
+            <Transcript
+                messages={messages}
+                fileChangeProposals={kind === "proposal" ? [{
+                    id: "scrolling-proposal",
+                    sessionId: "default",
+                    runId: "run-diff",
+                    toolCallId: "edit-diff",
+                    operation: "edit",
+                    path: "example.txt",
+                    diff: patch,
+                    status: "applied",
+                    createdAt: 2,
+                }] : []}
+            />
+        </scrollbox>, { width: 80, height: 10 })
+
+        const render = async () => {
+            await act(async () => {
+                await setup.renderOnce()
+                await Promise.all(codeRenderables(setup.renderer.root).map(
+                    (renderable) => renderable.highlightingDone,
+                ))
+                await setup.renderOnce()
+            })
+        }
+
+        try {
+            await render()
+            const diffs = diffRenderables(setup.renderer.root)
+            expect(diffs).toHaveLength(1)
+            const diff = diffs[0]!
+            expect(scrollbox.viewport.y).toBe(0)
+            expect(diff.height).toBeGreaterThan(scrollbox.viewport.height)
+            const initialFrame = setup.captureCharFrame()
+            const initialSpans = setup.captureSpans()
+            expect(initialFrame).toMatch(/1233.*-.*removed 1233/)
+            expect(initialFrame).toMatch(/1233.*\+.*added 1233/)
+            for (const [text, bg] of [
+                ["removed 1233", diff.removedBg],
+                ["added 1233", diff.addedBg],
+            ] as const) {
+                expect(initialSpans.lines.flatMap((line) => line.spans).some(
+                    (span) => span.text.includes(text) && span.bg.equals(bg),
+                )).toBe(true)
+            }
+            const contextRow = initialFrame.split("\n").findIndex(
+                (line) => line.includes("context after 1234"),
+            )
+            expect(contextRow).toBeGreaterThan(0)
+            const contextBg = initialSpans.lines[contextRow]!.spans.find(
+                (span) => span.text.includes("context after 1234"),
+            )!.bg
+            expect(contextBg.a).toBe(0)
+
+            act(() => scrollbox.scrollTo(contextRow))
+            await render()
+            expect(diff.y).toBeLessThan(0)
+            expect(diff.y + diff.height).toBeGreaterThan(0)
+            expect(setup.captureCharFrame().split("\n")[0]).toContain("context after 1234")
+            const partialSpans = setup.captureSpans()
+
+            act(() => scrollbox.scrollTo(scrollbox.scrollHeight))
+            await render()
+            expect(diff.y + diff.height).toBeLessThanOrEqual(0)
+            const offscreenFrame = setup.captureCharFrame()
+            expect(offscreenFrame).toContain("Later assistant row 19")
+            expect(offscreenFrame).not.toMatch(/12\d{2}|removed|added|context/)
+            const offscreenSpans = setup.captureSpans()
+            await render()
+            expect(setup.captureCharFrame()).toBe(offscreenFrame)
+            const repaintedSpans = setup.captureSpans()
+
+            act(() => scrollbox.scrollTo(0))
+            await render()
+            expect(setup.captureCharFrame()).toBe(initialFrame)
+            expect(setup.captureSpans()).toEqual(initialSpans)
+
+            const wideHeight = diff.height
+            act(() => setup.resize(36, 10))
+            await render()
+            expect(diff.height).toBeGreaterThan(wideHeight)
+            const narrowFrame = setup.captureCharFrame()
+            expect(narrowFrame).toMatch(/1233.*-.*removed 1233/)
+            expect(narrowFrame).toMatch(/1233.*\+.*added 1233/)
+            expect(narrowFrame).toContain("narrow screen")
+            for (const bg of [diff.removedBg, diff.addedBg]) {
+                expect(setup.captureSpans().lines.flatMap((line) => line.spans).some(
+                    (span) => span.text.includes("screen") && span.bg.equals(bg),
+                )).toBe(true)
+            }
+            const continuationRow = narrowFrame.split("\n").findIndex(
+                (line) => line.includes("narrow screen"),
+            )
+            expect(continuationRow).toBeGreaterThan(0)
+            act(() => scrollbox.scrollTo(continuationRow))
+            await render()
+            expect(diff.y).toBeLessThan(0)
+            expect(setup.captureSpans().lines[0]!.spans.some(
+                (span) => span.text.includes("narrow screen") && span.bg.equals(diff.addedBg),
+            )).toBe(true)
+
+            act(() => {
+                scrollbox.scrollTo(0)
+                setup.resize(80, 10)
+            })
+            await render()
+            expect(setup.captureCharFrame()).toBe(initialFrame)
+            expect(setup.captureSpans()).toEqual(initialSpans)
+
+            // Negative-Y fills must not repaint screen row zero, even on subsequent frames.
+            expect({
+                contextBackgroundPreserved: partialSpans.lines[0]!.spans.find(
+                    (span) => span.text.includes("context after 1234"),
+                )?.bg.equals(contextBg),
+                offscreenDiffBackgrounds: [offscreenSpans, repaintedSpans].map(
+                    (frame) => frame.lines.flatMap((line) => line.spans).some(
+                        (span) => span.bg.equals(diff.addedBg) || span.bg.equals(diff.removedBg),
+                    ),
+                ),
+            }).toEqual({
+                contextBackgroundPreserved: true,
+                offscreenDiffBackgrounds: [false, false],
+            })
+        } finally {
+            act(() => setup.renderer.destroy())
+        }
+    },
+)
 
 test("falls back to code for a structurally malformed completed diff", async () => {
     const patch = [

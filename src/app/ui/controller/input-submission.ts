@@ -152,12 +152,13 @@ export class BuliInputSubmission {
                 return "consumed"
             }
 
-            const submission = this.application.submitPrompt({
+
+            const promptRun = this.application.submitPrompt({
                 ...(activeSessionId ? { sessionId: activeSessionId } : {}),
                 ...normalized,
             })
-            void submission.settled.catch(() => {})
-            await submission.accepted
+            void promptRun.runFinished.catch(() => { })
+            await promptRun.promptPersisted
             this.consumeInput(input)
 
             if (
@@ -166,7 +167,7 @@ export class BuliInputSubmission {
             ) {
                 this.store.setSnapshot({
                     ...this.store.getSnapshot(),
-                    route: { type: "session", sessionId: submission.sessionId },
+                    route: { type: "session", sessionId: promptRun.sessionId },
                     menu: null,
                     inputError: null,
                 })

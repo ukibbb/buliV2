@@ -1,4 +1,6 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
+import { Buffer } from "node:buffer"
+import * as fs from "node:fs"
 import {
   appendFile,
   mkdtemp,
@@ -226,8 +228,8 @@ test("does not persist an AgentSession until its first non-blank prompt", async 
     expect(await Bun.file(filePath).exists()).toBe(false)
 
     const run = session.prompt("Hello")
-    await run.accepted
-    await run.settled
+    await run.initialPromptProcessed
+    await run.runFinished
     const persisted = await jsonlRecords(filePath)
     expect(persisted).toHaveLength(3)
     expect(persisted[0]).toEqual(sessionRecord(info))
@@ -508,6 +510,214 @@ test("appends safely after a valid final record without a newline", async () => 
   }
 })
 
+test("reads exactly one tail byte regardless of log size or newline termination", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-tail-"))
+  const filePath = join(directory, "sessions.jsonl")
+
+  try {
+    for (const size of [16, 512 * 1024]) {
+      for (const ending of ["", "\n"]) {
+        const user = userMessage("\u00e9".repeat(size))
+        const contents = serializeRecords([
+          sessionRecord(sessionInfo()),
+          messageRecord(user),
+        ]).slice(0, -1) + ending
+        await writeFile(filePath, contents, "utf8")
+        const assistant = assistantMessage("Appended", { completed: true })
+        const wholeRead = spyOn(fs, "readFileSync")
+        const tailRead = spyOn(fs, "readSync")
+        const close = spyOn(fs, "closeSync")
+        try {
+          /*
+           * Replay is intentionally a whole-file read. Observe it through the
+           * manager first to prove Bun's named imports reach these spies, then
+           * exclude setup from the append measurement. Positive readSync counts
+           * and byte offsets prove bounded I/O without timing-based assertions.
+           */
+          const manager = jsonlManager(filePath)
+          expect(wholeRead).toHaveBeenCalledTimes(1)
+          expect(wholeRead).toHaveBeenCalledWith(filePath, "utf8")
+          wholeRead.mockClear()
+          tailRead.mockClear()
+          close.mockClear()
+
+          manager.appendMessage(assistant)
+
+          expect(wholeRead).not.toHaveBeenCalled()
+          expect(tailRead).toHaveBeenCalledTimes(1)
+          expect(tailRead).toHaveBeenCalledWith(
+            expect.any(Number), expect.any(Uint8Array), 0, 1,
+            Buffer.byteLength(contents, "utf8") - 1,
+          )
+          expect(tailRead.mock.calls[0]?.[1].byteLength).toBe(1)
+          expect(tailRead.mock.results).toEqual([{ type: "return", value: 1 }])
+          expect(close).toHaveBeenCalledTimes(1)
+          expect(close).toHaveBeenCalledWith(tailRead.mock.calls[0]?.[0])
+        } finally {
+          close.mockRestore()
+          tailRead.mockRestore()
+          wholeRead.mockRestore()
+        }
+
+        expect(await readFile(filePath, "utf8")).toBe(
+          contents + (ending ? "" : "\n") + serializeRecords([messageRecord(assistant)]),
+        )
+        expect(jsonlManager(filePath).getMessages("session-1")).toEqual([user, assistant])
+      }
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test("appends without a separator when a persisted session's log is emptied or removed", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-empty-tail-"))
+  const filePath = join(directory, "sessions.jsonl")
+
+  try {
+    const manager = jsonlManager(filePath)
+    manager.createSession(sessionInfo())
+    manager.appendMessage(userMessage("First"))
+    const assistant = assistantMessage("Appended", { completed: true })
+
+    for (const missing of [false, true]) {
+      if (missing) await rm(filePath)
+      else await writeFile(filePath, "", "utf8")
+      const tailRead = spyOn(fs, "readSync")
+      try {
+        manager.appendMessage(assistant)
+        expect(tailRead).not.toHaveBeenCalled()
+      } finally {
+        tailRead.mockRestore()
+      }
+      expect(await readFile(filePath, "utf8")).toBe(
+        serializeRecords([messageRecord(assistant)]),
+      )
+      expect(fs.statSync(filePath).mode & 0o077).toBe(0)
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test("closes failed tail probes without appending or updating memory", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-tail-failure-"))
+  const filePath = join(directory, "sessions.jsonl")
+
+  try {
+    const manager = jsonlManager(filePath)
+    manager.createSession(sessionInfo())
+    manager.appendMessage(userMessage("First"))
+    const nativeStat = fs.fstatSync
+    const stat = spyOn(fs, "fstatSync")
+    const read = spyOn(fs, "readSync")
+    const close = spyOn(fs, "closeSync")
+    const append = spyOn(fs, "appendFileSync")
+    try {
+      manager.appendMessage(assistantMessage("Control", { completed: true }))
+      for (const spy of [stat, read, close, append]) {
+        expect(spy).toHaveBeenCalledTimes(1)
+      }
+      const contents = fs.readFileSync(filePath, "utf8")
+      const messages = manager.getMessages("session-1")
+      const info = manager.getSessionInfo("session-1")
+
+      for (const operation of ["stat", "read", "short read"]) {
+        for (const spy of [stat, read, close, append]) spy.mockClear()
+        const failure = new Error(`Tail ${operation} failed`)
+        if (operation === "stat") stat.mockImplementationOnce(() => { throw failure })
+        else if (operation === "read") read.mockImplementationOnce(() => { throw failure })
+        else read.mockReturnValueOnce(0)
+
+        expect(() => manager.appendMessage(userMessage("Rejected", {
+          id: "rejected",
+          createdAt: 100,
+        }))).toThrow(operation === "short read"
+          ? "Unable to read the final byte of the session log"
+          : failure)
+
+        expect(stat).toHaveBeenCalledTimes(1)
+        expect(read).toHaveBeenCalledTimes(operation === "stat" ? 0 : 1)
+        expect(close).toHaveBeenCalledTimes(1)
+        const descriptor = close.mock.calls[0]?.[0]
+        if (descriptor === undefined) throw new Error("Expected a closed descriptor")
+        expect(() => nativeStat(descriptor)).toThrow("EBADF")
+        expect(append).not.toHaveBeenCalled()
+        expect(fs.readFileSync(filePath, "utf8")).toBe(contents)
+        expect(manager.getMessages("session-1")).toEqual(messages)
+        expect(manager.getSessionInfo("session-1")).toEqual(info)
+      }
+    } finally {
+      append.mockRestore()
+      close.mockRestore()
+      read.mockRestore()
+      stat.mockRestore()
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test("JSONL append succeeds before prompt acceptance and rejects a failed write before the provider", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-barrier-"))
+  const filePath = join(directory, "sessions.jsonl")
+
+  try {
+    const manager = jsonlManager(filePath)
+    manager.createSession(sessionInfo())
+    manager.appendMessage(userMessage("First"))
+    const contentsAtProvider: string[] = []
+    const session = new AgentSession({
+      agentId: "test-agent",
+      sessionId: "session-1",
+      manager,
+      systemPrompt: "System",
+      tools: [],
+      resolveRunConfiguration: () => ({
+        model: {
+          async *stream() {
+            contentsAtProvider.push(fs.readFileSync(filePath, "utf8"))
+            yield { type: "finish", reason: "stop" }
+          },
+        },
+        reasoningEffort: "medium",
+      }),
+    })
+    const append = spyOn(fs, "appendFileSync")
+    try {
+      const accepted = session.prompt("Accepted")
+      await accepted.initialPromptProcessed
+      expect(fs.readFileSync(filePath, "utf8")).toContain('"content":"Accepted"')
+      await accepted.runFinished
+      expect(contentsAtProvider).toHaveLength(1)
+      expect(contentsAtProvider[0]).toContain('"content":"Accepted"')
+      expect(append).toHaveBeenCalledTimes(2)
+
+      const messages = manager.getMessages("session-1")
+      const info = manager.getSessionInfo("session-1")
+      const contents = fs.readFileSync(filePath, "utf8")
+      const failure = new Error("Disk write failed")
+      append.mockClear()
+      append.mockImplementationOnce(() => { throw failure })
+
+      const rejected = session.prompt("Rejected")
+      expect(await rejected.initialPromptProcessed.catch((error: unknown) => error)).toBe(failure)
+      expect(await rejected.runFinished.catch((error: unknown) => error)).toBe(failure)
+      expect(append).toHaveBeenCalledTimes(1)
+      expect(contentsAtProvider).toHaveLength(1)
+      expect(fs.readFileSync(filePath, "utf8")).toBe(contents)
+      expect(manager.getMessages("session-1")).toEqual(messages)
+      expect(manager.getSessionInfo("session-1")).toEqual(info)
+      expect(session.getSnapshot().messages).toEqual(messages)
+    } finally {
+      append.mockRestore()
+      await session.dispose()
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test("rejects a complete malformed final record", async () => {
   const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-"))
   const filePath = join(directory, "sessions.jsonl")
@@ -624,8 +834,8 @@ test("restores completed turns into the next Agent model request", async () => {
     })
 
     const run = session.prompt("New question")
-    await run.accepted
-    await run.settled
+    await run.initialPromptProcessed
+    await run.runFinished
 
     expect(requests[0]?.messages.map((message) => message.role)).toEqual([
       "user",

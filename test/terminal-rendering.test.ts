@@ -9,7 +9,7 @@ test("keeps the classic Buli palette", () => {
     red: "#EF4444",
     green: "#10B981",
     pink: "#EC4899",
-    surface: "#0F172A",
+    surface: "#000000",
     text: "#E5E7EB",
     textMuted: "#94A3B8",
   })

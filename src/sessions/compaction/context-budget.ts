@@ -22,9 +22,11 @@ export interface IContextInput {
     readonly modelProfile?: IModelProfile
 }
 
-/** Estimated request usage plus model-limit information when it is known. */
+/** Estimated request usage, compaction safety input, and any known model limit. */
 export interface IContextUsage {
     readonly estimatedInputTokens: number
+    /** Safety-adjusted input compared with the threshold, not raw provider usage. */
+    readonly compactionInputTokens: number
     readonly contextWindowTokens?: number
     readonly compactionThresholdTokens?: number
     readonly remainingTokens?: number
@@ -94,23 +96,27 @@ export function estimateContextUsage(
         estimateContextInputTokens(input),
         reportedInputTokens,
     )
+    // Without a provider usage anchor, retain the byte-level safety multiplier
+    // to guard against tokenizer underestimates. Expose this existing bound
+    // separately so callers can explain compaction without changing its policy.
+    const compactionInputTokens = reportedInputTokens > 0
+        ? estimatedInputTokens
+        : estimatedInputTokens * ESTIMATED_BYTES_PER_TOKEN
     if (contextWindowTokens === undefined) {
-        return { estimatedInputTokens, shouldCompact: false }
+        return { estimatedInputTokens, compactionInputTokens, shouldCompact: false }
     }
 
     const compactionThresholdTokens = contextCompactionThresholdTokens(
         contextWindowTokens,
     )
-    const safetyInputTokens = reportedInputTokens > 0
-        ? estimatedInputTokens
-        : estimatedInputTokens * ESTIMATED_BYTES_PER_TOKEN
     return {
         estimatedInputTokens,
+        compactionInputTokens,
         contextWindowTokens,
         compactionThresholdTokens,
         remainingTokens: Math.max(0, contextWindowTokens - estimatedInputTokens),
         usageRatio: estimatedInputTokens / contextWindowTokens,
-        shouldCompact: safetyInputTokens >= compactionThresholdTokens,
+        shouldCompact: compactionInputTokens >= compactionThresholdTokens,
     }
 }
 
@@ -148,6 +154,8 @@ export function reportedInputTokenFloor(
                 && message.model.modelId === modelProfile.modelId
             ))
         ) {
+            // Provider inputTokens already includes cache reads and writes;
+            // adding those detail counters again would inflate the anchor.
             return message.usage.inputTokens
                 + estimateMessagesInputTokens(messages.slice(index))
                     * ESTIMATED_BYTES_PER_TOKEN

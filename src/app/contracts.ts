@@ -21,11 +21,11 @@ export interface IBuliPromptInput extends IUserInputContent {
 
 export type IBuliPathSuggestion = IFdPathSuggestion
 
-export interface IBuliPromptSubmission {
+export interface IBuliPromptRun {
     readonly sessionId: string
     readonly runId: string
-    readonly accepted: Promise<void>
-    readonly settled: Promise<void>
+    readonly promptPersisted: Promise<void>
+    readonly runFinished: Promise<void>
 }
 
 export interface IBuliQueuedMessages {
@@ -56,6 +56,13 @@ export interface IBuliApplicationSnapshot {
     readonly defaultAgentId: string
     readonly models: readonly IBuliModelDisplayInfo[]
     readonly selection: IBuliModelSelection
+    // Present only when initial catalog discovery is required. Loading/error
+    // hides provisional models and blocks generation; a ready message is advisory.
+    // Until ready, selection may reference a provisional ID absent from models.
+    readonly modelCatalog?: {
+        readonly status: "loading" | "ready" | "error"
+        readonly message?: string
+    }
 }
 
 // Resolve fixed prompt and tools from the registered agent when creating a session.
@@ -74,7 +81,7 @@ export interface IBuliApplication
         reasoningEffort: TReasoningEffort,
     ) => void
 
-    readonly submitPrompt: (prompt: IBuliPromptInput) => IBuliPromptSubmission
+    readonly submitPrompt: (prompt: IBuliPromptInput) => IBuliPromptRun
     readonly steer: (
         sessionId: string,
         text: string,

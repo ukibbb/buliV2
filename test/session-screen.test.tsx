@@ -108,8 +108,8 @@ function createSessionHarness(initialSnapshot: ISessionSnapshot) {
     submitPrompt: () => ({
       sessionId: SESSION_ID,
       runId: "submitted-run",
-      accepted: Promise.resolve(),
-      settled: Promise.resolve(),
+      promptPersisted: Promise.resolve(),
+      runFinished: Promise.resolve(),
     }),
     steer: () => undefined,
     followUp: () => undefined,

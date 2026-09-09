@@ -10,13 +10,13 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import type {
-    IAgentTool,
     IAgentToolContext,
     IFileChangeProposalRecord,
 } from "@/agent"
 import {
     createWorkspaceTools,
     FileChangeProposalStore,
+    type TWorkspaceTool,
 } from "@/tools"
 
 test("proposes, validates, applies, and rejects exact edit contents", async () => {
@@ -266,10 +266,14 @@ test("describes direct and proposal mutation modes accurately", () => {
     )
 })
 
+function getTool<TName extends TWorkspaceTool["name"]>(
+    tools: readonly TWorkspaceTool[],
+    name: TName,
+): Extract<TWorkspaceTool, { readonly name: TName }>
 function getTool(
-    tools: readonly IAgentTool[],
-    name: string,
-): IAgentTool {
+    tools: readonly TWorkspaceTool[],
+    name: TWorkspaceTool["name"],
+): TWorkspaceTool {
     const tool = tools.find((candidate) => candidate.name === name)
     if (!tool) throw new Error(`Expected ${name} tool`)
     return tool

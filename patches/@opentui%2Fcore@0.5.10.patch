@@ -1,0 +1,74 @@
+diff --git a/index.bun.js b/index.bun.js
+index e7dd1a318cd29ad9b59696a27e3fae0064ec1260..5b64833301478798bdd70cef8def0e1f24dff998 100644
+--- a/index.bun.js
++++ b/index.bun.js
+@@ -6817,23 +6817,29 @@ class LineNumberRenderable extends Renderable {
+   renderSelf(buffer) {
+     if (!this.target || !this.gutter)
+       return;
++    // Clip before fillRect's unsigned coordinates clamp offscreen rows to zero.
++    const y = Math.trunc(this.y);
++    const start = Math.max(0, -y);
++    const end = Math.min(this.height, buffer.height - y);
++    if (end <= start)
++      return;
+     const lineInfo = this.target.lineInfo;
+     if (!lineInfo || !lineInfo.lineSources)
+       return;
+     const sources = lineInfo.lineSources;
+-    const startLine = this.target.scrollY;
++    const startLine = Math.trunc(this.target.scrollY);
+     if (startLine >= sources.length)
+       return;
+     const gutterWidth = this.gutter.visible ? this.gutter.width : 0;
+     const contentWidth = this.width - gutterWidth;
+-    for (let i = 0;i < this.height; i++) {
++    for (let i = start;i < end; i++) {
+       const visualLineIndex = startLine + i;
+       if (visualLineIndex >= sources.length)
+         break;
+       const logicalLine = sources[visualLineIndex];
+       const lineBg = this._lineColorsContent.get(logicalLine);
+       if (lineBg) {
+-        buffer.fillRect(this.x + gutterWidth, this.y + i, contentWidth, 1, lineBg);
++        buffer.fillRect(this.x + gutterWidth, y + i, contentWidth, 1, lineBg);
+       }
+     }
+   }
+diff --git a/index.node.js b/index.node.js
+index 77c786b3e49fe6e0ec5e1ca3115cc6a5a22a6307..c2e90a6477e6c755c30c830d7d101f20ceed6033 100644
+--- a/index.node.js
++++ b/index.node.js
+@@ -6816,23 +6816,29 @@ class LineNumberRenderable extends Renderable {
+   renderSelf(buffer) {
+     if (!this.target || !this.gutter)
+       return;
++    // Clip before fillRect's unsigned coordinates clamp offscreen rows to zero.
++    const y = Math.trunc(this.y);
++    const start = Math.max(0, -y);
++    const end = Math.min(this.height, buffer.height - y);
++    if (end <= start)
++      return;
+     const lineInfo = this.target.lineInfo;
+     if (!lineInfo || !lineInfo.lineSources)
+       return;
+     const sources = lineInfo.lineSources;
+-    const startLine = this.target.scrollY;
++    const startLine = Math.trunc(this.target.scrollY);
+     if (startLine >= sources.length)
+       return;
+     const gutterWidth = this.gutter.visible ? this.gutter.width : 0;
+     const contentWidth = this.width - gutterWidth;
+-    for (let i = 0;i < this.height; i++) {
++    for (let i = start;i < end; i++) {
+       const visualLineIndex = startLine + i;
+       if (visualLineIndex >= sources.length)
+         break;
+       const logicalLine = sources[visualLineIndex];
+       const lineBg = this._lineColorsContent.get(logicalLine);
+       if (lineBg) {
+-        buffer.fillRect(this.x + gutterWidth, this.y + i, contentWidth, 1, lineBg);
++        buffer.fillRect(this.x + gutterWidth, y + i, contentWidth, 1, lineBg);
+       }
+     }
+   }

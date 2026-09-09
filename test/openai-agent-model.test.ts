@@ -2,11 +2,11 @@ import { expect, test } from "bun:test"
 import { realpathSync } from "node:fs"
 
 import {
+    defineAgentTool,
     isModelContextOverflowError,
     runAgentLoop,
     type TAgentMessage,
     type TAgentModelEvent,
-    type IAgentTool,
     type IAgentToolDescriptor,
     type IUserMessage,
 } from "@/agent"
@@ -18,6 +18,7 @@ import type {
 } from "@/authentication/credentials"
 import { OpenAiAuth } from "@/providers/openai/auth/openai-auth"
 import {
+  DEFAULT_OPENAI_MODEL_ID,
   OpenAiAgentModel,
   type IOpenAiAgentModelOptions,
 } from "@/providers/openai/model/openai-agent-model"
@@ -25,6 +26,7 @@ import { OPENAI_CODEX_RESPONSES_URL } from "@/providers/openai/constants"
 import { AgentSession } from "@/sessions/agent-session"
 import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
 import { createWorkspaceTools } from "@/tools"
+import { MODELS_DEV_ASTRA_REFERENCE } from "./fixtures/openai-astra-reference"
 
 const WORKSPACE_ROOT = realpathSync(process.cwd())
 
@@ -100,7 +102,7 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
     tools: createWorkspaceTools(WORKSPACE_ROOT),
   })
 
-  await session.prompt("Continue").settled
+  await session.prompt("Continue").runFinished
 
   const [firstRequest, secondRequest, thirdRequest, fourthRequest] = capturedRequests
   if (!firstRequest || !secondRequest || !thirdRequest || !fourthRequest) {
@@ -119,7 +121,6 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
   expect(body.store).toBe(false)
   expect(body.stream).toBe(true)
   expect(body.reasoning).toMatchObject({ effort: "medium", summary: "detailed" })
-  expect(body.instructions).toContain("pairing with the user")
   expect(body.instructions).toBe(expectedSystemPrompt)
   const tools = body.tools as Array<{
     type: string
@@ -395,7 +396,7 @@ test("replays a local tool failure into the next OAuth iteration", async () => {
     tools: createWorkspaceTools(WORKSPACE_ROOT),
   })
 
-  await session.prompt("Read the missing file").settled
+  await session.prompt("Read the missing file").runFinished
 
   expect(capturedRequests).toHaveLength(2)
   const failedTool = manager
@@ -671,6 +672,101 @@ test("sends the priority service tier for a Fast model registration", async () =
   expect(body.service_tier).toBe("priority")
 })
 
+test.each([...MODELS_DEV_ASTRA_REFERENCE.reasoning_options[0].values])(
+  "serializes catalog-backed Astra standard and Fast requests at %s effort",
+  async (reasoningEffort) => {
+    for (const serviceTier of [undefined, "priority"] as const) {
+      let capturedRequest: Request | undefined
+      // Capture after the real SDK has serialized the request. Inspecting only
+      // providerOptions would miss its older reasoning/tier allowlist filters.
+      const model = createModel(async (...args) => {
+        capturedRequest = new Request(...args)
+        return streamResponse()
+      }, {
+        modelId: "gpt-6-astra",
+        supportsReasoning: true,
+        ...(serviceTier === undefined ? {} : { serviceTier }),
+      })
+      const events: TAgentModelEvent[] = []
+
+      for await (const event of model.stream({
+        sessionId: "session-1",
+        runId: "run-1",
+        systemPrompt: "System",
+        messages: [userMessage("Selected effort")],
+        tools: [],
+        reasoningEffort,
+        signal: new AbortController().signal,
+      })) {
+        events.push(event)
+      }
+
+      if (!capturedRequest) throw new Error("Expected one provider request")
+      expect(capturedRequest.url).toBe(OPENAI_CODEX_RESPONSES_URL)
+      const body = (await capturedRequest.json()) as Record<string, unknown>
+      expect(body.model).toBe("gpt-6-astra")
+      expect(body.reasoning).toEqual({ effort: reasoningEffort, summary: "detailed" })
+      if (serviceTier === undefined) {
+        expect(body).not.toHaveProperty("service_tier")
+      } else {
+        expect(body.service_tier).toBe("priority")
+      }
+      expect(body).not.toHaveProperty("max_output_tokens")
+      expect(body).not.toHaveProperty("forceReasoning")
+      expect(events.at(-1)?.type).toBe("finish")
+    }
+  },
+)
+
+test("defaults to reasoning-capable Astra without a model ID or capability metadata", async () => {
+  let capturedRequest: Request | undefined
+  const model = createModel(async (...args) => {
+    capturedRequest = new Request(...args)
+    return streamResponse()
+  })
+
+  await collectEvents(model, [userMessage("Default model")], [])
+
+  expect(DEFAULT_OPENAI_MODEL_ID).toBe("gpt-6-astra")
+  if (!capturedRequest) throw new Error("Expected one provider request")
+  const body = (await capturedRequest.json()) as Record<string, unknown>
+  expect(body.model).toBe("gpt-6-astra")
+  expect(body.reasoning).toEqual({ effort: "medium", summary: "detailed" })
+})
+
+// Negative controls intentionally retain SDK warnings and omit wire reasoning;
+// missing metadata must not become either a forced false or a GPT-6 prefix guess.
+test.each([
+  ["gpt-6-catalog-model", true, true],
+  ["gpt-6-catalog-model", undefined, false],
+  ["account-reasoner", true, true],
+  ["gpt-5.6-sol", undefined, true],
+  ["gpt-6-astra", false, false],
+] as const)(
+  "preserves capability trust for %s with supportsReasoning=%s",
+  async (modelId, supportsReasoning, expectsReasoning) => {
+    let capturedRequest: Request | undefined
+    const model = createModel(async (...args) => {
+      capturedRequest = new Request(...args)
+      return streamResponse()
+    }, {
+      modelId,
+      ...(supportsReasoning === undefined ? {} : { supportsReasoning }),
+    })
+
+    await collectEvents(model, [userMessage("Reasoning capability")], [])
+
+    if (!capturedRequest) throw new Error("Expected one provider request")
+    const body = (await capturedRequest.json()) as Record<string, unknown>
+    expect(body.model).toBe(modelId)
+    if (expectsReasoning) {
+      expect(body.reasoning).toEqual({ effort: "medium", summary: "detailed" })
+    } else {
+      expect(body).not.toHaveProperty("reasoning")
+    }
+  },
+)
+
 test("normalizes cache and reasoning usage without double-counting totals", async () => {
   const model = createModel(async () => streamResponse({
     input_tokens: 100,
@@ -900,7 +996,7 @@ test("does not execute an OpenAI tool call from an output-limited response", asy
       ? incompleteToolCallResponse("dangerous_action", { value: "partial" })
       : streamResponse()
   })
-  const tool: IAgentTool = {
+  const tool = defineAgentTool({
     name: "dangerous_action",
     description: "Perform a local side effect",
     inputSchema: { type: "object" },
@@ -908,7 +1004,7 @@ test("does not execute an OpenAI tool call from an output-limited response", asy
       executions += 1
       return "executed"
     },
-  }
+  })
 
   const result = await runAgentLoop(
     userMessage("Perform the action"),

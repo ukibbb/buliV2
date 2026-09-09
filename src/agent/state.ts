@@ -2,7 +2,7 @@ import type {
     TAgentMessage,
     IAssistantMessage,
 } from "@/agent/messages"
-import type { IAgentTool } from "@/agent/tool"
+import type { IRuntimeAgentTool } from "@/agent/tool"
 import type { TToolApprovalRequest } from "@/agent/tool-approval"
 
 /** Terminal reason published when an agent run settles. */
@@ -25,7 +25,7 @@ export type TAgentContextProjector = (
 export interface IAgentState {
     readonly sessionId: string
     readonly systemPrompt: string
-    readonly tools: readonly IAgentTool[]
+    readonly tools: readonly IRuntimeAgentTool[]
     readonly messages: readonly TAgentMessage[]
     readonly isRunning: boolean
     readonly activeRunId: string | undefined
@@ -38,8 +38,8 @@ export interface IAgentState {
 
 export interface IAgentRunHandle {
     readonly runId: string
-    readonly accepted: Promise<void>
-    readonly settled: Promise<void>
+    readonly initialPromptProcessed: Promise<void>
+    readonly runFinished: Promise<void>
 }
 
 export interface IAgentLoopResult {

@@ -12,7 +12,7 @@ export type {
     IBuliModelDisplayInfo,
     IBuliModelSelection,
     IBuliPromptInput,
-    IBuliPromptSubmission,
+    IBuliPromptRun,
     IBuliQueuedMessages,
     IBuliSessionCreationOptions,
     ISnapshotSource,

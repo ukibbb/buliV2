@@ -3,12 +3,23 @@ import { expect, test } from "bun:test"
 import type { IOAuthCredential } from "@/authentication"
 import {
   MODELS_DEV_API_URL,
+  OPENAI_CODEX_CLIENT_VERSION,
   OPENAI_CODEX_MODELS_URL,
 } from "@/providers/openai/constants"
 import {
   createOpenAiModelCatalog,
   type IOpenAiModelCatalogAuth,
 } from "@/providers/openai/model/openai-model-catalog"
+import {
+  CODEX_ASTRA_REFERENCE,
+  MODELS_DEV_ASTRA_REFERENCE,
+} from "./fixtures/openai-astra-reference"
+
+test("advertises a Codex client version compatible with Astra", () => {
+  // The pinned official Astra catalog declares 0.153.0 as its minimum.
+  expect(Bun.semver.order(OPENAI_CODEX_CLIENT_VERSION, "0.153.0"))
+    .toBeGreaterThanOrEqual(0)
+})
 
 test("uses Codex availability and enriches matching IDs from models.dev", async () => {
   const publicRequests: Array<{
@@ -93,6 +104,7 @@ test("uses Codex availability and enriches matching IDs from models.dev", async 
       modelId: "account-only",
       accountId: "account-id",
       name: "Account Only",
+      supportsReasoning: true,
       reasoningEfforts: ["high"],
       defaultReasoningEffort: "high",
     },
@@ -101,6 +113,7 @@ test("uses Codex availability and enriches matching IDs from models.dev", async 
       modelId: "gpt-rich",
       accountId: "account-id",
       name: "GPT Rich Published",
+      supportsReasoning: true,
       reasoningEfforts: ["low", "medium"],
       defaultReasoningEffort: "medium",
       contextWindowTokens: 300_000,
@@ -110,6 +123,7 @@ test("uses Codex availability and enriches matching IDs from models.dev", async 
       modelId: "gpt-enriched",
       accountId: "account-id",
       name: "GPT Enriched",
+      supportsReasoning: true,
       reasoningEfforts: ["low", "high", "max"],
       defaultReasoningEffort: "high",
     },
@@ -144,6 +158,7 @@ test("keeps Codex models when models.dev enrichment fails", async () => {
     modelId: "codex-only",
     accountId: "account-id",
     name: "Codex Only",
+    supportsReasoning: true,
     reasoningEfforts: ["medium"],
     defaultReasoningEffort: "medium",
   }])
@@ -336,6 +351,7 @@ test("publishes account-authorized Fast variants beside their base models", asyn
     accountId: "account-id",
     name: "Current Fast Model Fast",
     serviceTier: "priority",
+    supportsReasoning: true,
     reasoningEfforts: ["medium"],
     defaultReasoningEffort: "medium",
   })
@@ -345,13 +361,146 @@ test("publishes account-authorized Fast variants beside their base models", asyn
     accountId: "account-id",
     name: "Legacy Model Fast",
     serviceTier: "priority",
+    supportsReasoning: true,
     reasoningEfforts: ["low"],
     defaultReasoningEffort: "low",
   })
   expect(models[4]).not.toHaveProperty("serviceTier")
+  expect(models[4]).not.toHaveProperty("supportsReasoning")
   expect(models.some((model) => model.id === "hidden-fast")).toBe(false)
   expect(Object.isFrozen(models[1])).toBe(true)
   expect(models[0]?.reasoningEfforts).toBe(models[1]?.reasoningEfforts)
+})
+
+test("inherits Astra's active Codex window and native efforts in its Fast variant", async () => {
+  const catalog = createOpenAiModelCatalog({
+    auth: catalogAuth(async () => Response.json({
+      models: [CODEX_ASTRA_REFERENCE],
+    })),
+    fetch: fetchImplementation(async () => Response.json({
+      openai: { models: { "gpt-6-astra": MODELS_DEV_ASTRA_REFERENCE } },
+    })),
+  })
+
+  const models = await catalog.load()
+  const [base, fast] = models
+
+  expect(models).toHaveLength(2)
+  if (!base) throw new Error("Expected a base Astra model")
+  expect(base).toEqual({
+    id: "gpt-6-astra",
+    modelId: "gpt-6-astra",
+    accountId: "account-id",
+    name: "GPT-6-Astra",
+    supportsReasoning: true,
+    reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    defaultReasoningEffort: "low",
+    // Neither Codex's 872k maximum nor models.dev's 1.05m is the active window.
+    contextWindowTokens: 272_000,
+  })
+  expect(fast).toEqual({
+    ...base,
+    id: "gpt-6-astra::fast",
+    name: "GPT-6-Astra Fast",
+    serviceTier: "priority",
+  })
+})
+
+test.each([
+  ["Astra without account membership", [{ slug: "account-only" }], ["account-only"]],
+  [
+    "Astra Fast without an account speed flag",
+    [{
+      ...CODEX_ASTRA_REFERENCE,
+      // Response.json omits these fields, leaving no account Fast authorization.
+      service_tiers: undefined,
+      additional_speed_tiers: undefined,
+    }],
+    ["gpt-6-astra"],
+  ],
+] as const)("does not publish %s from public metadata", async (_case, accountModels, ids) => {
+  const catalog = createOpenAiModelCatalog({
+    auth: catalogAuth(async () => Response.json({ models: accountModels })),
+    fetch: fetchImplementation(async () => Response.json({
+      openai: { models: { "gpt-6-astra": MODELS_DEV_ASTRA_REFERENCE } },
+    })),
+  })
+
+  const models = await catalog.load()
+
+  expect(models.map((model) => model.id)).toEqual([...ids])
+  expect(models.every((model) => model.serviceTier === undefined)).toBe(true)
+})
+
+test("uses verified Astra efforts when account reasoning and public enrichment are unavailable", async () => {
+  const catalog = createOpenAiModelCatalog({
+    auth: catalogAuth(async () => Response.json({
+      models: [{ slug: "gpt-6-astra", service_tiers: [{ id: "priority" }] }],
+    })),
+    fetch: fetchImplementation(async () => new Response(null, { status: 503 })),
+  })
+  const models = await catalog.load()
+  expect(models.map((model) => model.id)).toEqual(["gpt-6-astra", "gpt-6-astra::fast"])
+  for (const model of models) {
+    expect(model.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh", "max"])
+    expect(model.defaultReasoningEffort).toBe("low")
+    expect(model.supportsReasoning).toBe(true)
+    expect(model).not.toHaveProperty("contextWindowTokens")
+  }
+})
+
+test.each([
+  { efforts: ["none", "low"], available: true },
+  { efforts: ["none"], available: false },
+])("does not expose unsupported native Astra efforts: $efforts", async ({ efforts, available }) => {
+  const catalog = createOpenAiModelCatalog({
+    auth: catalogAuth(async () => Response.json({ models: [
+      { slug: "other-account-model" },
+      { slug: "gpt-6-astra", supported_reasoning_levels: efforts, default_reasoning_level: "none" },
+    ] })),
+    fetch: fetchImplementation(async () => Response.json({})),
+  })
+  const astra = (await catalog.load()).find((model) => model.id === "gpt-6-astra")
+  if (available) {
+    expect(astra?.reasoningEfforts).toEqual(["low"])
+    expect(astra?.defaultReasoningEffort).toBe("low")
+  } else {
+    expect(astra).toBeUndefined()
+  }
+})
+
+test("asserts reasoning capability only when normalized efforts establish it", async () => {
+  const catalog = createOpenAiModelCatalog({
+    auth: catalogAuth(async () => Response.json({
+      models: [
+        { slug: "missing-metadata" },
+        { slug: "published-none" },
+        { slug: "account-none", supported_reasoning_levels: ["none"] },
+        { slug: "mixed-efforts", supported_reasoning_levels: ["none", "low"] },
+        { slug: "default-only", default_reasoning_level: "high" },
+      ],
+    })),
+    fetch: fetchImplementation(async () => Response.json({
+      openai: {
+        models: {
+          "published-none": { reasoning: false },
+          // An account's explicit effort list remains authoritative over public data.
+          "account-none": { reasoning_options: [{ type: "effort", values: ["high"] }] },
+        },
+      },
+    })),
+  })
+
+  const models = await catalog.load()
+  expect(models).toHaveLength(5)
+  for (const model of models) {
+    if (model.id === "mixed-efforts" || model.id === "default-only") {
+      expect(model.supportsReasoning).toBe(true)
+    } else {
+      expect(model.reasoningEfforts).toEqual(["none"])
+      expect(model).not.toHaveProperty("supportsReasoning")
+    }
+  }
 })
 
 test("does not synthesize unsupported, default-only, or colliding Fast entries", async () => {

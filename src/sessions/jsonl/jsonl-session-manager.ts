@@ -1,10 +1,15 @@
+import { Buffer } from "node:buffer"
 import { createHash, randomUUID } from "node:crypto"
 import {
     appendFileSync,
     chmodSync,
+    closeSync,
     existsSync,
+    fstatSync,
     mkdirSync,
+    openSync,
     readFileSync,
+    readSync,
     realpathSync,
     renameSync,
     rmSync,
@@ -116,6 +121,15 @@ export class JsonlSessionManager implements ISessionManager {
         else this.replaceFile(this.currentContents() + serializeRecords(records))
         this.memory.appendMessage(message)
         this.persistedSessionIds.add(message.sessionId)
+    }
+
+    // Proposal/checkpoint saves advance the memory token only after persistence
+    // succeeds; createSession also allocates a token for its staged, memory-only
+    // state. Forward that authority rather than deriving a token from timestamps
+    // or rereading JSONL on each streaming publication.
+    readonly getPresentationRevision = (sessionId: string): number => {
+        this.assertActive()
+        return this.memory.getPresentationRevision(sessionId)
     }
 
     readonly getFileChangeProposals = (
@@ -374,12 +388,35 @@ export class JsonlSessionManager implements ISessionManager {
     }
 
     private appendRecords(records: readonly unknown[]): void {
-        const contents = existsSync(this.filePath)
-            ? readFileSync(this.filePath, "utf8")
-            : ""
-        const separator = contents.length === 0 || contents.endsWith("\n")
-            ? ""
-            : "\n"
+        /*
+         * Steady-state appends need only the final LF byte, not a replay of the
+         * growing UTF-8 log. Stat and inspect one byte on the same read-only
+         * descriptor; missing/empty files need no separator, and appendFileSync
+         * still owns creation. Replay and malformed-tail repair belong to load(),
+         * while first-session metadata and its first record still use replaceFile().
+         *
+         * Always close the probe descriptor, including on stat/read failure.
+         * A short read or any probe/close error must stop before appending rather
+         * than guess a separator. The append remains synchronous: callers update
+         * memory and acknowledge message_end only after persistence succeeds.
+         * This preserves the existing barrier, not fsync or multi-writer atomicity.
+         */
+        let separator = ""
+        if (existsSync(this.filePath)) {
+            const descriptor = openSync(this.filePath, "r")
+            try {
+                const { size } = fstatSync(descriptor)
+                if (size > 0) {
+                    const lastByte = Buffer.alloc(1)
+                    if (readSync(descriptor, lastByte, 0, 1, size - 1) !== 1) {
+                        throw new Error("Unable to read the final byte of the session log")
+                    }
+                    if (lastByte[0] !== 0x0a) separator = "\n"
+                }
+            } finally {
+                closeSync(descriptor)
+            }
+        }
         appendFileSync(
             this.filePath,
             `${separator}${serializeRecords(records)}`,

@@ -1,14 +1,46 @@
 # OpenTUI rendering
 
-Buli currently targets OpenTUI 0.5.8. This document records the rendering
+Buli currently targets OpenTUI 0.5.10. This document records the rendering
 choices that are easy to lose when adding screens or upgrading OpenTUI.
+
+## Temporary diff rendering patch
+
+`patches/@opentui%2Fcore@0.5.10.patch` backports the background paint-window
+fix from [OpenTUI PR #1462](https://github.com/anomalyco/opentui/pull/1462)
+(merge commit `fccce4ec138aaa1ce6ded846adf1d844394e6f8b`). The upstream fix was
+merged on 2026-09-02 but is not included in the published 0.5.10 release. Remove
+this temporary patch once upgrading to a release that contains the fix; do not
+assume a particular next release number.
+
+Without the patch, `LineNumberRenderable` paints backgrounds for rows above
+the screen. Bun's unsigned `fillRect` coordinates clamp negative Y to zero,
+leaving a green or red strip at the top of the transcript. The patch bounds
+background painting to destination-buffer rows in both the Bun and Node
+entrypoints, preserving line numbers, colors, wrapping, and scroll extent.
+It does not backport the rest of #1462's performance changes.
+
+Both `@opentui/core` and `@opentui/react` are pinned to 0.5.10 while this patch
+is required. Bun applies it automatically through `patchedDependencies`,
+including with `bun install --frozen-lockfile` in CI and release builds.
+
+When removing the patch:
+
+1. Verify that the target OpenTUI release includes #1462 or an equivalent fix.
+2. Upgrade `@opentui/core` and `@opentui/react` together to the same release.
+3. Remove the patch file and its `patchedDependencies` entry from `package.json`,
+   then run `bun install` to regenerate `bun.lock`.
+4. Keep the scrolling regression in `test/transcript.test.tsx` and verify it
+   passes without the patch, including background colors, numbered text,
+   scrolling back, and narrow resizing for proposals and Markdown diffs.
+5. Run `bun run typecheck`, `bun run test`, and a compiled CLI smoke test.
 
 ## Theme and layout
 
 - `src/terminal/theme.ts` is the only source of shared UI and syntax colors.
-- Root views leave unused cells transparent so the terminal retains its own
-  background. The interface uses the original green, amber, pink, and red
-  accents rather than a separate blue application palette.
+- Root views leave unused cells transparent within the render tree, while the
+  shared renderer clears them to `theme.surface` (`#000000`). The application
+  deliberately uses a black background rather than inheriting the terminal's
+  background, with the original green, amber, pink, and red accents.
 - Home renders the fixed Buli text logo. The chat composer remains flush with
   the viewport: workspace path, bordered editor, horizontal status, and plain
   command list.

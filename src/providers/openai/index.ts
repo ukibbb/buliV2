@@ -9,8 +9,9 @@ export type {
 } from "@/providers/openai/auth/openai-auth"
 export {
     DEFAULT_OPENAI_MODEL_ID,
-    OpenAiAgentModel,
-} from "@/providers/openai/model/openai-agent-model"
+    DEFAULT_OPENAI_REASONING_EFFORTS,
+} from "@/providers/openai/constants"
+export { OpenAiAgentModel } from "@/providers/openai/model/openai-agent-model"
 export {
     createOpenAiModelCatalog,
 } from "@/providers/openai/model/openai-model-catalog"

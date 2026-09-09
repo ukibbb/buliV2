@@ -1,15 +1,17 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import type { IBuliPromptInput } from "@/app/contracts"
 import {
   BuliApplicationRuntime,
   type IBuliAgentRuntimeConfig,
+  type IBuliModelRuntimeConfig,
+  type IBuliRuntimeOptions,
 } from "@/app/runtime"
 import type {
   IAgentModel,
   TAgentModelEvent,
   IAgentModelRequest,
 } from "@/agent/model"
-import type { IAgentTool } from "@/agent/tool"
+import { defineAgentTool } from "@/agent/tool"
 import {
   InMemorySessionManager,
   type ISessionManager,
@@ -29,6 +31,62 @@ const TEST_AGENTS: readonly IBuliAgentRuntimeConfig[] = [{
   systemPrompt: "System",
   tools: [],
 }]
+
+const CATALOG_BASE: IBuliModelRuntimeConfig = {
+  id: "base",
+  name: "Base",
+  model,
+  modelProfile: {
+    providerId: "test",
+    modelId: "base",
+    contextWindowTokens: 200_000,
+  },
+  reasoningEfforts: ["medium", "high"],
+  defaultReasoningEffort: "high",
+}
+const CATALOG_FAST: IBuliModelRuntimeConfig = {
+  ...CATALOG_BASE,
+  id: "base::fast",
+  name: "Base Fast",
+  fallbackSelectionId: "base",
+}
+const CATALOG_OTHER: IBuliModelRuntimeConfig = {
+  id: "other",
+  name: "Other",
+  model,
+  reasoningEfforts: ["medium", "high"],
+  defaultReasoningEffort: "medium",
+}
+// An unrelated first entry proves priority/fallback selection is not list order.
+const CATALOG_MODELS = [CATALOG_OTHER, CATALOG_BASE, CATALOG_FAST]
+
+function runtimeWithPreferredModels(
+  options: Partial<IBuliRuntimeOptions> = {},
+): BuliApplicationRuntime {
+  let sessionNumber = 0
+  return new BuliApplicationRuntime({
+    workspaceRoot: WORKSPACE_ROOT,
+    manager: new InMemorySessionManager(),
+    agents: TEST_AGENTS,
+    defaultAgentId: TEST_AGENT_ID,
+    models: [{
+      ...CATALOG_BASE,
+      name: "Provisional base",
+      modelProfile: {
+        providerId: "test",
+        modelId: "base",
+        contextWindowTokens: 1_000,
+      },
+      reasoningEfforts: ["low", "medium", "high"],
+      defaultReasoningEffort: "medium",
+    }],
+    selection: { modelId: "base", reasoningEffort: "medium" },
+    preferredModelIds: ["base::fast", "base"],
+    loadModels: async () => CATALOG_MODELS,
+    generateId: () => `session-${++sessionNumber}`,
+    ...options,
+  })
+}
 
 function runtimeWith(
   modelOverride: IAgentModel = model,
@@ -83,15 +141,16 @@ test("application runtime submits prompts into its session view", async () => {
         yield* events
       },
   })
+  expect(runtime.getSnapshot()).not.toHaveProperty("modelCatalog")
   const input: IBuliPromptInput = { sessionId: "session-1", text: "Hello" }
   const view = createSession(runtime)
   const initial = view.getSnapshot()
 
-  const submission = runtime.submitPrompt(input)
-  await submission.accepted
-  await submission.settled
+  const promptRun = runtime.submitPrompt(input)
+  await promptRun.promptPersisted
+  await promptRun.runFinished
 
-  expect(submission.sessionId).toBe("session-1")
+  expect(promptRun.sessionId).toBe("session-1")
   expect(view.getSnapshot()).not.toBe(initial)
   expect(view.getSnapshot().messages.map((message) => message.role)).toEqual([
     "user",
@@ -102,10 +161,10 @@ test("application runtime submits prompts into its session view", async () => {
   )
   expect(view.getSnapshot().messages).toEqual([
     expect.objectContaining({
-      runId: submission.runId,
+      runId: promptRun.runId,
       source: "prompt",
     }),
-    expect.objectContaining({ runId: submission.runId }),
+    expect.objectContaining({ runId: promptRun.runId }),
   ])
 
   await runtime.dispose()
@@ -174,11 +233,11 @@ test("application runtime queues and clears steering and follow-up", async () =>
     },
   })
   const view = createSession(runtime)
-  const submission = runtime.submitPrompt({
+  const promptRun = runtime.submitPrompt({
     sessionId: "session-1",
     text: "Initial prompt",
   })
-  await submission.accepted
+  await promptRun.promptPersisted
   await firstStarted.promise
 
   runtime.steer("session-1", "Restore this")
@@ -191,30 +250,30 @@ test("application runtime queues and clears steering and follow-up", async () =>
   runtime.followUp("session-1", "Then summarize it")
   expect(view.getSnapshot().pendingSteeringMessages).toEqual([
     expect.objectContaining({
-      runId: submission.runId,
+      runId: promptRun.runId,
       source: "steer",
       content: "Adjust the answer",
     }),
   ])
   expect(view.getSnapshot().pendingFollowUpMessages).toEqual([
     expect.objectContaining({
-      runId: submission.runId,
+      runId: promptRun.runId,
       source: "followUp",
       content: "Then summarize it",
     }),
   ])
 
   releaseFirst.resolve()
-  await submission.settled
+  await promptRun.runFinished
 
   expect(requests).toHaveLength(3)
   expect(requests[1]?.messages.at(-1)).toMatchObject({
-    runId: submission.runId,
+    runId: promptRun.runId,
     source: "steer",
     content: "Adjust the answer",
   })
   expect(requests[2]?.messages.at(-1)).toMatchObject({
-    runId: submission.runId,
+    runId: promptRun.runId,
     source: "followUp",
     content: "Then summarize it",
   })
@@ -280,12 +339,12 @@ test("application runtime auto-opens persisted history when submitting", async (
   })
   const runtime = runtimeWith(model, TEST_AGENTS, manager)
 
-  const submission = runtime.submitPrompt({
+  const promptRun = runtime.submitPrompt({
     sessionId: "stored-session",
     text: "New prompt",
   })
-  await submission.accepted
-  await submission.settled
+  await promptRun.promptPersisted
+  await promptRun.runFinished
   const first = runtime.openSession("stored-session")
   const second = runtime.openSession("stored-session")
 
@@ -294,10 +353,10 @@ test("application runtime auto-opens persisted history when submitting", async (
     expect.objectContaining({ content: "Stored prompt", runId: "stored-run" }),
     expect.objectContaining({
       content: "New prompt",
-      runId: submission.runId,
+      runId: promptRun.runId,
       source: "prompt",
     }),
-    expect.objectContaining({ role: "assistant", runId: submission.runId }),
+    expect.objectContaining({ role: "assistant", runId: promptRun.runId }),
   ])
 
   await runtime.dispose()
@@ -305,12 +364,12 @@ test("application runtime auto-opens persisted history when submitting", async (
 
 test("application runtime resolves fixed prompt and tools from an agent", async () => {
   const requests: IAgentModelRequest[] = []
-  const reviewTool: IAgentTool = {
+  const reviewTool = defineAgentTool({
     name: "review",
     description: "Review code",
     inputSchema: {},
     execute: async () => "reviewed",
-  }
+  })
   const agents: readonly IBuliAgentRuntimeConfig[] = [
     ...TEST_AGENTS,
     {
@@ -331,12 +390,12 @@ test("application runtime resolves fixed prompt and tools from an agent", async 
     title: "Review this",
   })
 
-  const submission = runtime.submitPrompt({
+  const promptRun = runtime.submitPrompt({
     sessionId: reviewSession.id,
     text: "Review this",
   })
-  await submission.accepted
-  await submission.settled
+  await promptRun.promptPersisted
+  await promptRun.runFinished
 
   expect(requests[0]?.systemPrompt).toBe("Review system")
   expect(requests[0]?.tools).toEqual([{
@@ -400,27 +459,27 @@ test("application runtime applies global selection to the next prompt", async ()
     notifications += 1
   })
 
-  const firstSubmission = runtime.submitPrompt({
+  const firstRun = runtime.submitPrompt({
     sessionId: "session-1",
     text: "First",
   })
-  await firstSubmission.accepted
-  await firstSubmission.settled
+  await firstRun.promptPersisted
+  await firstRun.runFinished
   runtime.selectModel("second")
   const modelSnapshot = runtime.getSnapshot()
-  const secondSubmission = runtime.submitPrompt({
+  const secondRun = runtime.submitPrompt({
     sessionId: "session-1",
     text: "Second",
   })
-  await secondSubmission.accepted
-  await secondSubmission.settled
+  await secondRun.promptPersisted
+  await secondRun.runFinished
   runtime.selectReasoningEffort("high")
-  const thirdSubmission = runtime.submitPrompt({
+  const thirdRun = runtime.submitPrompt({
     sessionId: "session-1",
     text: "Third",
   })
-  await thirdSubmission.accepted
-  await thirdSubmission.settled
+  await thirdRun.promptPersisted
+  await thirdRun.runFinished
 
   expect(runs).toEqual([
     "first:medium",
@@ -509,7 +568,501 @@ test("application runtime replaces models atomically and reconciles selection", 
   expect(Object.isFrozen(runtime.getSnapshot().models[0])).toBe(true)
   expect(Object.isFrozen(runtime.getSnapshot().models[0]?.reasoningEfforts)).toBe(true)
   expect(notifications).toBe(1)
+  expect(runtime.getSnapshot()).not.toHaveProperty("modelCatalog")
 
+  await runtime.dispose()
+})
+
+test("preferred initial models require discovery, including an empty preference list", async () => {
+  expect(() => new BuliApplicationRuntime({
+    workspaceRoot: WORKSPACE_ROOT,
+    manager: new InMemorySessionManager(),
+    agents: TEST_AGENTS,
+    defaultAgentId: TEST_AGENT_ID,
+    models: CATALOG_MODELS,
+    selection: { modelId: "base", reasoningEffort: "medium" },
+    preferredModelIds: [],
+  })).toThrow("preferredModelIds requires loadModels")
+
+  const runtime = runtimeWithPreferredModels({ preferredModelIds: [] })
+  expect(runtime.getSnapshot().models).toEqual([])
+  expect(runtime.getSnapshot().modelCatalog).toEqual({ status: "loading" })
+  await runtime.refreshModels()
+  expect(runtime.getSnapshot().selection).toEqual({
+    modelId: "base",
+    reasoningEffort: "high",
+  })
+  await runtime.dispose()
+})
+
+test("first discovery prefers Fast and its catalog default over the provisional base", async () => {
+  const release = Promise.withResolvers<readonly IBuliModelRuntimeConfig[]>()
+  const preferences = ["base::fast", "base"]
+  const runtime = runtimeWithPreferredModels({
+    preferredModelIds: preferences,
+    loadModels: () => release.promise,
+  })
+  const initial = runtime.getSnapshot()
+  const refresh = runtime.refreshModels()
+  // Neither caller mutation nor failed picker validation is explicit selection.
+  preferences.splice(0, preferences.length, "other")
+  expect(() => runtime.selectModel("missing")).toThrow("Unknown model")
+  expect(() => runtime.selectReasoningEffort("max")).toThrow("Unsupported reasoning")
+  release.resolve(CATALOG_MODELS)
+  await refresh
+
+  expect(runtime.getSnapshot().selection).toEqual({
+    modelId: "base::fast",
+    reasoningEffort: "high",
+  })
+  expect(runtime.getSnapshot().modelCatalog).toEqual({ status: "ready" })
+  expect(runtime.getSnapshot().models.map((entry) => entry.id)).toEqual([
+    "other", "base", "base::fast",
+  ])
+  expect(runtime.getSnapshot().models[2]).not.toHaveProperty("model")
+  expect(runtime.getSnapshot().models[2]).not.toHaveProperty("modelProfile")
+  expect(runtime.getSnapshot().models[2]).not.toHaveProperty("fallbackSelectionId")
+  expect(Object.isFrozen(runtime.getSnapshot().modelCatalog)).toBe(true)
+  expect(initial.models).toEqual([])
+  expect(initial.modelCatalog).toEqual({ status: "loading" })
+  await runtime.dispose()
+})
+
+test("provisional models cannot generate or supply context limits, but sessions remain usable", async () => {
+  const release = Promise.withResolvers<readonly IBuliModelRuntimeConfig[]>()
+  const manager = new InMemorySessionManager()
+  manager.createSession({
+    id: "stored",
+    agentId: TEST_AGENT_ID,
+    title: "Stored session",
+    createdAt: 1,
+    updatedAt: 1,
+  })
+  for (let index = 0; index < 8; index += 1) {
+    manager.appendMessage({
+      id: `message-${index}`,
+      sessionId: "stored",
+      runId: `run-${index}`,
+      role: "user",
+      source: "prompt",
+      content: `Historical prompt ${index} `.repeat(100),
+      createdAt: index + 1,
+    })
+  }
+  const createStoredSession = spyOn(manager, "createSession")
+  const appendMessage = spyOn(manager, "appendMessage")
+  let provisionalCalls = 0
+  let discoveredCalls = 0
+  const runtime = runtimeWithPreferredModels({
+    manager,
+    models: [{
+      ...CATALOG_BASE,
+      model: { async *stream() { provisionalCalls += 1 } },
+    }],
+    loadModels: () => release.promise,
+  })
+  const stored = runtime.openSession("stored")
+  const assertBlocked = (): void => {
+    expect(runtime.getSnapshot().models).toEqual([])
+    expect(runtime.getSnapshot().modelCatalog).toEqual({ status: "loading" })
+    expect(() => runtime.submitPrompt({ text: "New prompt" })).toThrow(
+      "Model catalog is loading",
+    )
+    expect(() => runtime.submitPrompt({ sessionId: "stored", text: "Continue" }))
+      .toThrow("Model catalog is loading")
+    expect(() => runtime.compactSession("stored")).toThrow("Model catalog is loading")
+    expect(stored.getSnapshot().contextUsage).not.toHaveProperty("contextWindowTokens")
+    expect(stored.getSnapshot().contextUsage?.shouldCompact).toBe(false)
+    expect(createStoredSession).not.toHaveBeenCalled()
+    expect(appendMessage).not.toHaveBeenCalled()
+    expect(manager.getCompactionCheckpoint("stored")).toBeUndefined()
+    expect(provisionalCalls).toBe(0)
+  }
+  assertBlocked()
+  const refresh = runtime.refreshModels()
+  assertBlocked()
+  const created = createSession(runtime)
+  expect(runtime.openSession("session-1")).toBe(created)
+  expect(created.getSnapshot().contextUsage).not.toHaveProperty("contextWindowTokens")
+  await runtime.abort("stored")
+  await runtime.abort("session-1")
+  expect(runtime.listSessions()).toHaveLength(2)
+
+  release.resolve([CATALOG_BASE, {
+    ...CATALOG_FAST,
+    model: {
+      async *stream() {
+        discoveredCalls += 1
+        yield { type: "finish", reason: "stop" }
+      },
+    },
+  }])
+  await refresh
+  expect(stored.getSnapshot().contextUsage?.contextWindowTokens).toBe(200_000)
+  const run = runtime.submitPrompt({ sessionId: "session-1", text: "Ready prompt" })
+  expect(run).not.toBeInstanceOf(Promise)
+  await run.promptPersisted
+  await run.runFinished
+  expect(discoveredCalls).toBe(1)
+  expect(provisionalCalls).toBe(0)
+  createStoredSession.mockRestore()
+  appendMessage.mockRestore()
+  await runtime.dispose()
+})
+
+test.each([
+  { models: [CATALOG_OTHER, CATALOG_BASE], selected: "base", effort: "high" },
+  { models: [CATALOG_OTHER], selected: "other", effort: "medium" },
+])("initial missing preferences explicitly fall back to $selected", async ({ models, selected, effort }) => {
+  let registrations: readonly IBuliModelRuntimeConfig[] = models
+  const runtime = runtimeWithPreferredModels({ loadModels: async () => registrations })
+  await runtime.refreshModels()
+  expect(runtime.getSnapshot().selection).toEqual({
+    modelId: selected,
+    reasoningEffort: effort,
+  })
+  expect(runtime.getSnapshot().modelCatalog).toEqual({
+    status: "ready",
+    message: `Model "base::fast" is unavailable. Using "${selected}" instead.`,
+  })
+  const fallback = runtime.getSnapshot()
+  expect(() => runtime.selectModel("missing")).toThrow("Unknown model")
+  expect(runtime.getSnapshot()).toBe(fallback)
+  // A deliberate choice of the fallback itself dismisses the advisory notice.
+  runtime.selectModel(selected)
+  expect(runtime.getSnapshot().modelCatalog).toEqual({ status: "ready" })
+  expect(runtime.getSnapshot()).not.toBe(fallback)
+  registrations = CATALOG_MODELS
+  await runtime.refreshModels()
+  expect(runtime.getSnapshot().selection.modelId).toBe(selected)
+  await runtime.dispose()
+})
+
+test.each([
+  { modelId: "base", effort: "medium", selected: "base", selectedEffort: "medium" },
+  { modelId: "other", effort: "high", selected: "other", selectedEffort: "high" },
+  { modelId: "other", effort: "low", selected: "other", selectedEffort: "medium" },
+  { modelId: undefined, effort: "medium", selected: "base::fast", selectedEffort: "medium" },
+  { modelId: undefined, effort: "low", selected: "base::fast", selectedEffort: "high" },
+  { modelId: "base", effort: undefined, selected: "base", selectedEffort: "high" },
+  { modelId: "vanishing", effort: "high", selected: "base::fast", selectedEffort: "high" },
+] as const)("discovery respects explicit model $modelId / effort $effort made during the request", async ({
+  modelId, effort, selected, selectedEffort,
+}) => {
+  const release = Promise.withResolvers<readonly IBuliModelRuntimeConfig[]>()
+  const runtime = runtimeWithPreferredModels({
+    models: [...CATALOG_MODELS, { ...CATALOG_OTHER, id: "vanishing" }].map((entry) => ({
+      ...entry,
+      reasoningEfforts: ["low", "medium", "high"],
+      defaultReasoningEffort: "medium",
+    })),
+    loadModels: () => release.promise,
+  })
+  const refresh = runtime.refreshModels()
+  if (modelId !== undefined) runtime.selectModel(modelId)
+  if (effort !== undefined) runtime.selectReasoningEffort(effort)
+  expect(runtime.getSnapshot().models).toEqual([])
+  release.resolve(CATALOG_MODELS)
+  await refresh
+  expect(runtime.getSnapshot().selection).toEqual({
+    modelId: selected,
+    reasoningEffort: selectedEffort,
+  })
+  if (modelId === "vanishing") {
+    expect(runtime.getSnapshot().modelCatalog?.message).toContain('"vanishing" is unavailable')
+  } else {
+    expect(runtime.getSnapshot().modelCatalog).toEqual({ status: "ready" })
+  }
+  await runtime.dispose()
+})
+
+test("provisional model-switch defaults do not erase an explicit reasoning choice", async () => {
+  const release = Promise.withResolvers<readonly IBuliModelRuntimeConfig[]>()
+  const runtime = runtimeWithPreferredModels({
+    models: [CATALOG_BASE, { ...CATALOG_OTHER, reasoningEfforts: ["medium"] }],
+    loadModels: () => release.promise,
+  })
+  const refresh = runtime.refreshModels()
+  runtime.selectReasoningEffort("high")
+  runtime.selectModel("other")
+  expect(runtime.getSnapshot().selection.reasoningEffort).toBe("medium")
+  release.resolve(CATALOG_MODELS)
+  await refresh
+  expect(runtime.getSnapshot().selection).toEqual({
+    modelId: "other",
+    reasoningEffort: "high",
+  })
+  await runtime.dispose()
+})
+
+test.each([
+  { failure: new Error("Login required"), message: "Login required" },
+  { failure: [], message: "At least one model must be registered" },
+  { failure: [CATALOG_BASE, CATALOG_BASE], message: "Duplicate model: base" },
+])("initial catalog failure stays blocked and retries without consuming preference: $message", async ({ failure, message }) => {
+  const retry = Promise.withResolvers<readonly IBuliModelRuntimeConfig[]>()
+  let loadCalls = 0
+  const runtime = runtimeWithPreferredModels({
+    loadModels: async () => {
+      loadCalls += 1
+      if (loadCalls > 1) return retry.promise
+      if (failure instanceof Error) throw failure
+      return failure
+    },
+  })
+  const statuses: (string | undefined)[] = []
+  runtime.subscribe(() => statuses.push(runtime.getSnapshot().modelCatalog?.status))
+  await expect(runtime.refreshModels()).rejects.toThrow(message)
+  expect(runtime.getSnapshot().modelCatalog?.status).toBe("error")
+  expect(runtime.getSnapshot().modelCatalog?.message).toContain(message)
+  expect(runtime.getSnapshot().models).toEqual([])
+  expect(() => runtime.submitPrompt({ text: "Blocked" })).toThrow("Model catalog unavailable")
+  expect(runtime.listSessions()).toEqual([])
+  const session = createSession(runtime)
+  expect(session.getSnapshot().contextUsage).not.toHaveProperty("contextWindowTokens")
+  expect(() => runtime.compactSession("session-1")).toThrow("Model catalog unavailable")
+  await runtime.abort("session-1")
+
+  const refresh = runtime.refreshModels()
+  expect(runtime.refreshModels()).toBe(refresh)
+  expect(runtime.getSnapshot().modelCatalog).toEqual({ status: "loading" })
+  retry.resolve(CATALOG_MODELS)
+  await refresh
+  expect(loadCalls).toBe(2)
+  expect(statuses).toEqual(["loading", "error", "loading", "ready"])
+  expect(runtime.getSnapshot().selection).toEqual({
+    modelId: "base::fast",
+    reasoningEffort: "high",
+  })
+  expect(session.getSnapshot().contextUsage?.contextWindowTokens).toBe(200_000)
+  await runtime.dispose()
+})
+
+test("refresh errors after readiness retain an executable catalog and publish only a warning", async () => {
+  let response = Promise.resolve<readonly IBuliModelRuntimeConfig[]>(CATALOG_MODELS)
+  const runtime = runtimeWithPreferredModels({ loadModels: () => response })
+  await runtime.refreshModels()
+  const ready = runtime.getSnapshot()
+  const failure = Promise.withResolvers<readonly IBuliModelRuntimeConfig[]>()
+  response = failure.promise
+  const refresh = runtime.refreshModels()
+  expect(runtime.getSnapshot()).toBe(ready)
+  const run = runtime.submitPrompt({ text: "Usable during refresh" })
+  await run.runFinished
+  failure.reject(new Error("Catalog offline"))
+  await expect(refresh).rejects.toThrow("Catalog offline")
+  expect(runtime.getSnapshot().models).toEqual(ready.models)
+  expect(runtime.getSnapshot().selection).toEqual(ready.selection)
+  expect(runtime.getSnapshot().modelCatalog).toEqual({
+    status: "ready",
+    message: "Model catalog refresh failed; using the previous catalog. Catalog offline",
+  })
+  const nextRun = runtime.submitPrompt({ sessionId: run.sessionId, text: "Still usable" })
+  await nextRun.runFinished
+  await expect(runtime.compactSession(run.sessionId)).resolves.toBeUndefined()
+
+  response = Promise.resolve([CATALOG_BASE, CATALOG_BASE])
+  await expect(runtime.refreshModels()).rejects.toThrow("Duplicate model: base")
+  expect(runtime.getSnapshot().modelCatalog?.status).toBe("ready")
+  expect(runtime.getSnapshot().models).toEqual(ready.models)
+  expect(runtime.getSnapshot().selection).toEqual(ready.selection)
+  response = Promise.resolve(CATALOG_MODELS)
+  await runtime.refreshModels()
+  expect(runtime.getSnapshot().modelCatalog).toEqual({ status: "ready" })
+  await runtime.dispose()
+})
+
+test("later refreshes preserve selection, reconcile removed Fast to base, and do not reapply preference", async () => {
+  let registrations: readonly IBuliModelRuntimeConfig[] = CATALOG_MODELS
+  const runtime = runtimeWithPreferredModels({ loadModels: async () => registrations })
+  await runtime.refreshModels()
+  runtime.selectModel("other")
+  runtime.selectReasoningEffort("medium")
+  await runtime.refreshModels()
+  expect(runtime.getSnapshot().selection).toEqual({
+    modelId: "other",
+    reasoningEffort: "medium",
+  })
+
+  runtime.selectModel("base::fast")
+  registrations = [CATALOG_OTHER, CATALOG_BASE]
+  await runtime.refreshModels()
+  expect(runtime.getSnapshot().selection).toEqual({
+    modelId: "base",
+    reasoningEffort: "medium",
+  })
+  expect(runtime.getSnapshot().modelCatalog).toEqual({
+    status: "ready",
+    message: 'Model "base::fast" is unavailable. Using "base" instead.',
+  })
+  registrations = CATALOG_MODELS
+  await runtime.refreshModels()
+  expect(runtime.getSnapshot().selection.modelId).toBe("base")
+
+  registrations = [CATALOG_OTHER]
+  await runtime.refreshModels()
+  expect(runtime.getSnapshot().selection.modelId).toBe("other")
+  expect(runtime.getSnapshot().modelCatalog?.message).toBe(
+    'Model "base" is unavailable. Using "other" instead.',
+  )
+  await runtime.dispose()
+})
+
+test("a discovered active run keeps its adapter, effort and context limit across refresh and follow-up", async () => {
+  const started = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const calls: string[] = []
+  const original: IAgentModel = {
+    async *stream(request) {
+      calls.push(`original:${request.reasoningEffort}`)
+      started.resolve()
+      await release.promise
+      yield { type: "finish", reason: "stop" }
+    },
+  }
+  const replacement: IAgentModel = {
+    async *stream(request) {
+      calls.push(`replacement:${request.reasoningEffort}`)
+      yield { type: "finish", reason: "stop" }
+    },
+  }
+  let fast = { ...CATALOG_FAST, model: original }
+  const runtime = runtimeWithPreferredModels({
+    loadModels: async () => [CATALOG_BASE, fast],
+  })
+  await runtime.refreshModels()
+  const run = runtime.submitPrompt({ text: "First" })
+  await run.promptPersisted
+  await started.promise
+  runtime.followUp(run.sessionId, "Follow up on the same run")
+  fast = {
+    ...CATALOG_FAST,
+    model: replacement,
+    reasoningEfforts: ["medium"],
+    defaultReasoningEffort: "medium",
+    modelProfile: { providerId: "test", modelId: "base", contextWindowTokens: 300_000 },
+  }
+  await runtime.refreshModels()
+  expect(runtime.getSnapshot().selection.reasoningEffort).toBe("medium")
+  const session = runtime.openSession(run.sessionId)
+  expect(session.getSnapshot().contextUsage?.contextWindowTokens).toBe(200_000)
+  release.resolve()
+  await run.runFinished
+  expect(session.getSnapshot().contextUsage?.contextWindowTokens).toBe(300_000)
+  const next = runtime.submitPrompt({ sessionId: run.sessionId, text: "Next run" })
+  await next.runFinished
+  expect(calls).toEqual(["original:high", "original:high", "replacement:medium"])
+  await runtime.dispose()
+})
+
+test.each(["abort", "dispose"] as const)("%s prevents late initial catalog registration from an uncancellable loader", async (operation) => {
+  const release = Promise.withResolvers<readonly IBuliModelRuntimeConfig[]>()
+  const controller = new AbortController()
+  const runtime = runtimeWithPreferredModels({ loadModels: () => release.promise })
+  let notifications = 0
+  runtime.subscribe(() => { notifications += 1 })
+  const refresh = runtime.refreshModels(controller.signal)
+  // The unsignalled waiter observes when even a cancellation-ignoring loader exits.
+  const shared = runtime.refreshModels()
+  const loading = runtime.getSnapshot()
+  if (operation === "dispose") await runtime.dispose()
+  else {
+    controller.abort(new Error("Discovery cancelled"))
+    await expect(refresh).rejects.toThrow("Discovery cancelled")
+  }
+  release.resolve(CATALOG_MODELS)
+  await expect(refresh).rejects.toThrow(
+    operation === "dispose" ? "Buli runtime is shutting down" : "Discovery cancelled",
+  )
+  await expect(shared).rejects.toThrow()
+  expect(runtime.getSnapshot().models).toEqual([])
+  expect(runtime.getSnapshot().selection.modelId).toBe("base")
+  if (operation === "dispose") {
+    expect(runtime.getSnapshot()).toBe(loading)
+    expect(notifications).toBe(1)
+  } else {
+    expect(runtime.getSnapshot().modelCatalog?.status).toBe("error")
+    await runtime.refreshModels()
+    expect(runtime.getSnapshot().selection.modelId).toBe("base::fast")
+    await runtime.dispose()
+  }
+})
+
+test("loading observers reenter the installed refresh flight and observer errors cannot break publication", async () => {
+  const release = Promise.withResolvers<readonly IBuliModelRuntimeConfig[]>()
+  const observerError = new Error("Observer failed")
+  const logError = spyOn(console, "error").mockImplementation(() => {})
+  let loadCalls = 0
+  const joined: Promise<void>[] = []
+  const statuses: (string | undefined)[] = []
+  const runtime = runtimeWithPreferredModels({
+    loadModels: () => {
+      loadCalls += 1
+      joined.push(runtime.refreshModels())
+      return release.promise
+    },
+  })
+  runtime.subscribe(() => {
+    if (runtime.getSnapshot().modelCatalog?.status === "loading") {
+      joined.push(runtime.refreshModels())
+    }
+    throw observerError
+  })
+  runtime.subscribe(() => statuses.push(runtime.getSnapshot().modelCatalog?.status))
+  try {
+    const refresh = runtime.refreshModels()
+    expect(joined).toEqual([refresh, refresh])
+    expect(loadCalls).toBe(1)
+    release.resolve(CATALOG_MODELS)
+    await refresh
+    expect(statuses).toEqual(["loading", "ready"])
+    expect(runtime.getSnapshot().modelCatalog).toEqual({ status: "ready" })
+    expect(logError).toHaveBeenCalledTimes(2)
+    expect(logError).toHaveBeenCalledWith("Runtime observer failed", observerError)
+  } finally {
+    logError.mockRestore()
+    await runtime.dispose()
+  }
+})
+
+test("disposal from a loading observer prevents the loader and remaining notifications", async () => {
+  let loadCalls = 0
+  const runtime = runtimeWithPreferredModels({
+    loadModels: async () => {
+      loadCalls += 1
+      return CATALOG_MODELS
+    },
+  })
+  runtime.subscribe(() => { void runtime.dispose() })
+  let laterNotifications = 0
+  runtime.subscribe(() => { laterNotifications += 1 })
+  await expect(runtime.refreshModels()).rejects.toThrow("Buli runtime is shutting down")
+  await runtime.dispose()
+  expect(loadCalls).toBe(0)
+  expect(laterNotifications).toBe(0)
+  expect(runtime.getSnapshot().models).toEqual([])
+})
+
+test("aborting from a loading observer rejects the installed waiter without starting discovery", async () => {
+  const controller = new AbortController()
+  let loadCalls = 0
+  const runtime = runtimeWithPreferredModels({
+    loadModels: async () => {
+      loadCalls += 1
+      return CATALOG_MODELS
+    },
+  })
+  runtime.subscribe(() => {
+    if (runtime.getSnapshot().modelCatalog?.status === "loading") {
+      controller.abort(new Error("Discovery cancelled by observer"))
+    }
+  })
+  await expect(runtime.refreshModels(controller.signal)).rejects.toThrow(
+    "Discovery cancelled by observer",
+  )
+  expect(loadCalls).toBe(0)
+  expect(runtime.getSnapshot().modelCatalog?.status).toBe("error")
+  expect(runtime.getSnapshot().models).toEqual([])
   await runtime.dispose()
 })
 
@@ -793,26 +1346,26 @@ test("model refresh keeps an active run on its captured adapter", async () => {
     generateId: () => "session-1",
   })
   createSession(runtime)
-  const first = runtime.submitPrompt({
+  const firstRun = runtime.submitPrompt({
     sessionId: "session-1",
     text: "First",
   })
-  await first.accepted
+  await firstRun.promptPersisted
   await firstStarted.promise
 
   await runtime.refreshModels()
   expect(runtime.openSession("session-1").getSnapshot().contextUsage)
     .toMatchObject({ contextWindowTokens: 1_000 })
   releaseFirst.resolve()
-  await first.settled
+  await firstRun.runFinished
   expect(runtime.openSession("session-1").getSnapshot().contextUsage)
     .toMatchObject({ contextWindowTokens: 200_000 })
-  const second = runtime.submitPrompt({
+  const secondRun = runtime.submitPrompt({
     sessionId: "session-1",
     text: "Second",
   })
-  await second.accepted
-  await second.settled
+  await secondRun.promptPersisted
+  await secondRun.runFinished
 
   expect(runs).toEqual(["initial", "loaded"])
   expect(runtime.getSnapshot().selection).toEqual({
@@ -976,9 +1529,9 @@ test("submitPrompt creates a default-agent session when sessionId is omitted", a
     },
   })
 
-  const submission = runtime.submitPrompt({ text: "  New\n session  " })
+  const promptRun = runtime.submitPrompt({ text: "  New\n session  " })
 
-  expect(submission.sessionId).toBe("session-1")
+  expect(promptRun.sessionId).toBe("session-1")
   expect(runtime.listSessions()).toEqual([{
     id: "session-1",
     agentId: TEST_AGENT_ID,
@@ -987,20 +1540,20 @@ test("submitPrompt creates a default-agent session when sessionId is omitted", a
     updatedAt: 101,
   }])
 
-  await submission.accepted
-  await submission.settled
-  expect(runtime.openSession(submission.sessionId).getSnapshot().messages[0])
+  await promptRun.promptPersisted
+  await promptRun.runFinished
+  expect(runtime.openSession(promptRun.sessionId).getSnapshot().messages[0])
     .toMatchObject({
       role: "user",
       source: "prompt",
-      runId: submission.runId,
+      runId: promptRun.runId,
       content: "  New\n session  ",
     })
 
   await runtime.dispose()
 })
 
-test("submitPrompt rolls back a new session when its first prompt is not accepted", async () => {
+test("submitPrompt rolls back a new session when its first prompt is not persisted", async () => {
   const memory = new InMemorySessionManager()
   const persistenceFailure = new Error("Disk write failed")
   const deletedSessionIds: string[] = []
@@ -1012,6 +1565,7 @@ test("submitPrompt rolls back a new session when its first prompt is not accepte
     appendMessage: () => {
       throw persistenceFailure
     },
+    getPresentationRevision: memory.getPresentationRevision,
     getFileChangeProposals: memory.getFileChangeProposals,
     saveFileChangeProposal: memory.saveFileChangeProposal,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
@@ -1023,32 +1577,32 @@ test("submitPrompt rolls back a new session when its first prompt is not accepte
   }
   const runtime = runtimeWith(model, TEST_AGENTS, manager)
 
-  const submission = runtime.submitPrompt({ text: "New session" })
-  const acceptanceFailure = submission.accepted.then(
+  const promptRun = runtime.submitPrompt({ text: "New session" })
+  const persistenceResult = promptRun.promptPersisted.then(
     () => undefined,
     (error: unknown) => error,
   )
-  const settlementFailure = submission.settled.then(
+  const runResult = promptRun.runFinished.then(
     () => undefined,
     (error: unknown) => error,
   )
-  expect(manager.getSessionInfo(submission.sessionId)).toBeDefined()
+  expect(manager.getSessionInfo(promptRun.sessionId)).toBeDefined()
 
-  expect(await acceptanceFailure).toBe(persistenceFailure)
-  expect(await settlementFailure).toBe(persistenceFailure)
-  expect(deletedSessionIds).toEqual([submission.sessionId])
+  expect(await persistenceResult).toBe(persistenceFailure)
+  expect(await runResult).toBe(persistenceFailure)
+  expect(deletedSessionIds).toEqual([promptRun.sessionId])
   expect(runtime.listSessions()).toEqual([])
   expect(manager.listSessions()).toEqual([])
-  expect(manager.getSessionInfo(submission.sessionId)).toBeUndefined()
-  expect(manager.getMessages(submission.sessionId)).toEqual([])
-  expect(() => runtime.openSession(submission.sessionId)).toThrow(
-    `Session does not exist: ${submission.sessionId}`,
+  expect(manager.getSessionInfo(promptRun.sessionId)).toBeUndefined()
+  expect(manager.getMessages(promptRun.sessionId)).toEqual([])
+  expect(() => runtime.openSession(promptRun.sessionId)).toThrow(
+    `Session does not exist: ${promptRun.sessionId}`,
   )
 
   await runtime.dispose()
 })
 
-test("new-session settled waits for rollback before exposing failure", async () => {
+test("new-session runFinished waits for rollback before exposing failure", async () => {
   const memory = new InMemorySessionManager()
   const persistenceFailure = new Error("Disk write failed")
   const manager: ISessionManager = {
@@ -1059,6 +1613,7 @@ test("new-session settled waits for rollback before exposing failure", async () 
     appendMessage: () => {
       throw persistenceFailure
     },
+    getPresentationRevision: memory.getPresentationRevision,
     getFileChangeProposals: memory.getFileChangeProposals,
     saveFileChangeProposal: memory.saveFileChangeProposal,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
@@ -1081,32 +1636,32 @@ test("new-session settled waits for rollback before exposing failure", async () 
     await rollbackSession(sessionId, session)
   }
 
-  const submission = runtime.submitPrompt({ text: "New session" })
-  let settlementObserved = false
-  const settlementFailure = submission.settled.then(
+  const promptRun = runtime.submitPrompt({ text: "New session" })
+  let runFinishedObserved = false
+  const runResult = promptRun.runFinished.then(
     () => {
-      settlementObserved = true
+      runFinishedObserved = true
       return undefined
     },
     (error: unknown) => {
-      settlementObserved = true
+      runFinishedObserved = true
       return error
     },
   )
 
   await rollbackStarted.promise
-  expect(settlementObserved).toBe(false)
+  expect(runFinishedObserved).toBe(false)
   expect(runtime.listSessions().map((session) => session.id)).toEqual([
-    submission.sessionId,
+    promptRun.sessionId,
   ])
 
   releaseRollback.resolve()
 
-  expect(await settlementFailure).toBe(persistenceFailure)
+  expect(await runResult).toBe(persistenceFailure)
   expect(runtime.listSessions()).toEqual([])
-  expect(manager.getSessionInfo(submission.sessionId)).toBeUndefined()
-  expect(() => runtime.openSession(submission.sessionId)).toThrow(
-    `Session does not exist: ${submission.sessionId}`,
+  expect(manager.getSessionInfo(promptRun.sessionId)).toBeUndefined()
+  expect(() => runtime.openSession(promptRun.sessionId)).toThrow(
+    `Session does not exist: ${promptRun.sessionId}`,
   )
 
   await runtime.dispose()
@@ -1128,7 +1683,7 @@ test("runtime resolves approval only in the addressed session and dispose releas
   const secondApprovalStarted = Promise.withResolvers<void>()
   const decisions: string[] = []
   let approvalCount = 0
-  const tool: IAgentTool = {
+  const tool = defineAgentTool({
     name: "run_command",
     approvalKind: "command",
     description: "Run a command",
@@ -1153,7 +1708,7 @@ test("runtime resolves approval only in the addressed session and dispose releas
       decisions.push(decision)
       return decision
     },
-  }
+  })
   const continuedRuns = new Set<string>()
   const runtime = runtimeWith({
     async *stream(request) {
@@ -1178,7 +1733,7 @@ test("runtime resolves approval only in the addressed session and dispose releas
   }])
   const firstView = createSession(runtime)
   const secondView = createSession(runtime)
-  const firstSubmission = runtime.submitPrompt({
+  const firstRun = runtime.submitPrompt({
     sessionId: "session-1",
     text: "Run the tests",
   })
@@ -1195,17 +1750,17 @@ test("runtime resolves approval only in the addressed session and dispose releas
   expect(secondView.getSnapshot().pendingToolApproval).toBeUndefined()
 
   runtime.resolveToolApproval("session-1", firstRequest.id, "copy")
-  await firstSubmission.settled
+  await firstRun.runFinished
   expect(decisions).toEqual(["copy"])
 
-  const secondSubmission = runtime.submitPrompt({
+  const secondRun = runtime.submitPrompt({
     sessionId: "session-1",
     text: "Run the tests again",
   })
   await secondApprovalStarted.promise
   expect(firstView.getSnapshot().pendingToolApproval).toBeDefined()
 
-  await Promise.all([runtime.dispose(), secondSubmission.settled])
+  await Promise.all([runtime.dispose(), secondRun.runFinished])
 
   expect(decisions).toEqual(["copy"])
   expect(firstView.getSnapshot().pendingToolApproval).toBeUndefined()
@@ -1221,12 +1776,12 @@ test("treats slash input as prompts", async () => {
   })
   const view = createSession(runtime)
 
-  const slashSubmission = runtime.submitPrompt({
+  const slashRun = runtime.submitPrompt({
     sessionId: "session-1",
     text: "/not-a-runtime-command",
   })
-  await slashSubmission.accepted
-  await slashSubmission.settled
+  await slashRun.promptPersisted
+  await slashRun.runFinished
 
   expect(interactionCount).toBe(1)
   expect(view.getSnapshot().messages.map((message) => message.role)).toEqual([

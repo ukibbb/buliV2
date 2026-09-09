@@ -29,7 +29,7 @@ import type {
     IAgentState,
 } from "@/agent/state"
 import { reduceAgentState } from "@/agent/state-reducer"
-import type { IAgentTool } from "@/agent/tool"
+import type { IRuntimeAgentTool } from "@/agent/tool"
 import type { IToolOutputStore } from "@/agent/tool-output-store"
 import {
     assertToolApprovalDecision,
@@ -45,7 +45,7 @@ export interface IAgentOptions {
     readonly sessionId: string
     readonly systemPrompt: string
     readonly resolveRunConfiguration: TAgentRunConfigurationResolver
-    readonly tools: readonly IAgentTool[]
+    readonly tools: readonly IRuntimeAgentTool[]
     readonly initialMessages?: readonly TAgentMessage[]
     readonly projectContext?: TAgentContextProjector
     readonly criticalEventSink?: TAgentCriticalEventSink
@@ -59,13 +59,13 @@ interface IActiveAgentRun {
     readonly runId: string
     readonly promptId: string
     readonly abortController: AbortController
-    readonly accepted: Promise<void>
-    readonly resolveAccepted: () => void
-    readonly rejectAccepted: (reason?: unknown) => void
-    readonly settled: Promise<void>
-    readonly resolveSettled: () => void
-    readonly rejectSettled: (reason?: unknown) => void
-    acceptedCompleted: boolean
+    readonly initialPromptProcessed: Promise<void>
+    readonly resolveInitialPromptProcessed: () => void
+    readonly rejectInitialPromptProcessed: (reason?: unknown) => void
+    readonly runFinished: Promise<void>
+    readonly resolveRunFinished: () => void
+    readonly rejectRunFinished: (reason?: unknown) => void
+    initialPromptProcessingCompleted: boolean
     acceptingQueuedInput: boolean
 }
 
@@ -94,6 +94,7 @@ export class Agent {
     private readonly toolOutputStore: IToolOutputStore | undefined
     private steeringQueue: IUserMessage[] = []
     private followUpQueue: IUserMessage[] = []
+    private queuedMessagesRevisionValue = 0
     private activeRun: IActiveAgentRun | undefined
     private pendingToolApproval: IPendingToolApproval | undefined
     private readonly issuedToolApprovalIds = new Set<string>()
@@ -133,6 +134,16 @@ export class Agent {
         return structuredClone(this.followUpQueue)
     }
 
+    /**
+     * Queues mutate in place, so array identity is not a valid publication key.
+     * Session snapshots use this token to avoid cloning unchanged queues on every
+     * text delta; public queue getters still return independent mutable copies.
+     * Enqueue, consume, rollback restoration, clear and reset all invalidate it.
+     */
+    get queuedMessagesRevision(): number {
+        return this.queuedMessagesRevisionValue
+    }
+
     subscribe(listener: TAgentEventListener): () => void {
         this.listeners.add(listener)
         return () => this.listeners.delete(listener)
@@ -159,22 +170,22 @@ export class Agent {
         const runId = this.generateId()
         const prompt = this.createUserMessage(normalizedInput, runId, "prompt")
         const abortController = new AbortController()
-        const accepted = Promise.withResolvers<void>()
-        const settled = Promise.withResolvers<void>()
+        const initialPromptProcessed = Promise.withResolvers<void>()
+        const runFinished = Promise.withResolvers<void>()
         // Consumers may intentionally observe only one phase of the run.
-        void accepted.promise.catch(() => { })
-        void settled.promise.catch(() => { })
+        void initialPromptProcessed.promise.catch(() => { })
+        void runFinished.promise.catch(() => { })
         const activeRun: IActiveAgentRun = {
             runId,
             promptId: prompt.id,
             abortController,
-            accepted: accepted.promise,
-            resolveAccepted: accepted.resolve,
-            rejectAccepted: accepted.reject,
-            settled: settled.promise,
-            resolveSettled: settled.resolve,
-            rejectSettled: settled.reject,
-            acceptedCompleted: false,
+            initialPromptProcessed: initialPromptProcessed.promise,
+            resolveInitialPromptProcessed: initialPromptProcessed.resolve,
+            rejectInitialPromptProcessed: initialPromptProcessed.reject,
+            runFinished: runFinished.promise,
+            resolveRunFinished: runFinished.resolve,
+            rejectRunFinished: runFinished.reject,
+            initialPromptProcessingCompleted: false,
             acceptingQueuedInput: true,
         }
         this.activeRun = activeRun
@@ -198,8 +209,8 @@ export class Agent {
 
         return {
             runId,
-            accepted: activeRun.accepted,
-            settled: activeRun.settled,
+            initialPromptProcessed: activeRun.initialPromptProcessed,
+            runFinished: activeRun.runFinished,
         }
     }
 
@@ -217,6 +228,9 @@ export class Agent {
         const messages = {
             steering: structuredClone(this.steeringQueue),
             followUp: structuredClone(this.followUpQueue),
+        }
+        if (this.steeringQueue.length > 0 || this.followUpQueue.length > 0) {
+            this.queuedMessagesRevisionValue += 1
         }
         this.steeringQueue = []
         this.followUpQueue = []
@@ -248,7 +262,10 @@ export class Agent {
             throw new Error(`${label} message cannot be empty`)
         }
         const activeRun = this.activeRun
-        if (!activeRun?.acceptingQueuedInput || !activeRun.acceptedCompleted) {
+        if (
+            !activeRun?.acceptingQueuedInput
+            || !activeRun.initialPromptProcessingCompleted
+        ) {
             throw new Error(`Agent is not accepting ${label.toLowerCase()} messages`)
         }
 
@@ -259,6 +276,7 @@ export class Agent {
         )
         if (source === "steer") this.steeringQueue.push(message)
         else this.followUpQueue.push(message)
+        this.queuedMessagesRevisionValue += 1
     }
 
     async abort(): Promise<void> {
@@ -271,6 +289,9 @@ export class Agent {
 
     reset(): void {
         if (this.activeRun) throw new Error("Cannot reset while Agent is running")
+        if (this.steeringQueue.length > 0 || this.followUpQueue.length > 0) {
+            this.queuedMessagesRevisionValue += 1
+        }
         this.steeringQueue = []
         this.followUpQueue = []
         this.stateValue = {
@@ -379,19 +400,19 @@ export class Agent {
         } catch (error) {
             failed = true
             failure = error
-            if (!activeRun.acceptedCompleted) {
-                activeRun.acceptedCompleted = true
-                activeRun.rejectAccepted(error)
+            if (!activeRun.initialPromptProcessingCompleted) {
+                activeRun.initialPromptProcessingCompleted = true
+                activeRun.rejectInitialPromptProcessed(error)
             }
 
         } finally {
             this.abortPendingToolApproval(activeRun)
-            if (!activeRun.acceptedCompleted) {
+            if (!activeRun.initialPromptProcessingCompleted) {
                 const error = failed
                     ? failure
-                    : new Error("Agent run ended before prompt acceptance")
-                activeRun.acceptedCompleted = true
-                activeRun.rejectAccepted(error)
+                    : new Error("Agent run ended before processing the initial prompt")
+                activeRun.initialPromptProcessingCompleted = true
+                activeRun.rejectInitialPromptProcessed(error)
                 if (!failed) {
                     failed = true
                     failure = error
@@ -424,8 +445,8 @@ export class Agent {
                     ...(errorMessage === undefined ? {} : { errorMessage }),
                 }, activeRun.abortController.signal)
 
-                if (failed) activeRun.rejectSettled(failure)
-                else activeRun.resolveSettled()
+                if (failed) activeRun.rejectRunFinished(failure)
+                else activeRun.resolveRunFinished()
             }
         }
     }
@@ -441,7 +462,7 @@ export class Agent {
                 this.abortPendingToolApproval(activeRun)
             }
             try {
-                await activeRun.settled
+                await activeRun.runFinished
             } catch (error) {
                 if (!failed) {
                     failed = true
@@ -465,10 +486,10 @@ export class Agent {
             event.type === "message_end"
             && event.message.role === "user"
             && event.message.id === activeRun.promptId
-            && !activeRun.acceptedCompleted
+            && !activeRun.initialPromptProcessingCompleted
         ) {
-            activeRun.acceptedCompleted = true
-            activeRun.resolveAccepted()
+            activeRun.initialPromptProcessingCompleted = true
+            activeRun.resolveInitialPromptProcessed()
         }
     }
 
@@ -499,14 +520,18 @@ export class Agent {
         activeRun: IActiveAgentRun,
     ): IUserMessage | undefined {
         if (this.activeRun !== activeRun) return undefined
-        return this.steeringQueue.shift()
+        const message = this.steeringQueue.shift()
+        if (message) this.queuedMessagesRevisionValue += 1
+        return message
     }
 
     private takeFollowUpMessage(
         activeRun: IActiveAgentRun,
     ): IUserMessage | undefined {
         if (this.activeRun !== activeRun) return undefined
-        return this.followUpQueue.shift()
+        const message = this.followUpQueue.shift()
+        if (message) this.queuedMessagesRevisionValue += 1
+        return message
     }
 
     private restoreQueuedMessage(
@@ -516,6 +541,9 @@ export class Agent {
         if (this.activeRun !== activeRun) return
         if (message.source === "steer") this.steeringQueue.unshift(message)
         if (message.source === "followUp") this.followUpQueue.unshift(message)
+        if (message.source === "steer" || message.source === "followUp") {
+            this.queuedMessagesRevisionValue += 1
+        }
     }
 
     private closeQueuedInput(activeRun: IActiveAgentRun): void {

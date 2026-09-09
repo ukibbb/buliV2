@@ -374,7 +374,8 @@ test("compactSessionMessages sends a 400 KB history in one 272k request", async 
   })
 
   expect(requests).toHaveLength(1)
-  expect(requests[0]?.reasoningEffort).toBe("none")
+  expect(requests[0]?.reasoningEffort).toBe("low")
+  expect(requests[0]).not.toHaveProperty("maxOutputTokens")
   const prefix = "Conversation history to incorporate:\n\n"
   const suffix = "\n\nMerge this history into the cumulative operational checkpoint."
   const prompt = requestPrompt(requests[0]!)

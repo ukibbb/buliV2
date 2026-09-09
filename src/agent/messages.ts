@@ -51,7 +51,9 @@ export type TUserInput = string | IUserInputContent
 export interface IUserMessage extends IMessageBase {
     readonly role: "user"
     readonly content: string
+    //  "prompt" | "steer" | "followUp"
     readonly source: TUserMessageSource
+    //
     readonly references?: readonly IUserPathReference[]
     readonly attachments?: readonly IUserImageAttachment[]
 }

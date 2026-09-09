@@ -15,7 +15,7 @@ import type {
     TToolApprovalDraft,
 } from "@/agent/tool-approval"
 import type {
-    IAgentTool,
+    IRuntimeAgentTool,
     TToolExecutionOutcome,
 } from "@/agent/tool"
 import {
@@ -54,11 +54,10 @@ interface IExecuteToolCallsOptions {
     readonly toolOutputStore?: IToolOutputStore
 }
 
-/** Builds the single validated tool registry shared by model and local execution. */
-export function indexAgentTools(
-    tools: readonly IAgentTool[],
-): ReadonlyMap<string, IAgentTool> {
-    const toolsByName = new Map<string, IAgentTool>()
+export function createToolIndex(
+    tools: readonly IRuntimeAgentTool[],
+): ReadonlyMap<string, IRuntimeAgentTool> {
+    const toolsByName = new Map<string, IRuntimeAgentTool>()
     for (const tool of tools) {
         if (toolsByName.has(tool.name)) {
             throw new Error(`Duplicate tool: ${tool.name}`)
@@ -71,7 +70,7 @@ export function indexAgentTools(
 /** Executes local tool calls sequentially and publishes each result lifecycle. */
 export async function executeToolCallsSequentially(
     toolCalls: readonly IToolCallContent[],
-    toolsByName: ReadonlyMap<string, IAgentTool>,
+    toolsByName: ReadonlyMap<string, IRuntimeAgentTool>,
     options: IExecuteToolCallsOptions,
 ): Promise<IToolResultMessage[]> {
     const results: IToolResultMessage[] = []
@@ -143,7 +142,7 @@ export async function failToolCallsWithoutExecution(
 
 async function executeToolCall(
     toolCall: IToolCallContent,
-    toolsByName: ReadonlyMap<string, IAgentTool>,
+    toolsByName: ReadonlyMap<string, IRuntimeAgentTool>,
     options: IExecuteToolCallsOptions,
 ): Promise<IToolResultMessage> {
     let content: string
@@ -174,7 +173,7 @@ async function executeToolCall(
                 toolName: toolCall.toolName,
                 progress,
             }))
-            void progressTask.catch(() => {})
+            void progressTask.catch(() => { })
         }
         const requestApproval = (
             draft: TToolApprovalDraft,
@@ -246,11 +245,9 @@ async function executeToolCall(
                 preparedInput,
                 tool.inputSchema as IJsonSchemaNode,
             )
-            const input = Value.Convert(tool.inputSchema, preparedInput)
-            assertToolInput(tool, input)
             const executionResult = normalizeToolExecutionResult(
                 tool.name,
-                await tool.execute(input as Record<string, unknown>, {
+                await tool.validateAndExecute(preparedInput, {
                     sessionId: options.sessionId,
                     toolCallId: toolCall.toolCallId,
                     runId: options.runId,
@@ -308,7 +305,7 @@ async function executeToolCall(
             acceptingProgress = false
             acceptingApprovals = false
             const approvalTask = pendingApprovalTask
-            if (approvalTask) await approvalTask.catch(() => {})
+            if (approvalTask) await approvalTask.catch(() => { })
         }
         await progressTask
     }
@@ -551,21 +548,6 @@ function isUnknownSideEffectsError(error: unknown): boolean {
         && typeof error === "object"
         && "sideEffectsUnknown" in error
         && error.sideEffectsUnknown === true
-}
-
-function assertToolInput(
-    tool: IAgentTool,
-    input: unknown,
-): void {
-    if (Value.Check(tool.inputSchema, input)) return
-
-    const details = Value.Errors(tool.inputSchema, input)
-        .slice(0, 3)
-        .map((error) => `${error.instancePath || "/"}: ${error.message}`)
-        .join("; ")
-    throw new TypeError(
-        `Invalid input for tool "${tool.name}": ${details || "schema validation failed"}`,
-    )
 }
 
 async function emitCompletedMessage(

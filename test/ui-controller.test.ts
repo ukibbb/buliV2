@@ -4,7 +4,7 @@ import type {
   IBuliApplication,
   IBuliApplicationSnapshot,
   IBuliPromptInput,
-  IBuliPromptSubmission,
+  IBuliPromptRun,
   IBuliQueuedMessages,
 } from "@/app/contracts"
 import type {
@@ -42,9 +42,9 @@ interface IApplicationSpyOptions {
   readonly compactingSessionId?: string
   readonly selectModel?: (modelId: string) => void
   readonly selectReasoningEffort?: (effort: TReasoningEffort) => void
-  readonly accepted?: Promise<void>
-  readonly settled?: Promise<void>
-  readonly submitPrompt?: (prompt: IBuliPromptInput) => IBuliPromptSubmission
+  readonly promptPersisted?: Promise<void>
+  readonly runFinished?: Promise<void>
+  readonly submitPrompt?: (prompt: IBuliPromptInput) => IBuliPromptRun
   readonly steer?: (sessionId: string, text: string) => void
   readonly followUp?: (sessionId: string, text: string) => void
   readonly clearQueuedMessages?: (sessionId: string) => IBuliQueuedMessages
@@ -136,8 +136,8 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
       return {
         sessionId,
         runId: `run-${++runCount}`,
-        accepted: options.accepted ?? Promise.resolve(),
-        settled: options.settled ?? Promise.resolve(),
+        promptPersisted: options.promptPersisted ?? Promise.resolve(),
+        runFinished: options.runFinished ?? Promise.resolve(),
       }
     },
     steer: (sessionId, text) => {
@@ -276,11 +276,11 @@ test("creates the first session only when a prompt is submitted from Home", asyn
   }])
 })
 
-test("opens a new session only after its prompt is accepted", async () => {
-  const accepted = Promise.withResolvers<void>()
+test("opens a new session only after its prompt is persisted", async () => {
+  const promptPersisted = Promise.withResolvers<void>()
   const spy = applicationSpy({
-    accepted: accepted.promise,
-    settled: accepted.promise,
+    promptPersisted: promptPersisted.promise,
+    runFinished: promptPersisted.promise,
   })
   const controller = new BuliUiController({ application: spy.application })
 
@@ -289,7 +289,7 @@ test("opens a new session only after its prompt is accepted", async () => {
 
   expect(controller.getSnapshot().route).toEqual({ type: "home" })
 
-  accepted.resolve()
+  promptPersisted.resolve()
   expect(await submission).toBe("consumed")
   expect(controller.getSnapshot().route).toEqual({
     type: "session",
@@ -297,11 +297,11 @@ test("opens a new session only after its prompt is accepted", async () => {
   })
 })
 
-test("retains a second submission while prompt acceptance is pending", async () => {
-  const accepted = Promise.withResolvers<void>()
+test("retains a second submission while prompt persistence is pending", async () => {
+  const promptPersisted = Promise.withResolvers<void>()
   const spy = applicationSpy({
-    accepted: accepted.promise,
-    settled: accepted.promise,
+    promptPersisted: promptPersisted.promise,
+    runFinished: promptPersisted.promise,
   })
   const controller = new BuliUiController({ application: spy.application })
 
@@ -315,15 +315,15 @@ test("retains a second submission while prompt acceptance is pending", async () 
     "Prompt submission is still pending",
   )
 
-  accepted.resolve()
+  promptPersisted.resolve()
   expect(await firstSubmission).toBe("consumed")
 })
 
-test("acceptance does not erase newer resources with the same visible text", async () => {
-  const accepted = Promise.withResolvers<void>()
+test("prompt persistence does not erase newer resources with the same visible text", async () => {
+  const promptPersisted = Promise.withResolvers<void>()
   const spy = applicationSpy({
-    accepted: accepted.promise,
-    settled: accepted.promise,
+    promptPersisted: promptPersisted.promise,
+    runFinished: promptPersisted.promise,
   })
   const controller = new BuliUiController({ application: spy.application })
   const first = imageDraft("first")
@@ -333,7 +333,7 @@ test("acceptance does not erase newer resources with the same visible text", asy
   const submission = controller.submitInput(first)
   await Promise.resolve()
   controller.updateDraft(newer)
-  accepted.resolve()
+  promptPersisted.resolve()
 
   expect(await submission).toBe("consumed")
   expect(controller.getInputDraft()).toEqual(newer)
@@ -341,10 +341,10 @@ test("acceptance does not erase newer resources with the same visible text", asy
 })
 
 test("allows only one concurrent unknown slash command submission", async () => {
-  const accepted = Promise.withResolvers<void>()
+  const promptPersisted = Promise.withResolvers<void>()
   const spy = applicationSpy({
-    accepted: accepted.promise,
-    settled: accepted.promise,
+    promptPersisted: promptPersisted.promise,
+    runFinished: promptPersisted.promise,
   })
   const controller = new BuliUiController({ application: spy.application })
   controller.updateInput("/unknown")
@@ -360,15 +360,15 @@ test("allows only one concurrent unknown slash command submission", async () => 
     inputError: "Prompt submission is still pending",
   })
 
-  accepted.resolve()
+  promptPersisted.resolve()
   expect(await firstSubmission).toBe("consumed")
 })
 
 test("retains synchronous subscriber reentry during submission", async () => {
-  const accepted = Promise.withResolvers<void>()
+  const promptPersisted = Promise.withResolvers<void>()
   const spy = applicationSpy({
-    accepted: accepted.promise,
-    settled: accepted.promise,
+    promptPersisted: promptPersisted.promise,
+    runFinished: promptPersisted.promise,
   })
   const controller = new BuliUiController({ application: spy.application })
   controller.updateInput("First prompt")
@@ -391,7 +391,7 @@ test("retains synchronous subscriber reentry during submission", async () => {
     inputError: "Prompt submission is still pending",
   })
 
-  accepted.resolve()
+  promptPersisted.resolve()
   expect(await firstSubmission).toBe("consumed")
 })
 
@@ -552,11 +552,11 @@ test("surfaces approval resolution errors without changing the pending request",
   })
 })
 
-test("does not replace a route changed while Home acceptance is pending", async () => {
-  const accepted = Promise.withResolvers<void>()
+test("does not replace a route changed while Home prompt persistence is pending", async () => {
+  const promptPersisted = Promise.withResolvers<void>()
   const spy = applicationSpy({
-    accepted: accepted.promise,
-    settled: accepted.promise,
+    promptPersisted: promptPersisted.promise,
+    runFinished: promptPersisted.promise,
   })
   const controller = new BuliUiController({ application: spy.application })
 
@@ -564,7 +564,7 @@ test("does not replace a route changed while Home acceptance is pending", async 
   await Promise.resolve()
   controller.activateSession("session-2")
 
-  accepted.resolve()
+  promptPersisted.resolve()
   expect(await submission).toBe("consumed")
   expect(controller.getSnapshot().route).toEqual({
     type: "session",

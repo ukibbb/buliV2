@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test"
 
 import {
+  defineAgentTool,
   type TAgentMessage,
   type IAgentModel,
   type IAgentModelRequest,
-  type IAgentTool,
+  type IAgentRunConfiguration,
+  type IRuntimeAgentTool,
   ModelContextOverflowError,
 } from "@/agent"
 import {
@@ -40,7 +42,7 @@ test("AgentSession dispatches below-threshold requests without compaction", asyn
   })
 
   const run = session.prompt("Short question")
-  await run.settled
+  await run.runFinished
 
   expect(requests).toHaveLength(1)
   expect(requests[0]?.messages.at(-1)).toMatchObject({
@@ -89,11 +91,11 @@ test("AgentSession compacts at preflight and dispatches the same durable prompt"
 
   const prompt = "Keep this prompt"
   const run = session.prompt(prompt)
-  await run.settled
+  await run.runFinished
 
   expect(summaryRequests).toHaveLength(1)
   expect(summaryRequests.every((request) => (
-    request.reasoningEffort === "none"
+    request.reasoningEffort === "medium"
     && request.tools.length === 0
     && request.messages.length === 1
     && request.messages[0]?.role === "user"
@@ -180,7 +182,7 @@ test("AgentSession uses the active run model for automatic compaction", async ()
     tools: [],
   })
 
-  await session.prompt("Keep this prompt").settled
+  await session.prompt("Keep this prompt").runFinished
 
   expect(activeModelRequests).toBeGreaterThanOrEqual(2)
   expect(replacementModelRequests).toBe(0)
@@ -190,6 +192,99 @@ test("AgentSession uses the active run model for automatic compaction", async ()
 
   await session.dispose()
 })
+
+for (const reasoningEffort of ["high", "max"] as const) {
+  test(`AgentSession retains the captured model and ${reasoningEffort} effort after selection changes during a run`, async () => {
+    const manager = managerWithSession()
+    seedLargeTurns(manager, 2)
+    const requestStarted = Promise.withResolvers<void>()
+    const selectionChanged = Promise.withResolvers<void>()
+    const activeRequests: IAgentModelRequest[] = []
+    const replacementRequests: IAgentModelRequest[] = []
+    const activeModel: IAgentModel = {
+      async *stream(request) {
+        activeRequests.push(cloneRequest(request))
+        if (isCompactionRequest(request)) {
+          yield {
+            type: "text-delta",
+            id: "summary",
+            delta: structuredSummary("Captured model checkpoint"),
+          }
+        } else if (activeRequests.length === 1) {
+          requestStarted.resolve()
+          await selectionChanged.promise
+          throw new ModelContextOverflowError("overflow after selection changed")
+        }
+        yield { type: "finish", reason: "stop" }
+      },
+    }
+    const replacementModel: IAgentModel = {
+      async *stream(request) {
+        replacementRequests.push(cloneRequest(request))
+        yield { type: "finish", reason: "stop" }
+      },
+    }
+    const capturedConfiguration: IAgentRunConfiguration = {
+      model: activeModel,
+      modelProfile: { ...MODEL_PROFILE, contextWindowTokens: 100_000 },
+      reasoningEffort,
+    }
+    let selectedConfiguration = capturedConfiguration
+    const session = new AgentSession({
+      agentId: "test-agent",
+      sessionId: "session-1",
+      manager,
+      systemPrompt: "System",
+      resolveRunConfiguration: () => selectedConfiguration,
+      tools: [],
+    })
+
+    const run = session.prompt("Keep this prompt")
+    try {
+      await requestStarted.promise
+      expect(session.getSnapshot().isRunning).toBe(true)
+      // Standard/Fast adapters can share a model profile. Change the instance
+      // and effort before recovery, not just after the summary was requested.
+      selectedConfiguration = {
+        ...capturedConfiguration,
+        model: replacementModel,
+        reasoningEffort: "low",
+      }
+      session.refreshContextUsage()
+      selectionChanged.resolve()
+      await run.runFinished
+
+      expect(activeRequests).toHaveLength(3)
+      expect(activeRequests.map((request) => request.reasoningEffort)).toEqual([
+        reasoningEffort,
+        reasoningEffort,
+        reasoningEffort,
+      ])
+      expect(activeRequests.filter(isCompactionRequest)).toHaveLength(1)
+      expect(activeRequests[1]).toMatchObject({ reasoningEffort, tools: [] })
+      expect(activeRequests[1]).not.toHaveProperty("maxOutputTokens")
+      expect(activeRequests[2]).toMatchObject({
+        runId: run.runId,
+        contextSummary: structuredSummary("Captured model checkpoint"),
+        messages: [expect.objectContaining({ role: "user", content: "Keep this prompt" })],
+      })
+      expect(replacementRequests).toHaveLength(0)
+      expect(manager.getCompactionCheckpoint("session-1")).toMatchObject({
+        model: capturedConfiguration.modelProfile,
+        summary: structuredSummary("Captured model checkpoint"),
+      })
+
+      // The changed selection takes effect for the next run, not this recovery.
+      await session.prompt("Use the new selection").runFinished
+      expect(replacementRequests).toHaveLength(1)
+      expect(replacementRequests[0]?.reasoningEffort).toBe("low")
+      expect(activeRequests).toHaveLength(3)
+    } finally {
+      selectionChanged.resolve()
+      await session.dispose()
+    }
+  })
+}
 
 test("AgentSession keeps an unprocessed image prompt out of the checkpoint", async () => {
   const manager = managerWithSession()
@@ -224,7 +319,7 @@ test("AgentSession keeps an unprocessed image prompt out of the checkpoint", asy
       source: { value: "[Image 1]", start: 8, end: 17 },
     }],
   })
-  await run.settled
+  await run.runFinished
 
   expect(JSON.stringify(summaryRequests)).not.toContain(imageData)
   expect(JSON.stringify(summaryRequests)).not.toContain("clipboard-1.png")
@@ -295,7 +390,7 @@ test("AgentSession compacts a 238k request before dispatching to a 272k model", 
   expect(initialUsage?.shouldCompact).toBe(true)
 
   const run = session.prompt(prompt)
-  await run.settled
+  await run.runFinished
 
   expect(summaryRequests).toHaveLength(1)
   expect(summaryRequests.every((request) => (
@@ -349,7 +444,7 @@ test("AgentSession blocks an oversized request when compaction has no progress",
 
   const prompt = "P".repeat(14_000)
   const run = session.prompt(prompt)
-  await run.settled
+  await run.runFinished
 
   expect(conversationAttempts).toBe(0)
   expect(summaryAttempts).toBe(0)
@@ -395,7 +490,7 @@ test("AgentSession aborts preflight when the summary prompt cannot fit", async (
   }, [], 2_050)
 
   const run = session.prompt("P".repeat(3_000))
-  await run.settled
+  await run.runFinished
 
   expect(modelAttempts).toBe(0)
   expect(manager.getCompactionCheckpoint("session-1")).toBeUndefined()
@@ -418,14 +513,14 @@ test("AgentSession compacts oversized tool continuations before dispatch", async
   seedTurn(manager)
   const requests: IAgentModelRequest[] = []
   let summaries = 0
-  const tool: IAgentTool = {
+  const tool = defineAgentTool({
     name: "large_result",
     description: "Returns a large result",
     inputSchema: { type: "object", additionalProperties: false },
     async execute() {
       return "R".repeat(14_000)
     },
-  }
+  })
   const session = openSession(manager, {
     async *stream(request) {
       if (isCompactionRequest(request)) {
@@ -455,7 +550,7 @@ test("AgentSession compacts oversized tool continuations before dispatch", async
   }, [tool])
 
   const run = session.prompt("Use the tool")
-  await run.settled
+  await run.runFinished
 
   expect(requests).toHaveLength(3)
   expect(requests[0]?.contextSummary).toBeUndefined()
@@ -518,7 +613,7 @@ for (const overflowMode of ["emitted", "thrown"] as const) {
     }, [], 100_000)
 
     const run = session.prompt("Retry this request")
-    await run.settled
+    await run.runFinished
 
     expect(conversationAttempts).toBe(2)
     expect(summaryAttempts).toBe(1)
@@ -584,7 +679,7 @@ test("AgentSession can compact at preflight and advance again for overflow recov
   }, [], 60_000)
 
   const run = session.prompt("Keep this prompt")
-  await run.settled
+  await run.runFinished
 
   expect(summaryAttempts).toBe(2)
   expect(conversationAttempts).toBe(2)
@@ -641,7 +736,7 @@ test("AgentSession does not retry overflow after exposing semantic output", asyn
   }, [], 100_000)
 
   const run = session.prompt("Do not replay output")
-  await run.settled
+  await run.runFinished
 
   expect(conversationAttempts).toBe(1)
   expect(summaryAttempts).toBe(0)
@@ -682,7 +777,7 @@ test("AgentSession surfaces a second overflow without another retry", async () =
   }, [], 100_000)
 
   const run = session.prompt("Retry only once")
-  await run.settled
+  await run.runFinished
 
   expect(conversationAttempts).toBe(2)
   expect(summaryAttempts).toBe(1)
@@ -717,7 +812,7 @@ test("AgentSession surfaces overflow without retry when compaction cannot advanc
   })
 
   const run = session.prompt("Only current turn")
-  await run.settled
+  await run.runFinished
 
   expect(conversationAttempts).toBe(1)
   expect(summaryAttempts).toBe(0)
@@ -745,6 +840,7 @@ test("AgentSession aborts preflight compaction without saving a checkpoint", asy
     listSessions: memory.listSessions,
     getMessages: memory.getMessages,
     appendMessage: memory.appendMessage,
+    getPresentationRevision: memory.getPresentationRevision,
     getFileChangeProposals: memory.getFileChangeProposals,
     saveFileChangeProposal: memory.saveFileChangeProposal,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
@@ -775,7 +871,7 @@ test("AgentSession aborts preflight compaction without saving a checkpoint", asy
   })
 
   const run = session.prompt("P".repeat(14_000))
-  await run.accepted
+  await run.initialPromptProcessed
   await summaryStarted.promise
   await session.abort()
 
@@ -792,7 +888,7 @@ test("AgentSession aborts preflight compaction without saving a checkpoint", asy
 function openSession(
   manager: ISessionManager,
   model: IAgentModel,
-  tools: readonly IAgentTool[] = [],
+  tools: readonly IRuntimeAgentTool[] = [],
   contextWindowTokens: number = MODEL_PROFILE.contextWindowTokens,
 ): AgentSession {
   return new AgentSession({

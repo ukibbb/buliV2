@@ -3,6 +3,7 @@ import { expect, test } from "bun:test"
 import type { IOAuthCredential } from "@/authentication"
 import {
   MODELS_DEV_API_URL,
+  OPENAI_CODEX_CLIENT_VERSION,
   OPENAI_CODEX_MODELS_URL,
 } from "@/providers/openai/constants"
 import {
@@ -13,6 +14,12 @@ import {
   CODEX_ASTRA_REFERENCE,
   MODELS_DEV_ASTRA_REFERENCE,
 } from "./fixtures/openai-astra-reference"
+
+test("advertises a Codex client version compatible with Astra", () => {
+  // The pinned official Astra catalog declares 0.153.0 as its minimum.
+  expect(Bun.semver.order(OPENAI_CODEX_CLIENT_VERSION, "0.153.0"))
+    .toBeGreaterThanOrEqual(0)
+})
 
 test("uses Codex availability and enriches matching IDs from models.dev", async () => {
   const publicRequests: Array<{

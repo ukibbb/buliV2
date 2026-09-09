@@ -1527,6 +1527,89 @@ test("keeps command approval pending when default Copy is unavailable", async ()
   }
 })
 
+test("keeps the selected slash command visible below a wrapped active budget", async () => {
+  const fake = fakeApplication({
+    applicationSnapshot: {
+      ...APPLICATION_SNAPSHOT,
+      models: [{ id: "test", name: "GPT-6 Astra Fast", reasoningEfforts: ["medium"] }],
+    },
+    sessionSnapshot: {
+      messages: [],
+      fileChangeProposals: [],
+      pendingSteeringMessages: [],
+      pendingFollowUpMessages: [],
+      isRunning: true,
+      isCompacting: false,
+      activeRunId: "run-1",
+      pendingToolCallIds: [],
+      contextUsage: {
+        estimatedInputTokens: 142_000,
+        compactionInputTokens: 142_000,
+        contextWindowTokens: 200_000,
+        compactionThresholdTokens: 160_000,
+        remainingTokens: 58_000,
+        usageRatio: 0.71,
+        shouldCompact: false,
+      },
+    },
+  })
+  const controller = new BuliUiController({ application: fake.application })
+  controller.activateSession("default")
+  const setup = await testRender(
+    buliElementWithController(fake.application, controller),
+    { width: 80, height: 14 },
+  )
+  const render = async () => {
+    // Settle native text wrapping, then paint the measured React menu window.
+    for (let frame = 0; frame < 3; frame++) {
+      await act(async () => { await setup.renderOnce() })
+    }
+  }
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+      await setup.mockInput.typeText("/")
+      setup.mockInput.pressArrow("up")
+    })
+    await render()
+
+    const frame = setup.captureCharFrame()
+    expect(frame).toContain("→ compact")
+    expect(frame.split("\n").map((line) => line.trim()).join(" "))
+      .toContain("compact 142k/160k (89% budget)")
+    expect(textareaRenderable(setup.renderer.root).focused).toBe(true)
+
+    for (const [width, height] of [[40, 14], [120, 24], [80, 14]] as const) {
+      act(() => setup.resize(width, height))
+      await render()
+      const resizedFrame = setup.captureCharFrame()
+      expect(resizedFrame).toContain("→ compact")
+      expect(resizedFrame.split("\n").map((line) => line.trim()).join(" "))
+        .toContain("compact 142k/160k (89% budget)")
+      if (height === 24) expect(resizedFrame).toContain("   new")
+    }
+
+    const activeSession = fake.application.openSession("default").getSnapshot()
+    act(() => fake.setSessionSnapshot({ ...activeSession, isRunning: false }))
+    await render()
+    expect(setup.captureCharFrame()).toContain("→ compact")
+    expect(setup.captureCharFrame()).toContain("   model")
+
+    act(() => fake.setSessionSnapshot(activeSession))
+    await render()
+    expect(setup.captureCharFrame()).toContain("→ compact")
+    expect(setup.captureCharFrame()).not.toContain("   model")
+
+    act(() => setup.mockInput.pressArrow("down"))
+    await render()
+    expect(setup.captureCharFrame()).toContain("→ new")
+  } finally {
+    controller.dispose()
+    act(() => setup.renderer.destroy())
+  }
+})
+
 test("shows slash commands and executes the selected new command", async () => {
   const runtime = new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,

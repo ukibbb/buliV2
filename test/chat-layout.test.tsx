@@ -299,19 +299,23 @@ test.each([40, 80])("keeps the active Astra budget readable at %i columns", asyn
   }
 })
 
-test("keeps the selected command visible on a short terminal", async () => {
+test("keeps the selected command and wrapped menu error visible on a short terminal", async () => {
   const setup = await testRender(
-    <CommandMenu
-      menu={{
-        mode: "commands",
-        selectedIndex: 9,
-        errorMessage: null,
-        items: Array.from({ length: 10 }, (_, index) => ({
-          id: `command-${index}`,
-          label: `command-${index}`,
-        })),
-      }}
-    />,
+    <box width="100%" flexDirection="column">
+      <box height={5} />
+      <CommandMenu
+        menu={{
+          mode: "commands",
+          selectedIndex: 9,
+          errorMessage: "Could not refresh model catalog. Retry when connection is available.",
+          items: Array.from({ length: 10 }, (_, index) => ({
+            id: `command-${index}`,
+            label: `command-${index}`,
+            description: "A description that would wrap across several rows on a narrow terminal",
+          })),
+        }}
+      />
+    </box>,
     { width: 40, height: 14 },
   )
 
@@ -319,10 +323,13 @@ test("keeps the selected command visible on a short terminal", async () => {
     await act(async () => {
       await setup.renderOnce()
     })
+    await act(async () => { await setup.renderOnce() })
 
     const frame = setup.captureCharFrame()
     expect(frame).toContain("→ command-9")
     expect(frame).not.toContain("command-0")
+    expect(frame).toContain("Could not refresh model catalog.")
+    expect(frame).toContain("available.")
   } finally {
     act(() => {
       setup.renderer.destroy()

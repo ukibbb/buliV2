@@ -36,40 +36,10 @@ and persistence invariants. Tests check identities, authoritative invalidation,
 one-byte reads, cleanup/error barriers, Unicode output, and bounded value-access
 counts rather than flaky elapsed-time thresholds.
 
-## Reproduction
-
-From the repository root, with dependencies installed:
-
-```sh
-SHOW_CONSOLE=0 NODE_ENV=development bun scripts/benchmark-transcript.ts baseline
-SHOW_CONSOLE=0 NODE_ENV=development bun scripts/benchmark-transcript.ts after
-```
-
-The label only identifies a run; it does not switch source revisions. Capture
-`baseline` before changing the implementation, then run the same workload after.
-`BENCH_SAMPLES` defaults to 20 (plus three warmups); use the same value on both
-sides. Run without concurrent builds, tests, or other benchmarks. `TMPDIR` may
-select a temporary parent; every log fixture is created in a unique child and
-removed afterward. The script never discovers or uses real `~/.buli` sessions.
-
-Output is JSONL on stdout with environment, source-diff, harness, lockfile, and
-patch fingerprints. A changed source/input fingerprint during a run invalidates
-it. The source diff fingerprint covers tracked `src` changes, so newly added
-source files must also be accounted for when comparing future packages.
-
-The script measures separate boundaries, not live end-to-end latency:
-
-1. Real session snapshot publication during fixed two-character deltas, without
-   React listeners; builder/reducer work and final persistence are excluded.
-2. Replay of those actual frozen snapshots through `useSyncExternalStore` and
-   `Transcript`: synchronous React `act` flush, Profiler render work, and a
-   separate manual OpenTUI frame. These samples are not summed per-token times.
-3. Warm-cache ordinary appends to synthetic logs with the same record count and
-   different payload sizes, excluding setup/replay/first-session replacement.
-4. Parent-driven tool-line rerenders with fixed inputs/phases, including both
-   formatting and React work, not actual tool execution.
-
 ## Initial comparison
+
+These historical measurements used a temporary benchmark harness that is no
+longer included in the repository.
 
 Captured on 2026-09-07, Apple M5/macOS arm64, Bun 1.3.14, React 19.2.7, patched
 OpenTUI 0.5.10, development React, 100x30 test renderer with threaded output off.

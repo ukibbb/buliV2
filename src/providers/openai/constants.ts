@@ -11,7 +11,10 @@ export const OPENAI_OAUTH_DEVICE_AUTHORIZATION_URL =
 export const OPENAI_OAUTH_DEVICE_REDIRECT_URL =
     "https://auth.openai.com/deviceauth/callback"
 export const OPENAI_OAUTH_ORIGINATOR = "buli"
-export const OPENAI_CODEX_CLIENT_VERSION = "0.144.1"
+// The authenticated catalog uses this version to select compatible models.
+// Astra requires 0.153.0; Codex 0.153.4 is the stable release that lists it.
+// https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/models-manager/models.json
+export const OPENAI_CODEX_CLIENT_VERSION = "0.153.4"
 export const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 export const OPENAI_CODEX_MODELS_URL =
     `${OPENAI_CODEX_BASE_URL}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`

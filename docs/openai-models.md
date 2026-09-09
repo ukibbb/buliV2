@@ -4,11 +4,12 @@
 
 Buli uses ChatGPT/Codex OAuth, not the OpenAI Platform API-key route. Its model
 list comes from the authenticated Codex catalog at
-`https://chatgpt.com/backend-api/codex/models?client_version=0.144.1`.
+`https://chatgpt.com/backend-api/codex/models?client_version=0.153.4`.
 The public `https://models.dev/api.json` catalog only enriches exact matching
 account model IDs with display names and reasoning metadata. It cannot grant
-model/Fast availability or override the account's context window. This change
-does not alter the Codex client version or add an API-key integration.
+model/Fast availability or override the account's context window. The catalog
+version is pinned to stable Codex 0.153.4 because Astra declares 0.153.0 as its
+minimum compatible client version. This does not add an API-key integration.
 
 The account-scoped in-memory catalog has a five-minute TTL and a ten-second
 request timeout. Startup awaits its first load before exposing the prompt editor.

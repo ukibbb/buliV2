@@ -1,6 +1,5 @@
 import { Buffer } from "node:buffer"
-import { constants } from "node:fs"
-import { access, readFile } from "node:fs/promises"
+import { readFile } from "node:fs/promises"
 import { Type } from "typebox"
 
 import { defineAgentTool, type IAgentTool } from "@/agent"
@@ -51,9 +50,6 @@ export function createReadTool(
             const run = async (): Promise<void> => {
                 try {
                     const absolutePath = await resolveReadPath(input.path, workspaceRoot)
-                    if (aborted) return
-
-                    await access(absolutePath, constants.R_OK)
                     if (aborted) return
 
                     const buffer = await readFile(absolutePath)

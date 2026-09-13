@@ -26,10 +26,10 @@ test("registers the exact Pi-style tool and schema contract", () => {
     tool.inputSchema.required ?? [],
   ])).toEqual([
     ["read", ["path", "offset", "limit"], ["path"]],
-    ["find", ["pattern", "path", "limit"], ["pattern"]],
+    ["find", ["pattern", "path", "limit", "includeIgnored"], ["pattern"]],
     [
       "grep",
-      ["pattern", "path", "glob", "ignoreCase", "literal", "context", "limit"],
+      ["pattern", "path", "glob", "ignoreCase", "literal", "context", "limit", "includeIgnored"],
       ["pattern"],
     ],
     ["edit", ["path", "edits"], ["path", "edits"]],
@@ -71,6 +71,9 @@ test("read is text-only and uses Pi offset and truncation messages", async () =>
     }, context())).resolves.toBe("four")
     await expect(read.execute({
       path: join(outside, "directory"),
+    }, context())).rejects.toThrow()
+    await expect(read.execute({
+      path: "missing.txt",
     }, context())).rejects.toThrow()
 
     const manyLines = Array.from(
@@ -132,6 +135,28 @@ test("find uses the injected fd executable and accepts a parent-relative path", 
       "**/src/*.ts",
       outside,
     ])
+
+    for (const includeIgnored of [false, true]) {
+      await find.execute({
+        pattern: "src/*.ts",
+        path: relative(workspace, outside),
+        limit: 2,
+        includeIgnored,
+      }, context())
+      expect(await readArguments(argsLog)).toEqual([
+        "--glob",
+        "--color=never",
+        "--hidden",
+        ...(includeIgnored ? ["--no-ignore"] : []),
+        "--no-require-git",
+        "--max-results",
+        "2",
+        "--full-path",
+        "--",
+        "**/src/*.ts",
+        outside,
+      ])
+    }
   })
 })
 
@@ -192,6 +217,33 @@ test("grep uses the injected ripgrep executable and truncates lines to 500 chars
       "NEEDLE [",
       target,
     ])
+
+    for (const includeIgnored of [false, true]) {
+      await grep.execute({
+        pattern: "NEEDLE [",
+        path: target,
+        glob: "*.txt",
+        ignoreCase: true,
+        literal: true,
+        context: 1,
+        limit: 1,
+        includeIgnored,
+      }, context())
+      expect(await readArguments(argsLog)).toEqual([
+        "--json",
+        "--line-number",
+        "--color=never",
+        "--hidden",
+        ...(includeIgnored ? ["--no-ignore"] : []),
+        "--ignore-case",
+        "--fixed-strings",
+        "--glob",
+        "*.txt",
+        "--",
+        "NEEDLE [",
+        target,
+      ])
+    }
   })
 })
 

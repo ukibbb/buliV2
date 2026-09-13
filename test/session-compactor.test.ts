@@ -248,8 +248,8 @@ test("compactSessionMessages replaces a legacy checkpoint beyond the safe cutoff
   )
 })
 
-test("compactSessionMessages migrates an unstructured stored checkpoint", async () => {
-  const messages = conversation(2)
+test("compactSessionMessages reuses an unstructured stored checkpoint", async () => {
+  const messages = conversation(4)
   const previous: ICompactionCheckpoint = {
     id: "legacy-unstructured",
     sessionId: "session-1",
@@ -260,23 +260,29 @@ test("compactSessionMessages migrates an unstructured stored checkpoint", async 
     summary: "Legacy free-form summary",
   }
 
-  expect(projectAgentContext(messages, previous)).toEqual({ messages })
+  expect(projectAgentContext(messages, previous)).toEqual({
+    messages: messages.slice(2),
+    contextSummary: previous.summary,
+  })
 
+  const requests: IAgentModelRequest[] = []
   const checkpoint = await compactSessionMessages({
     sessionId: "session-1",
     messages,
     previousCheckpoint: previous,
-    runConfiguration: configuration([], "Structured migration"),
+    runConfiguration: configuration(requests, "Updated checkpoint"),
     reason: "manual",
     signal: new AbortController().signal,
     now: () => 100,
-    generateId: () => "checkpoint-structured",
+    generateId: () => "checkpoint-updated",
   })
 
+  expect(requests).toHaveLength(1)
+  expect(requests[0]?.contextSummary).toBe(previous.summary)
   expect(checkpoint).toMatchObject({
-    compactedMessageCount: 2,
-    throughMessageId: messages[1]!.id,
-    summary: structuredSummary("Structured migration"),
+    compactedMessageCount: 4,
+    throughMessageId: messages[3]!.id,
+    summary: structuredSummary("Updated checkpoint"),
   })
 })
 
@@ -515,7 +521,7 @@ test("compactSessionMessages rejects oversized history without serial fallback",
   expect(modelCalled).toBe(false)
 })
 
-test("compactSessionMessages rejects truncated or malformed summaries", async () => {
+test("compactSessionMessages rejects truncated or empty summaries", async () => {
   const truncated: IAgentModel = {
     async *stream() {
       yield { type: "text-delta", id: "summary", delta: structuredSummary("Partial") }
@@ -534,24 +540,28 @@ test("compactSessionMessages rejects truncated or malformed summaries", async ()
     "Compaction model returned an incomplete summary (max_output_tokens)",
   )
 
-  const malformed: IAgentModel = {
+  const empty: IAgentModel = {
     async *stream() {
-      yield { type: "text-delta", id: "summary", delta: "Unstructured summary" }
+      yield { type: "text-delta", id: "summary", delta: "   " }
       yield { type: "finish", reason: "stop" }
     },
   }
   await expect(compactSessionMessages({
     sessionId: "session-1",
     messages: conversation(4),
-    runConfiguration: { model: malformed, reasoningEffort: "low" },
+    runConfiguration: { model: empty, reasoningEffort: "low" },
     reason: "automatic",
     signal: new AbortController().signal,
     now: () => 100,
-    generateId: () => "checkpoint-malformed",
-  })).rejects.toThrow("Compaction model omitted required section ## Goals")
+    generateId: () => "checkpoint-empty",
+  })).rejects.toThrow("Compaction model returned no completed summary")
+})
 
-  const ordered = structuredSummary("Strict structure")
-  const invalidStructures = [
+test("compactSessionMessages accepts completed summaries regardless of Markdown structure", async () => {
+  const ordered = structuredSummary("Flexible structure")
+  const summaries = [
+    "Unstructured summary",
+    ordered.replace("## Active Request", "## Current Task"),
     ordered
       .replace("## Goals", "## Temporary")
       .replace("## User Constraints", "## Goals")
@@ -560,22 +570,28 @@ test("compactSessionMessages rejects truncated or malformed summaries", async ()
     `${ordered}\n\n## Extra\n- Unexpected`,
     `Prelude\n${ordered}`,
   ]
-  for (const [index, invalidStructure] of invalidStructures.entries()) {
-    const invalidModel: IAgentModel = {
+  for (const [index, summary] of summaries.entries()) {
+    const model: IAgentModel = {
       async *stream() {
-        yield { type: "text-delta", id: "summary", delta: invalidStructure }
+        yield { type: "text-delta", id: "summary", delta: summary }
         yield { type: "finish", reason: "stop" }
       },
     }
-    await expect(compactSessionMessages({
+    const messages = conversation(4)
+    const checkpoint = await compactSessionMessages({
       sessionId: "session-1",
-      messages: conversation(4),
-      runConfiguration: { model: invalidModel, reasoningEffort: "low" },
+      messages,
+      runConfiguration: { model, reasoningEffort: "low" },
       reason: "automatic",
       signal: new AbortController().signal,
       now: () => 100,
-      generateId: () => `checkpoint-invalid-structure-${index}`,
-    })).rejects.toThrow()
+      generateId: () => `checkpoint-summary-${index}`,
+    })
+    expect(checkpoint?.summary).toBe(summary)
+    expect(projectAgentContext(messages, checkpoint)).toEqual({
+      messages: [],
+      contextSummary: summary,
+    })
   }
 })
 

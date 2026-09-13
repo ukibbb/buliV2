@@ -6,10 +6,7 @@ import {
     assertCheckpointAnchor,
     type ICompactionCheckpoint,
 } from "@/sessions/compaction/checkpoint"
-import {
-    eligibleCompactionEnd,
-    isStructuredCompactionSummary,
-} from "@/sessions/compaction/session-compactor"
+import { eligibleCompactionEnd } from "@/sessions/compaction/session-compactor"
 
 /** Projects durable history without changing or deleting its source messages. */
 export function projectAgentContext(
@@ -28,10 +25,7 @@ export function projectAgentContext(
     } catch {
         return { messages: structuredClone(messages) }
     }
-    if (
-        checkpoint.compactedMessageCount > safeCompactionEnd
-        || !isStructuredCompactionSummary(checkpoint.summary)
-    ) {
+    if (checkpoint.compactedMessageCount > safeCompactionEnd) {
         return { messages: structuredClone(messages) }
     }
     return {

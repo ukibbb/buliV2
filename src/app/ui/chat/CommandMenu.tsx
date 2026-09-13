@@ -4,8 +4,6 @@ import { useRef, useState, type ReactNode } from "react"
 import type { TBuliMenuSnapshot } from "@/app/ui/ui-controller"
 import { theme } from "@/terminal/theme"
 
-const MENU_MAX_ROW_COUNT = 8
-
 interface ICommandMenuProps {
     readonly menu: TBuliMenuSnapshot | null
 }
@@ -13,10 +11,14 @@ interface ICommandMenuProps {
 /** Calculates and renders the visible window of the active command menu. */
 export function CommandMenu(props: ICommandMenuProps): ReactNode {
     const menu = props.menu
-    const [visibleRowCount, setVisibleRowCount] = useState(MENU_MAX_ROW_COUNT)
+    const [availableRowCount, setAvailableRowCount] = useState<number | null>(null)
     const errorRef = useRef<TextRenderable | null>(null)
     if (!menu) return null
 
+    const visibleRowCount = Math.min(
+        menu.items.length,
+        availableRowCount ?? menu.items.length,
+    )
     const visibleStart = Math.min(
         Math.max(menu.selectedIndex - Math.floor(visibleRowCount / 2), 0),
         Math.max(menu.items.length - visibleRowCount, 0),
@@ -41,11 +43,10 @@ export function CommandMenu(props: ICommandMenuProps): ReactNode {
                     - layout.getComputedTop()
                     - layout.getComputedPadding(Yoga.Edge.Bottom)
                     - (errorRef.current?.getLayoutNode().getComputedHeight() ?? 0)
-                const nextRowCount = Math.max(
-                    0,
-                    Math.min(MENU_MAX_ROW_COUNT, Math.floor(availableRows)),
-                )
-                if (nextRowCount !== visibleRowCount) setVisibleRowCount(nextRowCount)
+                const nextAvailableRowCount = Math.max(0, Math.floor(availableRows))
+                if (nextAvailableRowCount !== availableRowCount) {
+                    setAvailableRowCount(nextAvailableRowCount)
+                }
             }}
         >
             {visibleItems.map((item, index) => {

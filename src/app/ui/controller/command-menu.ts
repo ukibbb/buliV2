@@ -1,4 +1,5 @@
 import { BULI_COMMANDS } from "@/app/ui/commands/catalog"
+import type { TBuliInputSubmitResult } from "@/app/ui/controller/input-submission"
 import type {
     IBuliCommandContext,
     IBuliCommandInfo,
@@ -13,6 +14,7 @@ interface IBuliCommandMenuOptions {
     readonly store: BuliUiStateStore
     readonly commands: readonly IBuliCommandInfo[]
     readonly commandContext: () => IBuliCommandContext
+    readonly submitPromptCommand: (text: string) => Promise<TBuliInputSubmitResult>
 }
 
 /** Owns slash suggestions, picker loading, selection, and menu activation. */
@@ -20,6 +22,7 @@ export class BuliCommandMenu {
     private readonly store: BuliUiStateStore
     private readonly commands: readonly IBuliCommandInfo[]
     private readonly commandContext: () => IBuliCommandContext
+    private readonly submitPromptCommand: (text: string) => Promise<TBuliInputSubmitResult>
     private activationPending = false
     private loadGeneration = 0
     private activeLoad: AbortController | undefined
@@ -28,6 +31,7 @@ export class BuliCommandMenu {
         this.store = options.store
         this.commands = options.commands
         this.commandContext = options.commandContext
+        this.submitPromptCommand = options.submitPromptCommand
     }
 
     readonly updateInput = (input: string): void => {
@@ -108,7 +112,7 @@ export class BuliCommandMenu {
         args: string,
     ): Promise<boolean> => {
         const command = BULI_COMMANDS.find((candidate) => candidate.name === name)
-        if (!command) return false
+        if (!command || command.kind === "prompt") return false
 
         const context = this.commandContext()
         assertCommandsAllowed(context)
@@ -183,7 +187,15 @@ export class BuliCommandMenu {
 
         if (menu.mode === "commands") {
             try {
-                await this.executeCommand(selected.id, "")
+                const command = BULI_COMMANDS.find(
+                    (candidate) => candidate.name === selected.id,
+                )
+                if (command?.kind === "prompt") {
+                    const result = await this.submitPromptCommand(`/${command.name}`)
+                    if (result === "retained") return
+                } else {
+                    await this.executeCommand(selected.id, "")
+                }
             } catch (error) {
                 if (this.store.getSnapshot().menu === menu) {
                     this.store.setMenu({

@@ -1575,31 +1575,40 @@ test("keeps the selected slash command visible below a wrapped active budget", a
     await render()
 
     const frame = setup.captureCharFrame()
-    expect(frame).toContain("→ compact")
+    expect(frame).toContain("→ review")
     expect(frame.split("\n").map((line) => line.trim()).join(" "))
       .toContain("compact 142k/160k (89% budget)")
     expect(textareaRenderable(setup.renderer.root).focused).toBe(true)
 
-    for (const [width, height] of [[40, 14], [120, 24], [80, 14]] as const) {
+    for (const [width, height] of [[40, 14], [120, 30], [80, 14]] as const) {
       act(() => setup.resize(width, height))
       await render()
       const resizedFrame = setup.captureCharFrame()
-      expect(resizedFrame).toContain("→ compact")
+      expect(resizedFrame).toContain("→ review")
       expect(resizedFrame.split("\n").map((line) => line.trim()).join(" "))
         .toContain("compact 142k/160k (89% budget)")
-      if (height === 24) expect(resizedFrame).toContain("   new")
+      if (height === 30) {
+        for (const commandName of [
+          "new", "model", "reasoning", "sessions", "login", "logout",
+          "compact", "grill", "teach",
+        ]) {
+          expect(resizedFrame).toContain(`   ${commandName}`)
+        }
+      } else {
+        expect(resizedFrame).not.toContain("   new")
+      }
     }
 
     const activeSession = fake.application.openSession("default").getSnapshot()
     act(() => fake.setSessionSnapshot({ ...activeSession, isRunning: false }))
     await render()
-    expect(setup.captureCharFrame()).toContain("→ compact")
-    expect(setup.captureCharFrame()).toContain("   model")
+    expect(setup.captureCharFrame()).toContain("→ review")
+    expect(setup.captureCharFrame()).toContain("   login")
 
     act(() => fake.setSessionSnapshot(activeSession))
     await render()
-    expect(setup.captureCharFrame()).toContain("→ compact")
-    expect(setup.captureCharFrame()).not.toContain("   model")
+    expect(setup.captureCharFrame()).toContain("→ review")
+    expect(setup.captureCharFrame()).not.toContain("   login")
 
     act(() => setup.mockInput.pressArrow("down"))
     await render()

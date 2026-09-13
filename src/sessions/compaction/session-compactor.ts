@@ -75,7 +75,6 @@ export async function compactSessionMessages(
     const cutoff = eligibleCompactionEnd(options.messages)
     const previous = storedPrevious
         && storedPrevious.compactedMessageCount <= cutoff
-        && isStructuredCompactionSummary(storedPrevious.summary)
         ? storedPrevious
         : undefined
     const previousCount = previous?.compactedMessageCount ?? 0
@@ -286,7 +285,6 @@ async function summarizeCompactionHistory(
             `Compaction model returned an incomplete summary (${finishReason})`,
         )
     }
-    assertStructuredCompactionSummary(normalizedSummary)
     return {
         summary: normalizedSummary,
         ...(usage === undefined ? {} : { usage }),
@@ -418,32 +416,6 @@ function serializeCompactionMessages(messages: readonly TAgentMessage[]): string
         }
     }
     return sections.join("\n\n")
-}
-
-function assertStructuredCompactionSummary(summary: string): void {
-    const lines = summary.split("\n").map((line) => line.trim())
-    const headings = lines.filter((line) => line.startsWith("## "))
-    for (const [index, heading] of COMPACTION_SUMMARY_HEADINGS.entries()) {
-        if (headings[index] !== heading) {
-            throw new Error(`Compaction model omitted required section ${heading}`)
-        }
-    }
-    if (headings.length !== COMPACTION_SUMMARY_HEADINGS.length) {
-        throw new Error("Compaction model returned unexpected or duplicate sections")
-    }
-    if (lines.find((line) => line.length > 0) !== COMPACTION_SUMMARY_HEADINGS[0]) {
-        throw new Error("Compaction model returned content before the first section")
-    }
-}
-
-/** Returns whether a stored checkpoint follows the current exact structure. */
-export function isStructuredCompactionSummary(summary: string): boolean {
-    try {
-        assertStructuredCompactionSummary(summary)
-        return true
-    } catch {
-        return false
-    }
 }
 
 function serializedSummaryBytes(summary: string): number {

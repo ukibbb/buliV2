@@ -137,6 +137,21 @@ export const BULI_COMMANDS: readonly TBuliCommand[] = [
             await context.application.compactSession(context.sessionId)
         },
     },
+    {
+        kind: "prompt",
+        name: "grill",
+        description: "Clarify a plan one question at a time",
+    },
+    {
+        kind: "prompt",
+        name: "teach",
+        description: "Learn and practise a topic in conversation",
+    },
+    {
+        kind: "prompt",
+        name: "review",
+        description: "Review changes for bugs, requirements, readability, and maintainability",
+    },
 ]
 
 function shortSessionId(sessionId: string): string {

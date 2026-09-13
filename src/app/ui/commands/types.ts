@@ -34,6 +34,9 @@ type TBuliCommandHandler = (
 
 export type TBuliCommand = IBuliCommandInfo & (
     | {
+        readonly kind: "prompt"
+    }
+    | {
         readonly kind: "action"
         readonly handler: TBuliCommandHandler
     }

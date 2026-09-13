@@ -6,6 +6,7 @@ import {
     closeSync,
     existsSync,
     fstatSync,
+    lstatSync,
     mkdirSync,
     openSync,
     readFileSync,
@@ -27,6 +28,7 @@ import {
     type ICompactionCheckpoint,
 } from "@/sessions/compaction/checkpoint"
 import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
+import { acquireSessionLogLock } from "@/sessions/jsonl/session-log-lock"
 import type {
     ISessionInfo,
     ISessionManager,
@@ -71,12 +73,25 @@ export class JsonlSessionManager implements ISessionManager {
     private readonly memory = new InMemorySessionManager()
     private readonly persistedSessionIds = new Set<string>()
     private readonly filePath: string
+    private readonly releaseLock: () => void
     private disposed = false
 
     constructor(options: IJsonlSessionManagerOptions) {
-        this.filePath = options.filePath
+        // Rewrite the target of a log symlink, not the symlink itself, so our
+        // persistence path and its locked sidecar keep the same identity.
+        this.filePath = existsSync(options.filePath)
+            && lstatSync(options.filePath).isSymbolicLink()
+            ? realpathSync(options.filePath)
+            : options.filePath
         mkdirSync(dirname(this.filePath), { recursive: true, mode: 0o700 })
-        this.load()
+        this.releaseLock = acquireSessionLogLock(this.filePath)
+        try {
+            this.load()
+        } catch (error) {
+            // A failed constructor never reaches application disposal.
+            this.releaseLock()
+            throw error
+        }
     }
 
     readonly createSession = (info: ISessionInfo): void => {
@@ -213,6 +228,7 @@ export class JsonlSessionManager implements ISessionManager {
     readonly dispose = (): void => {
         if (this.disposed) return
         this.disposed = true
+        this.releaseLock()
     }
 
     private load(): void {
@@ -228,7 +244,10 @@ export class JsonlSessionManager implements ISessionManager {
             string,
             IFileChangeProposalRecord[]
         >()
-        const checkpointsBySession = new Map<string, ICompactionCheckpoint>()
+        const checkpointsBySession = new Map<string, {
+            readonly index: number
+            readonly checkpoint: ICompactionCheckpoint
+        }[]>()
         const sessionOrder: string[] = []
         const seenSessionIds = new Set<string>()
 
@@ -252,14 +271,14 @@ export class JsonlSessionManager implements ISessionManager {
                     )
                     break
                 }
-                throw invalidLineError(index, error)
+                throw this.invalidLineError(index, error)
             }
 
             if (isRecord(value) && value.recordType === "session") {
                 try {
                     assertSessionRecord(value)
                 } catch (error) {
-                    throw invalidLineError(index, error)
+                    throw this.invalidLineError(index, error)
                 }
 
                 rememberSession(value.session.id)
@@ -271,7 +290,7 @@ export class JsonlSessionManager implements ISessionManager {
                         || existing.createdAt !== value.session.createdAt
                     )
                 ) {
-                    throw invalidLineError(
+                    throw this.invalidLineError(
                         index,
                         new Error("Session identity cannot change"),
                     )
@@ -296,7 +315,7 @@ export class JsonlSessionManager implements ISessionManager {
                         )
                     }
                 } catch (error) {
-                    throw invalidLineError(index, error)
+                    throw this.invalidLineError(index, error)
                 }
 
                 const proposals = proposalsBySession.get(value.proposal.sessionId)
@@ -318,30 +337,42 @@ export class JsonlSessionManager implements ISessionManager {
                             `Missing session metadata: ${value.checkpoint.sessionId}`,
                         )
                     }
+                } catch (error) {
+                    throw this.invalidLineError(index, error)
+                }
+
+                // Checkpoints are derived summaries, not the source history. Older
+                // concurrent writers could save a count from a stale in-memory view.
+                // Reindexing it would hide messages the summary never incorporated.
+                // Skip only an invalid anchor, retaining the last valid checkpoint
+                // (or full history); malformed records still fail validation above.
+                try {
                     assertCheckpointAnchor(
                         value.checkpoint,
                         messagesBySession.get(value.checkpoint.sessionId) ?? [],
                     )
                 } catch (error) {
-                    throw invalidLineError(index, error)
+                    this.warnInvalidCheckpoint(index, error)
+                    continue
                 }
-                checkpointsBySession.set(
-                    value.checkpoint.sessionId,
-                    value.checkpoint,
-                )
+                const checkpoints = checkpointsBySession.get(value.checkpoint.sessionId)
+                    ?? []
+                checkpoints.push({ index, checkpoint: value.checkpoint })
+                checkpointsBySession.set(value.checkpoint.sessionId, checkpoints)
                 continue
             }
 
             try {
                 assertMessageRecord(value)
             } catch (error) {
-                throw invalidLineError(index, error)
+                throw this.invalidLineError(index, error)
             }
 
             const message = value.message
 
-            if (!infoBySession.has(message.sessionId)) {
-                throw invalidLineError(
+            const info = infoBySession.get(message.sessionId)
+            if (!info) {
+                throw this.invalidLineError(
                     index,
                     new Error(`Missing session metadata: ${message.sessionId}`),
                 )
@@ -349,7 +380,16 @@ export class JsonlSessionManager implements ISessionManager {
 
             rememberSession(message.sessionId)
             const messages = messagesBySession.get(message.sessionId) ?? []
-            messages.push(message)
+            // Replay the same replacement-by-ID semantics used by the live manager;
+            // raw record counts are not necessarily durable message positions.
+            const existingIndex = messages.findIndex((item) => item.id === message.id)
+            if (existingIndex === -1) messages.push(message)
+            else messages[existingIndex] = message
+            // Even a replaced record may have advanced the session's timestamp.
+            infoBySession.set(message.sessionId, {
+                ...info,
+                updatedAt: Math.max(info.updatedAt, message.createdAt),
+            })
             messagesBySession.set(message.sessionId, messages)
             this.persistedSessionIds.add(message.sessionId)
         }
@@ -364,9 +404,34 @@ export class JsonlSessionManager implements ISessionManager {
             for (const proposal of proposalsBySession.get(sessionId) ?? []) {
                 this.memory.saveFileChangeProposal(proposal)
             }
-            const checkpoint = checkpointsBySession.get(sessionId)
-            if (checkpoint) this.memory.saveCompactionCheckpoint(checkpoint)
+            // A later replacement may invalidate a previously complete tool sequence.
+            // Recheck against the final replay before choosing the newest usable summary.
+            for (const { index, checkpoint } of (
+                checkpointsBySession.get(sessionId) ?? []
+            ).toReversed()) {
+                try {
+                    this.memory.saveCompactionCheckpoint(checkpoint)
+                    break
+                } catch (error) {
+                    this.warnInvalidCheckpoint(index, error)
+                }
+            }
         }
+    }
+
+    private invalidLineError(index: number, cause: unknown): Error {
+        return new Error(
+            `Invalid session JSONL record on line ${index + 1} in ${this.filePath}: `
+            + errorMessage(cause),
+            { cause },
+        )
+    }
+
+    private warnInvalidCheckpoint(index: number, cause: unknown): void {
+        console.warn(
+            `Ignoring compaction checkpoint on line ${index + 1} in ${this.filePath}: `
+            + `${errorMessage(cause)}. Falling back to a valid checkpoint or full history.`,
+        )
     }
 
     private replaceFile(contents: string): void {
@@ -399,7 +464,7 @@ export class JsonlSessionManager implements ISessionManager {
          * A short read or any probe/close error must stop before appending rather
          * than guess a separator. The append remains synchronous: callers update
          * memory and acknowledge message_end only after persistence succeeds.
-         * This preserves the existing barrier, not fsync or multi-writer atomicity.
+         * The lifetime sidecar lock excludes other managers; this is not an fsync.
          */
         let separator = ""
         if (existsSync(this.filePath)) {
@@ -448,8 +513,8 @@ export function defaultSessionFilePath(
     return join(homedir(), ".buli", "sessions", `${workspaceID}.jsonl`)
 }
 
-function invalidLineError(index: number, cause: unknown): Error {
-    return new Error(`Invalid session JSONL record on line ${index + 1}`, { cause })
+function errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error)
 }
 
 function sessionRecord(info: ISessionInfo): ISessionRecord {

@@ -26,6 +26,9 @@ const FIND_INPUT_SCHEMA = Type.Object({
     limit: Type.Optional(Type.Number({
         description: "Maximum number of results (default: 1000)",
     })),
+    includeIgnored: Type.Optional(Type.Boolean({
+        description: "Include files excluded by ignore rules, including .gitignore (default: false). Use a narrowly scoped path to avoid searching unrelated ignored files.",
+    })),
 })
 
 const DEFAULT_LIMIT = 1_000
@@ -37,7 +40,7 @@ export function createFindTool(
 ): IAgentTool<typeof FIND_INPUT_SCHEMA, "find"> {
     return defineAgentTool({
         name: "find",
-        description: `Search for files by glob pattern. Returns matching file paths relative to the search directory. Respects .gitignore. Output is truncated to ${DEFAULT_LIMIT} results or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first).`,
+        description: `Search for files by glob pattern. Returns matching file paths relative to the search directory. Respects ignore rules unless includeIgnored is true. Output is truncated to ${DEFAULT_LIMIT} results or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first).`,
         inputSchema: FIND_INPUT_SCHEMA,
         selfTruncatesOutput: true,
         execute: (input, context) => new Promise<IAgentToolResult>((resolve, reject) => {
@@ -74,6 +77,7 @@ export function createFindTool(
                         "--color=never",
                         "--hidden",
                     ]
+                    if (input.includeIgnored === true) args.push("--no-ignore")
 
                     let insideGitRepo = false
                     for (let current = searchPath; ; ) {

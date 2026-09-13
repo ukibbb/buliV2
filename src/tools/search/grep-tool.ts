@@ -41,6 +41,9 @@ const GREP_INPUT_SCHEMA = Type.Object({
     limit: Type.Optional(Type.Number({
         description: "Maximum number of matches to return (default: 100)",
     })),
+    includeIgnored: Type.Optional(Type.Boolean({
+        description: "Include files excluded by ignore rules, including .gitignore (default: false). Use a narrowly scoped path to avoid searching unrelated ignored files.",
+    })),
 })
 
 const DEFAULT_LIMIT = 100
@@ -58,7 +61,7 @@ export function createGrepTool(
 ): IAgentTool<typeof GREP_INPUT_SCHEMA, "grep"> {
     return defineAgentTool({
         name: "grep",
-        description: `Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects .gitignore. Output is truncated to ${DEFAULT_LIMIT} matches or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Long lines are truncated to ${GREP_MAX_LINE_LENGTH} chars.`,
+        description: `Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects ignore rules unless includeIgnored is true. Output is truncated to ${DEFAULT_LIMIT} matches or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Long lines are truncated to ${GREP_MAX_LINE_LENGTH} chars.`,
         inputSchema: GREP_INPUT_SCHEMA,
         selfTruncatesOutput: true,
         execute: (input, context) => new Promise<IAgentToolResult>((resolve, reject) => {
@@ -139,6 +142,7 @@ export function createGrepTool(
                         "--color=never",
                         "--hidden",
                     ]
+                    if (input.includeIgnored === true) args.push("--no-ignore")
                     if (input.ignoreCase) args.push("--ignore-case")
                     if (input.literal) args.push("--fixed-strings")
                     if (input.glob) args.push("--glob", input.glob)

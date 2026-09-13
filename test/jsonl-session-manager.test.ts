@@ -1,4 +1,4 @@
-import { expect, spyOn, test } from "bun:test"
+import { afterEach, expect, spyOn, test } from "bun:test"
 import { Buffer } from "node:buffer"
 import * as fs from "node:fs"
 import {
@@ -25,7 +25,15 @@ import {
   type ICompactionCheckpoint,
   type ISessionInfo,
   JsonlSessionManager,
+  projectAgentContext,
 } from "@/sessions"
+
+const managers = new Set<JsonlSessionManager>()
+
+afterEach(() => {
+  for (const manager of managers) manager.dispose()
+  managers.clear()
+})
 
 test("stages cloned metadata and writes exact version 2 envelopes on first append", async () => {
   const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-"))
@@ -76,6 +84,7 @@ test("stages cloned metadata and writes exact version 2 envelopes on first appen
     ])
 
     const contents = await readFile(filePath, "utf8")
+    manager.dispose()
     const restored = jsonlManager(filePath)
     expect(restored.getMessages("session-1")).toEqual([user, assistant])
     expect(restored.getSessionInfo("session-1")).toEqual({
@@ -112,7 +121,6 @@ test("round-trips selected paths and direct image attachments", async () => {
     }
 
     manager.appendMessage(message)
-    expect(jsonlManager(filePath).getMessages("session-1")).toEqual([message])
     expect(() => manager.appendMessage({
       ...userMessage("Review @visible", { createdAt: 3 }),
       id: "detached-reference",
@@ -123,6 +131,8 @@ test("round-trips selected paths and direct image attachments", async () => {
         source: { value: "@visible", start: 99, end: 107 },
       }],
     })).toThrow("does not match message content")
+    manager.dispose()
+    expect(jsonlManager(filePath).getMessages("session-1")).toEqual([message])
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
@@ -472,6 +482,7 @@ test("keeps the latest message ID and repairs a truncated final append", async (
       completed: true,
       createdAt: 2,
     }))
+    restored.dispose()
     const reopened = jsonlManager(filePath)
     expect(reopened.getMessages("session-1")).toHaveLength(2)
   } finally {
@@ -501,6 +512,7 @@ test("appends safely after a valid final record without a newline", async () => 
     })
     manager.appendMessage(assistant)
 
+    manager.dispose()
     expect(jsonlManager(filePath).getMessages(info.id)).toEqual([
       user,
       assistant,
@@ -553,6 +565,7 @@ test("reads exactly one tail byte regardless of log size or newline termination"
           expect(tailRead.mock.results).toEqual([{ type: "return", value: 1 }])
           expect(close).toHaveBeenCalledTimes(1)
           expect(close).toHaveBeenCalledWith(tailRead.mock.calls[0]?.[0])
+          manager.dispose()
         } finally {
           close.mockRestore()
           tailRead.mockRestore()
@@ -562,7 +575,9 @@ test("reads exactly one tail byte regardless of log size or newline termination"
         expect(await readFile(filePath, "utf8")).toBe(
           contents + (ending ? "" : "\n") + serializeRecords([messageRecord(assistant)]),
         )
-        expect(jsonlManager(filePath).getMessages("session-1")).toEqual([user, assistant])
+        const restored = jsonlManager(filePath)
+        expect(restored.getMessages("session-1")).toEqual([user, assistant])
+        restored.dispose()
       }
     }
   } finally {
@@ -769,6 +784,7 @@ test("delete removes persisted metadata and messages without affecting other ses
       messageRecord(secondMessage),
     ])
 
+    manager.dispose()
     const restored = jsonlManager(filePath)
     expect(restored.getSessionInfo("session-1")).toBeUndefined()
     expect(restored.getMessages("session-1")).toEqual([])
@@ -810,6 +826,7 @@ test("restores completed turns into the next Agent model request", async () => {
       completed: true,
       createdAt: 2,
     }))
+    stored.dispose()
 
     const requests: IAgentModelRequest[] = []
     const session = new AgentSession({
@@ -898,10 +915,198 @@ test("restores the latest same-anchor checkpoint without deleting history", asyn
     expect((await jsonlRecords(filePath)).filter((record) => (
       record as { recordType?: string }
     ).recordType === "compaction")).toHaveLength(2)
+    manager.dispose()
     const restored = jsonlManager(filePath)
     expect(restored.getMessages("session-1")).toEqual([user, assistant])
     expect(restored.getCompactionCheckpoint("session-1")).toEqual(latest)
   } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test("recovers stale checkpoints using the last valid summary and every later message", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-stale-checkpoint-"))
+  const filePath = join(directory, "sessions.jsonl")
+  const warning = spyOn(console, "warn").mockImplementation(() => {})
+
+  try {
+    const first = userMessage("Earlier question")
+    const answer = assistantMessage("Earlier answer", { completed: true })
+    const later = userMessage("Message absent from the stale writer", { id: "user-2" })
+    const laterAnswer = assistantMessage("Later answer", {
+      id: "assistant-2",
+      completed: true,
+    })
+    const valid = compactionCheckpoint()
+    const stale = compactionCheckpoint({
+      id: "stale",
+      compactedMessageCount: 3,
+      throughMessageId: laterAnswer.id,
+    })
+    const contents = serializeRecords([
+      sessionRecord(sessionInfo()),
+      messageRecord(first),
+      messageRecord(answer),
+      { recordType: "compaction", version: 2, checkpoint: valid },
+      messageRecord(later),
+      messageRecord(laterAnswer),
+      { recordType: "compaction", version: 2, checkpoint: stale },
+      { recordType: "compaction", version: 2, checkpoint: {
+        ...stale, id: "missing-anchor", throughMessageId: "missing",
+      } },
+      sessionRecord(sessionInfo("session-2")),
+      messageRecord(userMessage("Another session", { sessionId: "session-2" })),
+    ])
+    await writeFile(filePath, contents)
+
+    const restored = jsonlManager(filePath)
+    expect(restored.listSessions()).toHaveLength(2)
+    expect(restored.getMessages("session-1")).toEqual([first, answer, later, laterAnswer])
+    expect(restored.getMessages("session-2")).toHaveLength(1)
+    expect(restored.getCompactionCheckpoint("session-1")).toEqual(valid)
+    expect(projectAgentContext(
+      restored.getMessages("session-1"),
+      restored.getCompactionCheckpoint("session-1"),
+    )).toEqual({ contextSummary: valid.summary, messages: [later, laterAnswer] })
+    expect(await readFile(filePath, "utf8")).toBe(contents)
+    expect(warning).toHaveBeenCalledTimes(2)
+    expect(warning.mock.calls[0]?.[0]).toContain(`line 7 in ${filePath}`)
+    expect(warning.mock.calls[0]?.[0]).toContain("Compaction checkpoint does not match session")
+    expect(warning.mock.calls[1]?.[0]).toContain("line 8")
+
+    // A rebuilt summary must survive another restart even while old bad records
+    // remain in the append-only log. Recovery does not rewrite the source history.
+    const rebuilt = compactionCheckpoint({
+      id: "rebuilt",
+      compactedMessageCount: 4,
+      throughMessageId: laterAnswer.id,
+      summary: "Both complete turns, including the missing message.",
+    })
+    restored.saveCompactionCheckpoint(rebuilt)
+    restored.dispose()
+    const reopened = jsonlManager(filePath)
+    expect(reopened.getCompactionCheckpoint("session-1")).toEqual(rebuilt)
+    expect(reopened.getMessages("session-1")).toEqual([first, answer, later, laterAnswer])
+  } finally {
+    warning.mockRestore()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test("uses full history when no checkpoint has a valid anchor", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-no-checkpoint-"))
+  const filePath = join(directory, "sessions.jsonl")
+  const warning = spyOn(console, "warn").mockImplementation(() => {})
+
+  try {
+    const messages = [userMessage("Question"), assistantMessage("Answer", { completed: true })]
+    const contents = serializeRecords([
+      sessionRecord(sessionInfo()),
+      ...messages.map(messageRecord),
+      { recordType: "compaction", version: 2, checkpoint: compactionCheckpoint({
+        compactedMessageCount: 1,
+      }) },
+    ])
+    await writeFile(filePath, contents)
+    const restored = jsonlManager(filePath)
+    expect(restored.getCompactionCheckpoint("session-1")).toBeUndefined()
+    expect(projectAgentContext(restored.getMessages("session-1"))).toEqual({ messages })
+    expect(await readFile(filePath, "utf8")).toBe(contents)
+    expect(warning).toHaveBeenCalledTimes(1)
+  } finally {
+    warning.mockRestore()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test("rejects malformed checkpoint records with a path and cause, releasing the startup lock", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-invalid-checkpoint-"))
+  const filePath = join(directory, "sessions.jsonl")
+  const warning = spyOn(console, "warn").mockImplementation(() => {})
+
+  try {
+    for (const [checkpoint, cause] of [
+      [compactionCheckpoint({ summary: "" }), "Invalid compaction checkpoint"],
+      [compactionCheckpoint({ sessionId: "missing" }), "Missing session metadata: missing"],
+    ] as const) {
+      const contents = serializeRecords([
+        sessionRecord(sessionInfo()),
+        { recordType: "compaction", version: 2, checkpoint },
+      ])
+      await writeFile(filePath, contents)
+      expect(() => jsonlManager(filePath)).toThrow(
+        `Invalid session JSONL record on line 2 in ${filePath}: ${cause}`,
+      )
+      expect(await readFile(filePath, "utf8")).toBe(contents)
+    }
+    expect(warning).not.toHaveBeenCalled()
+    await writeFile(filePath, serializeRecords([sessionRecord(sessionInfo())]))
+    expect(jsonlManager(filePath).listSessions()).toHaveLength(1)
+  } finally {
+    warning.mockRestore()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test("validates checkpoint positions against replaced messages rather than raw records", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-replaced-anchor-"))
+  const filePath = join(directory, "sessions.jsonl")
+  const warning = spyOn(console, "warn").mockImplementation(() => {})
+
+  try {
+    const replacement = userMessage("Revised question")
+    const answer = assistantMessage("Answer", { completed: true })
+    const checkpoint = compactionCheckpoint()
+    await writeFile(filePath, serializeRecords([
+      sessionRecord(sessionInfo()),
+      messageRecord(userMessage("Original question", { createdAt: 10 })),
+      messageRecord(replacement),
+      messageRecord(answer),
+      { recordType: "compaction", version: 2, checkpoint },
+    ]))
+    const restored = jsonlManager(filePath)
+    expect(restored.getMessages("session-1")).toEqual([replacement, answer])
+    expect(restored.getSessionInfo("session-1")?.updatedAt).toBe(10)
+    expect(restored.getCompactionCheckpoint("session-1")).toEqual(checkpoint)
+    expect(warning).not.toHaveBeenCalled()
+  } finally {
+    warning.mockRestore()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test("rechecks checkpoint tool sequences after later message replacements", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-replaced-sequence-"))
+  const filePath = join(directory, "sessions.jsonl")
+  const warning = spyOn(console, "warn").mockImplementation(() => {})
+
+  try {
+    const previous = compactionCheckpoint()
+    const toolCall: IAssistantMessage = {
+      ...assistantMessage("", { id: "tool-assistant", completed: true }),
+      content: [{ type: "toolCall", toolCallId: "call-1", toolName: "test_tool", input: {} }],
+      stopReason: "tool-calls",
+    }
+    const result = toolResultMessage("Result")
+    await writeFile(filePath, serializeRecords([
+      sessionRecord(sessionInfo()),
+      messageRecord(userMessage("Question")),
+      messageRecord(assistantMessage("Answer", { completed: true })),
+      { recordType: "compaction", version: 2, checkpoint: previous },
+      messageRecord(toolCall),
+      messageRecord(result),
+      { recordType: "compaction", version: 2, checkpoint: compactionCheckpoint({
+        id: "latest", compactedMessageCount: 4, throughMessageId: result.id,
+      }) },
+      messageRecord({ ...toolCall, content: [], stopReason: "error" }),
+    ]))
+    const restored = jsonlManager(filePath)
+    expect(restored.getMessages("session-1")).toHaveLength(4)
+    expect(restored.getCompactionCheckpoint("session-1")).toEqual(previous)
+    expect(warning).toHaveBeenCalledTimes(1)
+    expect(warning.mock.calls[0]?.[0]).toContain("line 7")
+  } finally {
+    warning.mockRestore()
     await rm(directory, { recursive: true, force: true })
   }
 })
@@ -927,6 +1132,7 @@ test("round-trips the latest file-change proposal state", async () => {
     expect(records.filter((record) => (
       record as { recordType?: string }
     ).recordType === "fileChangeProposal")).toHaveLength(2)
+    manager.dispose()
     expect(jsonlManager(filePath).getFileChangeProposals("session-1"))
       .toEqual([applied])
   } finally {
@@ -971,27 +1177,38 @@ test("expires a restored pending proposal through append-only JSONL", async () =
   }
 })
 
-test("opens a session log while another manager is active", async () => {
+test("exclusively owns a log until disposal, including across atomic rewrites", async () => {
   const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-shared-"))
   const filePath = join(directory, "sessions.jsonl")
 
   try {
     const first = jsonlManager(filePath)
+    expect(() => jsonlManager(filePath)).toThrow("Unable to lock session log")
     first.createSession(sessionInfo())
     first.appendMessage(userMessage("First"))
 
+    expect(() => jsonlManager(filePath)).toThrow("Unable to lock session log")
+    first.deleteSession("session-1")
+    expect(() => jsonlManager(filePath)).toThrow("Unable to lock session log")
+    first.createSession(sessionInfo())
+    first.appendMessage(userMessage("After rewrite"))
+    first.dispose()
+
     const second = jsonlManager(filePath)
     expect(second.getMessages("session-1")).toHaveLength(1)
-
-    second.dispose()
+    // Repeated disposal must not release a newer manager's ownership.
     first.dispose()
+    expect(() => jsonlManager(filePath)).toThrow("Unable to lock session log")
+    second.dispose()
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
 })
 
 function jsonlManager(filePath: string): JsonlSessionManager {
-  return new JsonlSessionManager({ filePath })
+  const manager = new JsonlSessionManager({ filePath })
+  managers.add(manager)
+  return manager
 }
 
 async function jsonlRecords(filePath: string): Promise<unknown[]> {
@@ -1042,6 +1259,21 @@ function fileChangeProposal(
     diff: "-const value = 1\n+const value = 2\n",
     status: "pending",
     createdAt: 3,
+    ...overrides,
+  }
+}
+
+function compactionCheckpoint(
+  overrides: Partial<ICompactionCheckpoint> = {},
+): ICompactionCheckpoint {
+  return {
+    id: "checkpoint-1",
+    sessionId: "session-1",
+    createdAt: 3,
+    reason: "automatic",
+    compactedMessageCount: 2,
+    throughMessageId: "assistant-1",
+    summary: "Earlier question and answer.",
     ...overrides,
   }
 }

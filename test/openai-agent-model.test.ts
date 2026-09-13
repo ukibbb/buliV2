@@ -169,6 +169,10 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
         type: "number",
         description: "Maximum number of results (default: 1000)",
       },
+      includeIgnored: {
+        type: "boolean",
+        description: "Include files excluded by ignore rules, including .gitignore (default: false). Use a narrowly scoped path to avoid searching unrelated ignored files.",
+      },
     },
     required: ["pattern"],
   })
@@ -202,6 +206,10 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
       limit: {
         type: "number",
         description: "Maximum number of matches to return (default: 100)",
+      },
+      includeIgnored: {
+        type: "boolean",
+        description: "Include files excluded by ignore rules, including .gitignore (default: false). Use a narrowly scoped path to avoid searching unrelated ignored files.",
       },
     },
     required: ["pattern"],

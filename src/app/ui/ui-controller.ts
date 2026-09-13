@@ -75,6 +75,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
             store: this.store,
             commands: this.commands,
             commandContext: this.commandContext,
+            submitPromptCommand: (text) => this.submitInput(text),
         })
         this.pathMenu = new BuliPathMenu({
             application: this.application,
@@ -83,7 +84,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
         this.inputSubmission = new BuliInputSubmission({
             application: this.application,
             store: this.store,
-            commands: this.commands,
+            commands: BULI_COMMANDS,
             activeSessionId: this.activeSessionId,
             executeCommand: this.commandMenu.executeCommand,
             consumeInput: this.consumeInputDraft,

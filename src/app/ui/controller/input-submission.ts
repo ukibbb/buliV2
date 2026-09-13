@@ -1,6 +1,6 @@
 import type { IBuliApplication } from "@/app/contracts"
 import { trimUserInput } from "@/app/ui/chat/prompt-draft"
-import type { IBuliCommandInfo } from "@/app/ui/commands/types"
+import type { TBuliCommand } from "@/app/ui/commands/types"
 import {
     BuliUiStateStore,
     errorMessage,
@@ -13,7 +13,7 @@ export type TBuliInputDelivery = "auto" | "followUp"
 interface IBuliInputSubmissionOptions {
     readonly application: IBuliApplication
     readonly store: BuliUiStateStore
-    readonly commands: readonly IBuliCommandInfo[]
+    readonly commands: readonly TBuliCommand[]
     readonly activeSessionId: () => string | null
     readonly executeCommand: (name: string, args: string) => Promise<boolean>
     readonly consumeInput: (input: IUserInputContent) => void
@@ -23,7 +23,7 @@ interface IBuliInputSubmissionOptions {
 export class BuliInputSubmission {
     private readonly application: IBuliApplication
     private readonly store: BuliUiStateStore
-    private readonly commands: readonly IBuliCommandInfo[]
+    private readonly commands: readonly TBuliCommand[]
     private readonly activeSessionId: () => string | null
     private readonly executeCommand: (
         name: string,
@@ -92,14 +92,14 @@ export class BuliInputSubmission {
             ? this.commands.find((command) => command.name === name)
             : undefined
 
-        if (knownCommand && args) {
+        if (knownCommand && knownCommand.kind !== "prompt" && args) {
             this.store.setInputError(
                 new Error(`/${knownCommand.name} does not accept arguments`),
             )
             return "retained"
         }
 
-        if (name && !args) {
+        if (name && !args && knownCommand?.kind !== "prompt") {
             try {
                 if (await this.executeCommand(name, args)) {
                     this.consumeInput(input)

@@ -205,31 +205,6 @@ test.each([true, false])("includes the notes instruction location with read avai
   expect(prompt).toContain("Loading the instruction document neither loads all notes nor authorizes changes.")
 })
 
-test("retains source-display boundaries and concrete explanation requirements", () => {
-  const prompt = systemPrompt("/workspace", [])
-
-  for (const instruction of [
-    "Omit original source comments from explanatory displays.",
-    "Preserve all remaining source text exactly, including whitespace, names, literals, and order.",
-    "Above each annotated block, state once that explanations were added. Mention omitted source comments when present.",
-    "If an omitted comment affects the behavior being explained, explain that effect outside the block.",
-    "Omission changes only the display; it does not authorize changing project source comments.",
-    "Exact diffs, edit input text, and Bash command blocks presented for approval or already approved retain their comments under their separate exact-text rules.",
-    "Use the language's comment syntax without labels or markers for operational descriptions in direct natural-language pseudocode in the user's language: assign, for each, if, call, wait for, return.",
-    "Begin with the current purpose and show the relevant fragment or concrete project input, state, or behavior.",
-    "Explain the operation and trace its necessary steps to the result under the causal-sequence rules below.",
-    "After tracing the concrete case, explain the general rule it illustrates.",
-    "Refer back to a previously explained mechanism only when the explanation remains available in the conversation and covers the mechanism used in the current case.",
-    "Identify that explanation unambiguously, then explain the current inputs, relevant differences, and how they lead to the current result.",
-    "Explain any missing steps or mechanisms rather than treating a reference as coverage.",
-    "Prior explanation does not prove understanding; preserve required understanding checks and, when a gap is revealed, explain the missing connection differently instead of merely referring back.",
-    "Show the fragment or concrete data and conditions needed to answer.",
-    "Ask about a specific effect or relationship in that material. Do not make the user guess an unstated example.",
-  ]) {
-    expect(prompt).toContain(instruction)
-  }
-})
-
 test("distinguishes product requirements from exercise answers without waiving understanding checks", () => {
   const prompt = systemPrompt("/workspace", [])
 

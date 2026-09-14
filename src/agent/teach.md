@@ -12,6 +12,10 @@ Before beginning /teach, obtain this document under <instruction_documents>. Rea
 - This command starts a conversational task, not a persistent mode. Follow topic changes and redirection without requiring /exit. Ordinary requests for explanation remain valid without /teach.
 - Keep lessons, explanations, exercises, and feedback in the conversation. Do not create HTML, interactive lesson interfaces, separate quiz commands, or learning artifacts unless independently requested and authorized.
 
+## Agree on code coverage
+
+- For code-based learning, apply <code_explanation>'s shared scope, line-by-line coverage, dependency-context, and evidence rules. Use the learning goal to identify the code and version to study; /teach provides a focused learning procedure, not a separate explanation standard.
+
 ## Learn from an implemented feature
 
 - Apply this section when the user wants to understand an implemented feature or a set of changes. Do not require a detailed prompt or apply a change-source interview to ordinary concept lessons. Reuse established context and inspect available evidence before asking one focused question about the next material gap; do not present a fixed questionnaire.
@@ -19,7 +23,7 @@ Before beginning /teach, obtain this document under <instruction_documents>. Rea
 - Use relevant inspection to identify included changes and consequential scope uncertainty. Ask for a decision when a change's relationship to the topic is unclear. Do not automatically include unrelated work or interrupt teaching to ask about every clearly unrelated change. Reading a dependency to explain the feature does not make that dependency a separate lesson topic. If broader coverage is necessary, explain why and obtain agreement before widening the scope.
 - Establish whether the goal is to understand and explain the existing implementation, independently write similar behaviour, or both. Reuse an explicit goal rather than asking again. Clarify requested depth only when materially ambiguous; apply the full explanation standard within the agreed scope rather than silently stopping at a diff or API boundary.
 - Use the changes to locate the feature, not as the entire explanation. Begin with its purpose and a concrete input and initial state, then trace the real trigger through callers, changed and unchanged code, conditions, calls, returned values, state changes, and the observable result. Explain relevant alternative branches, errors, cleanup, cancellation, and asynchronous ordering under <code_explanation>.
-- Introduce the language prerequisites needed for each step before relying on them. Follow participating framework, library, runtime, operating-system, network, driver, and hardware mechanisms under <code_explanation>, rather than replacing implementation with API names or contracts. Verify installed versions and available source or authoritative documentation. Distinguish inspected implementation, documented general behaviour, and runtime observations; identify the exact evidence boundary when internals cannot be verified. Do not invent missing mechanisms or claim an unfinished trace is complete.
+- Apply <code_explanation>'s shared prerequisite, execution-depth, and evidence rules to the selected implementation and its necessary dependency context.
 - Teach in small, coherent execution segments with the active understanding checks and continuation rules. For an understanding-only goal, do not require reimplementing the feature merely to add a coding exercise. For an independent-coding goal, include practical application under <learning>. Preserve separate approvals for execution, file changes, and saving lessons or progress.
 
 For example, after `/teach I want to understand the conversation-history feature`, reuse any established feature and change source, inspect relevant evidence, and ask only for missing decisions. If unrelated login changes are present, do not silently include them. Explain necessary shared code as context without turning the lesson into a review or a lesson on the entire login feature. After `/teach explain closures`, use the ordinary teaching procedure without asking about branches or commits unless the requested example needs that context.
@@ -35,6 +39,7 @@ For example, after `/teach I want to understand the conversation-history feature
 
 ## Assess only what the evidence supports
 
+- Apply <intent_routing>'s shared coverage tracking, understanding checks, and advancement rules to the learning goal and agreed code scope.
 - Distinguish explaining supplied code, predicting results, independently writing code, and explaining why a solution works; evidence for one does not establish the others. For combined coding-and-understanding goals, require both within the agreed scope, under <intent_routing>'s understanding-check requirements and <code_explanation>. One happy-path answer is not deep understanding.
 - Record the task, relevant inputs and conditions, observed response or action, assessment, and assistance. Distinguish independent performance from success after hints, worked examples, or supplied solutions; unknown assistance stays unknown.
 - Apply <intent_routing>'s evidence and advancement limits: exposure, acceptance, and fixed answer counts do not prove mastery or long-term retention. A note's existence proves neither; an untested skill does not prove inability. Use precise scope, not scores or whole-topic mastery labels; distinguish demonstrated skills, demonstrated gaps, and unassessed areas.

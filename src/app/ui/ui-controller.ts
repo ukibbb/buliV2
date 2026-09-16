@@ -26,6 +26,7 @@ import {
 import {
     BuliUiStateStore,
     type IBuliUiSnapshot,
+    type TBuliRoute,
 } from "@/app/ui/controller/state"
 import { BuliToolApproval } from "@/app/ui/controller/tool-approval"
 import type { TAuthenticationMode } from "@/authentication/ui"
@@ -64,6 +65,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     private readonly inputSubmission: BuliInputSubmission
     private readonly toolApproval: BuliToolApproval
     private inputDraft: IUserInputContent = { text: "" }
+    private navigationPending = false
 
     constructor(options: IBuliUiControllerOptions) {
         this.application = options.application
@@ -142,6 +144,10 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     }
 
     readonly activateSelectedMenuItem = (): Promise<IPathCompletion | void> => {
+        if (this.navigationPending) {
+            this.store.setInputError(new Error("Session navigation is still pending"))
+            return Promise.resolve()
+        }
         if (this.store.getSnapshot().menu?.mode === "paths") {
             return Promise.resolve(this.pathMenu.activateSelectedItem())
         }
@@ -152,6 +158,10 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
         input: TUserInput,
         delivery: TBuliInputDelivery = "auto",
     ): Promise<TBuliInputSubmitResult> => {
+        if (this.navigationPending) {
+            this.store.setInputError(new Error("Session navigation is still pending"))
+            return Promise.resolve("retained")
+        }
         this.pathMenu.cancel()
         this.commandMenu.cancelPendingLoad()
         return this.inputSubmission.submit(
@@ -233,23 +243,8 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
         })
     }
 
-    readonly goHome = (): void => {
-        if (this.store.isDisposed) return
-        this.commandMenu.cancelPendingLoad()
-        this.pathMenu.cancel()
-        const snapshot = this.store.getSnapshot()
-        if (snapshot.route.type === "home") {
-            this.store.setMenu(null)
-            return
-        }
-
-        this.assertCanSwitchSession()
-        this.store.setSnapshot({
-            ...this.store.getSnapshot(),
-            route: { type: "home" },
-            menu: null,
-            inputError: null,
-        })
+    readonly goHome = (): Promise<void> => {
+        return this.changeRoute({ type: "home" })
     }
 
     readonly openAuthentication = (mode: TAuthenticationMode): void => {
@@ -274,27 +269,47 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
         })
     }
 
-    readonly activateSession = (sessionId: string): void => {
+    readonly activateSession = (sessionId: string): Promise<void> => {
+        return this.changeRoute({ type: "session", sessionId })
+    }
+
+    private async changeRoute(route: TBuliRoute): Promise<void> {
         if (this.store.isDisposed) return
+        if (this.navigationPending) {
+            throw new Error("Session navigation is still pending")
+        }
         this.commandMenu.cancelPendingLoad()
         this.pathMenu.cancel()
-        const snapshot = this.store.getSnapshot()
-        if (
-            snapshot.route.type === "session"
-            && snapshot.route.sessionId === sessionId
-        ) {
+        const previousSessionId = this.activeSessionId()
+        const nextSessionId = route.type === "session" ? route.sessionId : null
+        if (previousSessionId === nextSessionId) {
             this.store.setMenu(null)
             return
         }
 
         this.assertCanSwitchSession()
-        this.application.openSession(sessionId)
-        this.store.setSnapshot({
-            ...this.store.getSnapshot(),
-            route: { type: "session", sessionId },
-            menu: null,
-            inputError: null,
-        })
+        this.navigationPending = true
+        try {
+            if (nextSessionId !== null) this.application.openSession(nextSessionId)
+            this.store.setSnapshot({
+                ...this.store.getSnapshot(),
+                route,
+                menu: null,
+                inputError: null,
+            })
+            if (previousSessionId !== null) {
+                try {
+                    await this.application.closeSession(previousSessionId)
+                } catch (error) {
+                    const reason = error instanceof Error ? error.message : String(error)
+                    this.store.setInputError(new Error(
+                        `Failed to close previous session ${previousSessionId}: ${reason}`,
+                    ))
+                }
+            }
+        } finally {
+            this.navigationPending = false
+        }
     }
 
     private readonly activeSessionId = (): string | null => {

@@ -1205,6 +1205,155 @@ test("exclusively owns a log until disposal, including across atomic rewrites", 
   }
 })
 
+test("read-only history can be inspected while a writer owns the log without permitting mutations", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-read-only-"))
+  const filePath = join(directory, "sessions.jsonl")
+  let reader: JsonlSessionManager | undefined
+  const writer = jsonlManager(filePath)
+
+  try {
+    const info = sessionInfo()
+    const message = userMessage("Original question")
+    writer.createSession(info)
+    writer.appendMessage(message)
+    const originalContents = await readFile(filePath, "utf8")
+    reader = new JsonlSessionManager({ filePath, readOnly: true })
+    const inspected = reader
+
+    expect(inspected.listSessions()).toEqual([info])
+    expect(inspected.getMessages(info.id)).toEqual([message])
+    expect(() => inspected.createSession(sessionInfo("session-2"))).toThrow("Session log is read-only")
+    expect(() => inspected.appendMessage(userMessage("Forbidden"))).toThrow("Session log is read-only")
+    expect(() => inspected.saveFileChangeProposal(fileChangeProposal())).toThrow("Session log is read-only")
+    expect(() => inspected.saveCompactionCheckpoint(compactionCheckpoint())).toThrow("Session log is read-only")
+    expect(() => inspected.deleteSession(info.id)).toThrow("Session log is read-only")
+    expect(inspected.listSessions()).toEqual([info])
+    expect(inspected.getMessages(info.id)).toEqual([message])
+    expect(inspected.getFileChangeProposals(info.id)).toEqual([])
+    expect(inspected.getCompactionCheckpoint(info.id)).toBeUndefined()
+    expect(await readFile(filePath, "utf8")).toBe(originalContents)
+
+    inspected.dispose()
+    expect(() => inspected.exportSession(info.id)).toThrow("JSONL session manager is disposed")
+    expect(() => jsonlManager(filePath)).toThrow("Unable to lock session log")
+    writer.appendMessage(assistantMessage("Writer still owns the log", { completed: true }))
+    expect(writer.getMessages(info.id)).toHaveLength(2)
+  } finally {
+    reader?.dispose()
+    writer.dispose()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test("read-only history creates neither directories nor lock files", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-read-only-missing-"))
+  const filePath = join(directory, "missing", "sessions.jsonl")
+  let reader: JsonlSessionManager | undefined
+
+  try {
+    reader = new JsonlSessionManager({ filePath, readOnly: true })
+    expect(reader.listSessions()).toEqual([])
+    expect(fs.existsSync(join(directory, "missing"))).toBe(false)
+    reader.dispose()
+
+    const existingFilePath = join(directory, "existing.jsonl")
+    await writeFile(existingFilePath, serializeRecords([sessionRecord(sessionInfo())]))
+    reader = new JsonlSessionManager({ filePath: existingFilePath, readOnly: true })
+    expect(reader.listSessions()).toEqual([sessionInfo()])
+    expect(fs.existsSync(`${existingFilePath}.lock`)).toBe(false)
+  } finally {
+    reader?.dispose()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test("read-only history ignores an unfinished tail without repairing it and rejects complete malformed records", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-read-only-tail-"))
+  const filePath = join(directory, "sessions.jsonl")
+  let reader: JsonlSessionManager | undefined
+
+  try {
+    const message = userMessage("Complete message")
+    const completeContents = serializeRecords([
+      sessionRecord(sessionInfo()),
+      messageRecord(message),
+    ])
+    const unfinishedContents = `${completeContents}{\"recordType\":`
+    await writeFile(filePath, unfinishedContents)
+    reader = new JsonlSessionManager({ filePath, readOnly: true })
+    expect(reader.getMessages("session-1")).toEqual([message])
+    expect(await readFile(filePath, "utf8")).toBe(unfinishedContents)
+    expect(fs.existsSync(`${filePath}.lock`)).toBe(false)
+    reader.dispose()
+
+    for (const malformedRecord of ["{broken}\n", "{}\n"]) {
+      const contents = completeContents + malformedRecord
+      await writeFile(filePath, contents)
+      expect(() => new JsonlSessionManager({ filePath, readOnly: true }))
+        .toThrow("Invalid session JSONL record on line 3")
+      expect(await readFile(filePath, "utf8")).toBe(contents)
+    }
+  } finally {
+    reader?.dispose()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test("session export preserves only the selected session's replayed state without changing the source", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-export-"))
+  const filePath = join(directory, "sessions.jsonl")
+  const exportedPath = join(directory, "exported.jsonl")
+  let reader: JsonlSessionManager | undefined
+  let restored: JsonlSessionManager | undefined
+
+  try {
+    const info = sessionInfo()
+    const question = userMessage("Question")
+    const answer = assistantMessage("Final answer", { completed: true })
+    const pendingProposal = fileChangeProposal()
+    const appliedProposal = fileChangeProposal({ status: "applied", resolvedAt: 4 })
+    const checkpoint = compactionCheckpoint()
+    const latestCheckpoint = compactionCheckpoint({ id: "checkpoint-2", createdAt: 5, summary: "Latest summary." })
+    const contents = serializeRecords([
+      sessionRecord(info),
+      messageRecord(question),
+      messageRecord(assistantMessage("Earlier answer", { completed: true })),
+      messageRecord(answer),
+      { recordType: "fileChangeProposal", version: 2, proposal: pendingProposal },
+      { recordType: "fileChangeProposal", version: 2, proposal: appliedProposal },
+      { recordType: "compaction", version: 2, checkpoint },
+      { recordType: "compaction", version: 2, checkpoint: latestCheckpoint },
+      sessionRecord(sessionInfo("session-2")),
+      messageRecord(userMessage("Other conversation", { sessionId: "session-2", id: "other-user" })),
+    ])
+    await writeFile(filePath, contents)
+    reader = new JsonlSessionManager({ filePath, readOnly: true })
+    const exported = reader.exportSession(info.id)
+    const expectedInfo = { ...info, updatedAt: 2 }
+    expect(exported).toBe(serializeRecords([
+      sessionRecord(expectedInfo),
+      messageRecord(question),
+      messageRecord(answer),
+      { recordType: "fileChangeProposal", version: 2, proposal: appliedProposal },
+      { recordType: "compaction", version: 2, checkpoint: latestCheckpoint },
+    ]))
+    expect(() => reader!.exportSession("missing")).toThrow("Session does not exist: missing")
+    expect(await readFile(filePath, "utf8")).toBe(contents)
+
+    await writeFile(exportedPath, exported)
+    restored = jsonlManager(exportedPath)
+    expect(restored.listSessions()).toEqual([expectedInfo])
+    expect(restored.getMessages(info.id)).toEqual([question, answer])
+    expect(restored.getFileChangeProposals(info.id)).toEqual([appliedProposal])
+    expect(restored.getCompactionCheckpoint(info.id)).toEqual(latestCheckpoint)
+    expect(restored.getSessionInfo("session-2")).toBeUndefined()
+  } finally {
+    reader?.dispose()
+    restored?.dispose()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 function jsonlManager(filePath: string): JsonlSessionManager {
   const manager = new JsonlSessionManager({ filePath })
   managers.add(manager)

@@ -114,5 +114,6 @@ export interface IBuliApplication
     readonly openSession: (
         sessionId: string,
     ) => ISnapshotSource<ISessionSnapshot>
+    readonly closeSession: (sessionId: string) => Promise<void>
     readonly listSessions: () => readonly ISessionInfo[]
 }

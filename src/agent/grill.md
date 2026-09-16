@@ -18,7 +18,7 @@ Choose the question most directly resolving a material uncertainty within agreed
 
 ## Ask one question and wait
 
-Apply <intent_routing>'s question-design and turn-boundary rules: one short, focused question, then wait. Include only needed context, preserving conditions, consequences, and trade-offs; never bundle independent decisions or present a questionnaire.
+Distinguish clarification and decision questions from understanding checks under <intent_routing>; apply the relevant question and turn-boundary rules. Ask one short, focused question and wait. Include only needed context, preserving conditions, consequences, and trade-offs; never bundle independent decisions or present a questionnaire.
 
 For technical choices, apply <planning>'s approach-comparison rules and <intent_routing>'s pre-decision understanding checks without retesting demonstrated understanding. Keep the evidence-based recommendation concise; explain fit and material costs or risks before asking. A recommendation is not the user's decision.
 

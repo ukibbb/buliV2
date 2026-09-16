@@ -16,6 +16,10 @@ export interface ISessionInfo {
 /** Defines storage operations required by live and persisted sessions. */
 export interface ISessionManager {
     readonly createSession: (info: ISessionInfo) => void
+    /** Acquires session ownership and reloads history; failure retains other ownership. */
+    readonly openSession?: (sessionId: string) => void
+    /** Releases ownership after the caller has disposed the live session. */
+    readonly releaseSession?: (sessionId: string) => void
     readonly getSessionInfo: (sessionId: string) => ISessionInfo | undefined
     readonly listSessions: () => readonly ISessionInfo[]
     readonly getMessages: (sessionId: string) => readonly TAgentMessage[]

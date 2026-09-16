@@ -100,6 +100,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
 
     // What are agent sesions what is thier responsibility
     private readonly sessions = new Map<string, AgentSession>()
+    private readonly sessionCloseTasks = new Map<string, Promise<void>>()
     // what does it mean ?
     private disposed = false
     private disposeTask: Promise<void> | undefined
@@ -166,16 +167,23 @@ export class BuliApplicationRuntime implements IBuliApplication {
             createdAt: timestamp,
             updatedAt: timestamp,
         }
-        const session = this.createLiveSession(info, agent)
-
+        this.manager.createSession(info)
         try {
-            this.manager.createSession(info)
+            const session = this.createLiveSession(info, agent)
+            this.sessions.set(id, session)
         } catch (error) {
-            void session.dispose()
+            try {
+                this.manager.deleteSession(id)
+                this.manager.releaseSession?.(id)
+            } catch (cleanupError) {
+                throw new AggregateError(
+                    [error, cleanupError],
+                    "Session creation failed and cleanup failed",
+                )
+            }
             throw error
         }
 
-        this.sessions.set(id, session)
         return structuredClone(info)
     }
 
@@ -185,6 +193,26 @@ export class BuliApplicationRuntime implements IBuliApplication {
         if (this.disposed) throw new Error("Buli runtime is disposed")
 
         return this.getOrOpenAgentSession(sessionId)
+    }
+
+    readonly closeSession = (sessionId: string): Promise<void> => {
+        if (this.disposed) {
+            return Promise.reject(new Error("Buli runtime is disposed"))
+        }
+        const existingTask = this.sessionCloseTasks.get(sessionId)
+        if (existingTask) return existingTask
+
+        const session = this.sessions.get(sessionId)
+        if (!session) return Promise.resolve()
+
+        const task = Promise.resolve().then(async () => {
+            await session.dispose()
+            this.manager.releaseSession?.(sessionId)
+            this.sessions.delete(sessionId)
+            this.sessionCloseTasks.delete(sessionId)
+        })
+        this.sessionCloseTasks.set(sessionId, task)
+        return task
     }
 
     readonly listSessions = (): readonly ISessionInfo[] => {
@@ -214,9 +242,9 @@ export class BuliApplicationRuntime implements IBuliApplication {
             run = session.prompt(prompt)
         } catch (error) {
             if (createdSession) {
-                this.sessions.delete(sessionId)
-                void session.dispose().catch(() => { })
-                this.manager.deleteSession(sessionId)
+                void this.rollbackSession(sessionId, session).catch((rollbackError: unknown) => {
+                    console.error(`Session rollback failed: ${sessionId}`, rollbackError)
+                })
             }
             throw error
         }
@@ -411,8 +439,9 @@ export class BuliApplicationRuntime implements IBuliApplication {
         const errors: unknown[] = results.flatMap((result) =>
             result.status === "rejected" ? [result.reason] : []
         )
-        // Manager jest właścicielem zasobów storage. Zwalniamy je po sesjach także
-        // wtedy, gdy któraś sesja zgłosiła błąd.
+        if (errors.length > 0) {
+            throw new AggregateError(errors, "Failed to stop Buli runtime sessions")
+        }
         try {
             await this.toolOutputStore?.dispose()
         } catch (error) {
@@ -553,7 +582,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
                 this.modelCatalog === undefined ? undefined : {
                     status: "ready",
                     ...(requestedModelId === selection.modelId ? {} : {
-                        message: `Model "${requestedModelId}" is unavailable. Using "${selection.modelId}" instead.`,
+                        message: `Model "${requestedModelId}" was not returned in the model catalog for your signed-in ChatGPT account. Availability may depend on your plan or account permissions. Using "${selection.modelId}" instead.`,
                     }),
                 }
             const snapshot = this.createSnapshot(registrations, selection, modelCatalog)
@@ -589,43 +618,50 @@ export class BuliApplicationRuntime implements IBuliApplication {
     }
 
     private getOrOpenAgentSession(sessionId: string): AgentSession {
+        if (this.sessionCloseTasks.has(sessionId)) {
+            throw new Error(`Session is closing or failed to close: ${sessionId}`)
+        }
         const existing = this.sessions.get(sessionId)
         if (existing) return existing
 
-        const info = this.manager.getSessionInfo(sessionId)
-        if (!info) throw new Error(`Session does not exist: ${sessionId}`)
+        this.manager.openSession?.(sessionId)
+        try {
+            const info = this.manager.getSessionInfo(sessionId)
+            if (!info) throw new Error(`Session does not exist: ${sessionId}`)
 
-        const agent = this.resolveAgent(info.agentId)
-        const session = this.createLiveSession(info, agent)
-        this.sessions.set(sessionId, session)
-        return session
+            const agent = this.resolveAgent(info.agentId)
+            const session = this.createLiveSession(info, agent)
+            this.sessions.set(sessionId, session)
+            return session
+        } catch (error) {
+            try {
+                this.manager.releaseSession?.(sessionId)
+            } catch (cleanupError) {
+                throw new AggregateError(
+                    [error, cleanupError],
+                    "Session opening failed and cleanup failed",
+                )
+            }
+            throw error
+        }
     }
 
     private async rollbackSession(
         sessionId: string,
         session: AgentSession,
     ): Promise<void> {
-        const rollbackErrors: unknown[] = []
-        if (this.sessions.get(sessionId) === session) {
-            this.sessions.delete(sessionId)
+        if (this.sessionCloseTasks.has(sessionId)) {
+            throw new Error(`Cannot roll back a session that is already closing: ${sessionId}`)
         }
-        try {
+        const task = Promise.resolve().then(async () => {
             await session.dispose()
-        } catch (error) {
-            rollbackErrors.push(error)
-        }
-        try {
             this.manager.deleteSession(sessionId)
-        } catch (error) {
-            rollbackErrors.push(error)
-        }
-
-        if (rollbackErrors.length > 0) {
-            throw new AggregateError(
-                rollbackErrors,
-                "Session rollback failed",
-            )
-        }
+            this.manager.releaseSession?.(sessionId)
+            this.sessions.delete(sessionId)
+            this.sessionCloseTasks.delete(sessionId)
+        })
+        this.sessionCloseTasks.set(sessionId, task)
+        await task
     }
 
     private rejectAfterRollback(

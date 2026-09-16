@@ -126,6 +126,7 @@ function createSessionHarness(initialSnapshot: ISessionSnapshot) {
       updatedAt: 0,
     }),
     openSession: () => session,
+    closeSession: async () => undefined,
     listSessions: () => [],
   }
   const controller = new BuliUiController({ application })
@@ -164,6 +165,78 @@ function notifierElement(
     </BuliRuntimeProvider>
   )
 }
+
+test.each(["screen", "notifier"] as const)(
+  "%s retains its session source during closing and gets a fresh source on re-entry",
+  async (consumer) => {
+    const baseHarness = createSessionHarness(sessionSnapshot())
+    baseHarness.controller.dispose()
+    let source = baseHarness.application.openSession(SESSION_ID)
+    let closing = false
+    let openCount = 0
+    const application: IBuliApplication = {
+      ...baseHarness.application,
+      openSession: () => {
+        openCount += 1
+        if (closing) throw new Error("Session is closing")
+        return source
+      },
+    }
+    const controller = new BuliUiController({ application })
+    const harness = { ...baseHarness, application, controller }
+    const element = () => consumer === "screen"
+      ? sessionElement(harness)
+      : notifierElement(harness, () => 0)
+
+    try {
+      await controller.activateSession(SESSION_ID)
+      openCount = 0
+      const setup = await testRender(element(), { width: 60, height: 18 })
+      try {
+        await act(async () => {
+          await setup.renderOnce()
+        })
+        const initialOpenCount = openCount
+        expect(initialOpenCount).toBeGreaterThan(0)
+
+        closing = true
+        await act(async () => {
+          harness.setSnapshot(sessionSnapshot({
+            messages: transcriptMessages(1),
+          }))
+          await setup.renderOnce()
+        })
+        expect(openCount).toBe(initialOpenCount)
+      } finally {
+        act(() => setup.renderer.destroy())
+      }
+
+      const freshSnapshot = sessionSnapshot({ messages: transcriptMessages(2) })
+      let freshSnapshotReadCount = 0
+      source = {
+        subscribe: () => () => undefined,
+        getSnapshot: () => {
+          freshSnapshotReadCount += 1
+          return freshSnapshot
+        },
+      }
+      closing = false
+      openCount = 0
+      const reopenedSetup = await testRender(element(), { width: 60, height: 18 })
+      try {
+        await act(async () => {
+          await reopenedSetup.renderOnce()
+        })
+        expect(openCount).toBeGreaterThan(0)
+        expect(freshSnapshotReadCount).toBeGreaterThan(0)
+      } finally {
+        act(() => reopenedSetup.renderer.destroy())
+      }
+    } finally {
+      controller.dispose()
+    }
+  },
+)
 
 test("configures a culled sticky transcript with restrained mouse scrolling", async () => {
   const messages = transcriptMessages(40)

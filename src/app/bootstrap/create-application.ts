@@ -29,9 +29,9 @@ import {
     type IOpenAiModelCatalog,
 } from "@/providers/openai"
 import {
-    defaultSessionFilePath,
+    defaultSessionDirectoryPath,
     type ISessionManager,
-    JsonlSessionManager,
+    WorkspaceSessionManager,
 } from "@/sessions"
 import {
     createFdPathSearcher,
@@ -135,8 +135,8 @@ export async function createBuliApplication(
     let runtime: BuliApplicationRuntime | undefined
     let manager: ISessionManager | undefined
     try {
-        manager = options.manager ?? new JsonlSessionManager({
-            filePath: defaultSessionFilePath(workspaceRoot),
+        manager = options.manager ?? new WorkspaceSessionManager({
+            directoryPath: defaultSessionDirectoryPath(workspaceRoot),
         })
         const fileChangeProposalStore = new FileChangeProposalStore({
             saveProposal: manager.saveFileChangeProposal,

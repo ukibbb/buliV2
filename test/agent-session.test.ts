@@ -1069,11 +1069,21 @@ test("AgentSession dispose times out and unsubscribes from a non-cooperative mod
   await run.initialPromptProcessed
   await modelStarted.promise
   const notificationsBeforeDispose = notifications
+  let lateNotifications = 0
+  const disposal = session.dispose()
 
   try {
-    await expect(session.dispose()).rejects.toThrow(
+    const unsubscribeDuringDisposal = session.subscribe(() => {
+      lateNotifications += 1
+    })
+    expect(unsubscribeDuringDisposal).not.toThrow()
+    await expect(disposal).rejects.toThrow(
       "Timed out waiting for AgentSession to stop",
     )
+    const unsubscribeAfterTimeout = session.subscribe(() => {
+      lateNotifications += 1
+    })
+    expect(unsubscribeAfterTimeout).not.toThrow()
   } finally {
     releaseModel.resolve()
   }
@@ -1082,8 +1092,8 @@ test("AgentSession dispose times out and unsubscribes from a non-cooperative mod
     new Error("AgentSession stopped accepting events during shutdown"),
   )
   expect(notifications).toBe(notificationsBeforeDispose)
+  expect(lateNotifications).toBe(0)
   expect(unsubscribe).not.toThrow()
-  expect(() => session.subscribe(() => {})).toThrow("AgentSession is disposed")
 })
 
 test("AgentSession does not persist a manual checkpoint that enlarges context", async () => {

@@ -32,6 +32,10 @@ export {
     defaultSessionFilePath,
     JsonlSessionManager,
 } from "@/sessions/jsonl/jsonl-session-manager"
+export {
+    defaultSessionDirectoryPath,
+    WorkspaceSessionManager,
+} from "@/sessions/jsonl/workspace-session-manager"
 export { createInterruptedToolResults } from "@/sessions/recovery"
 export type {
     ISessionInfo,

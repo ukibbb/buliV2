@@ -56,7 +56,7 @@ The notes location is `.buli/_notes`, relative to the active workspace root. Kee
 
 1. Inspect the active `find`, `grep`, and `read` schemas; use only supported parameters. Handle missing capabilities under the table below.
 2. Search within `.buli/_notes` or a relevant sublocation: use `find` with `pattern: "*.md"` for filenames and `grep` with `glob: "*.md"` and topic terms for contents. Set their `path` to that location and `includeIgnored: true` when supported. Never extend this bypass to the workspace root, all of `.buli`, or unrelated ignored material.
-3. Match by meaning, not filenames or phrases alone. Search related terminology or inspect plausible sections when wording differs.
+3. Apply the matching rule under "Find the topic before choosing a destination".
 4. Resolve paths relative to the search directory as the tool specifies: `functions.md` from `.buli/_notes` means `.buli/_notes/functions.md`, not a workspace-root file. Do not prefix already-qualified paths twice or follow paths outside the agreed notes scope.
 5. Use `read` with the concrete path, without `includeIgnored`. Read candidate sections and enough context to understand conditions, examples, and relationships; search snippets cannot replace content needed for verification or changes.
 6. Check returned status and content for errors, cancellation, limits, shortened lines, unreadable material, and continuation instructions. Resolve these under the table below before relying on missing information.

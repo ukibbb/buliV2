@@ -9,8 +9,8 @@ export interface IBuliCommandInfo {
 export interface IBuliCommandContext {
     readonly application: IBuliApplication
     readonly sessionId: string | null
-    readonly activateSession: (sessionId: string) => void
-    readonly goHome: () => void
+    readonly activateSession: (sessionId: string) => Promise<void>
+    readonly goHome: () => Promise<void>
     readonly openAuthentication: (mode: TAuthenticationMode) => void
 }
 

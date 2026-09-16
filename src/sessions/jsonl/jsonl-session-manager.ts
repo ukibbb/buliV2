@@ -42,6 +42,7 @@ import {
 
 interface IJsonlSessionManagerOptions {
     readonly filePath: string
+    readonly readOnly?: boolean
 }
 
 interface ISessionRecord {
@@ -73,18 +74,24 @@ export class JsonlSessionManager implements ISessionManager {
     private readonly memory = new InMemorySessionManager()
     private readonly persistedSessionIds = new Set<string>()
     private readonly filePath: string
+    private readonly readOnly: boolean
     private readonly releaseLock: () => void
     private disposed = false
 
     constructor(options: IJsonlSessionManagerOptions) {
+        this.readOnly = options.readOnly ?? false
         // Rewrite the target of a log symlink, not the symlink itself, so our
         // persistence path and its locked sidecar keep the same identity.
         this.filePath = existsSync(options.filePath)
             && lstatSync(options.filePath).isSymbolicLink()
             ? realpathSync(options.filePath)
             : options.filePath
-        mkdirSync(dirname(this.filePath), { recursive: true, mode: 0o700 })
-        this.releaseLock = acquireSessionLogLock(this.filePath)
+        if (!this.readOnly) {
+            mkdirSync(dirname(this.filePath), { recursive: true, mode: 0o700 })
+        }
+        this.releaseLock = this.readOnly
+            ? () => {}
+            : acquireSessionLogLock(this.filePath)
         try {
             this.load()
         } catch (error) {
@@ -95,7 +102,7 @@ export class JsonlSessionManager implements ISessionManager {
     }
 
     readonly createSession = (info: ISessionInfo): void => {
-        this.assertActive()
+        this.assertWritable()
         this.memory.createSession(info)
     }
 
@@ -119,7 +126,7 @@ export class JsonlSessionManager implements ISessionManager {
     }
 
     readonly appendMessage = (message: TAgentMessage): void => {
-        this.assertActive()
+        this.assertWritable()
         assertDurableSessionMessage(message)
 
         const info = this.memory.getSessionInfo(message.sessionId)
@@ -157,7 +164,7 @@ export class JsonlSessionManager implements ISessionManager {
     readonly saveFileChangeProposal = (
         proposal: IFileChangeProposalRecord,
     ): void => {
-        this.assertActive()
+        this.assertWritable()
         assertFileChangeProposalRecord(proposal)
 
         const info = this.memory.getSessionInfo(proposal.sessionId)
@@ -186,7 +193,7 @@ export class JsonlSessionManager implements ISessionManager {
     readonly saveCompactionCheckpoint = (
         checkpoint: ICompactionCheckpoint,
     ): void => {
-        this.assertActive()
+        this.assertWritable()
         assertCompactionCheckpoint(checkpoint)
         assertCheckpointAnchor(
             checkpoint,
@@ -200,7 +207,7 @@ export class JsonlSessionManager implements ISessionManager {
     }
 
     readonly deleteSession = (sessionId: string): void => {
-        this.assertActive()
+        this.assertWritable()
         const wasPersisted = this.persistedSessionIds.has(sessionId)
         if (wasPersisted) {
             const records: unknown[] = []
@@ -223,6 +230,23 @@ export class JsonlSessionManager implements ISessionManager {
         }
         this.memory.deleteSession(sessionId)
         this.persistedSessionIds.delete(sessionId)
+    }
+
+    /** Exports replayed session state, not the original log's historical records. */
+    readonly exportSession = (sessionId: string): string => {
+        this.assertActive()
+        const info = this.memory.getSessionInfo(sessionId)
+        if (!info) throw new Error(`Session does not exist: ${sessionId}`)
+
+        const records: unknown[] = [sessionRecord(info)]
+        records.push(...this.memory.getMessages(sessionId).map(messageRecord))
+        records.push(
+            ...this.memory.getFileChangeProposals(sessionId)
+                .map(fileChangeProposalRecord),
+        )
+        const checkpoint = this.memory.getCompactionCheckpoint(sessionId)
+        if (checkpoint) records.push(compactionRecord(checkpoint))
+        return serializeRecords(records)
     }
 
     readonly dispose = (): void => {
@@ -265,10 +289,12 @@ export class JsonlSessionManager implements ISessionManager {
                 value = JSON.parse(line)
             } catch (error) {
                 if (index === lastRecordIndex && !hasTerminatedTail) {
-                    const completeLines = lines.slice(0, index)
-                    this.replaceFile(
-                        completeLines.length > 0 ? `${completeLines.join("\n")}\n` : "",
-                    )
+                    if (!this.readOnly) {
+                        const completeLines = lines.slice(0, index)
+                        this.replaceFile(
+                            completeLines.length > 0 ? `${completeLines.join("\n")}\n` : "",
+                        )
+                    }
                     break
                 }
                 throw this.invalidLineError(index, error)
@@ -495,6 +521,11 @@ export class JsonlSessionManager implements ISessionManager {
         return contents.length === 0 || contents.endsWith("\n")
             ? contents
             : `${contents}\n`
+    }
+
+    private assertWritable(): void {
+        this.assertActive()
+        if (this.readOnly) throw new Error("Session log is read-only")
     }
 
     private assertActive(): void {

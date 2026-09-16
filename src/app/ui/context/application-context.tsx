@@ -1,6 +1,7 @@
 import {
     createContext,
     useContext,
+    useState,
     useSyncExternalStore,
     type ReactNode,
 } from "react"
@@ -49,7 +50,8 @@ export function useBuliApplicationSnapshot(): IBuliApplicationSnapshot {
 /** Subscribes a component to one live session snapshot. */
 export function useSession(sessionId: string): ISessionSnapshot {
     const runtime = useBuliRuntime()
-    const session: ISnapshotSource<ISessionSnapshot> =
-        runtime.openSession(sessionId)
+    const [session] = useState<ISnapshotSource<ISessionSnapshot>>(
+        () => runtime.openSession(sessionId),
+    )
     return useSyncExternalStore(session.subscribe, session.getSnapshot)
 }

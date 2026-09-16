@@ -1,4 +1,7 @@
 import { expect, spyOn, test } from "bun:test"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import type { IBuliPromptInput } from "@/app/contracts"
 import {
   BuliApplicationRuntime,
@@ -13,7 +16,9 @@ import type {
 } from "@/agent/model"
 import { defineAgentTool } from "@/agent/tool"
 import {
+  AgentSession,
   InMemorySessionManager,
+  WorkspaceSessionManager,
   type ISessionManager,
 } from "@/sessions"
 import { FileChangeProposalStore } from "@/tools"
@@ -170,6 +175,90 @@ test("application runtime submits prompts into its session view", async () => {
   await runtime.dispose()
 })
 
+test("runtime hands off file ownership and reloads history into model context", async () => {
+  const directoryPath = await mkdtemp(join(tmpdir(), "buli-runtime-handoff-"))
+  const managers: WorkspaceSessionManager[] = []
+  const runtimes: BuliApplicationRuntime[] = []
+  const modelRequests: string[][] = []
+  const recordingModel: IAgentModel = {
+    async *stream(request) {
+      modelRequests.push(request.messages
+        .filter((message) => message.role === "user")
+        .map((message) => message.content))
+      yield { type: "finish", reason: "stop" }
+    },
+  }
+  const createRuntime = (sessionId: string): BuliApplicationRuntime => {
+    const manager = new WorkspaceSessionManager({ directoryPath })
+    managers.push(manager)
+    const runtime = new BuliApplicationRuntime({
+      workspaceRoot: directoryPath,
+      manager,
+      agents: TEST_AGENTS,
+      defaultAgentId: TEST_AGENT_ID,
+      models: [{
+        id: "test",
+        name: "Test",
+        model: recordingModel,
+        reasoningEfforts: ["medium"],
+        defaultReasoningEffort: "medium",
+      }],
+      selection: { modelId: "test", reasoningEffort: "medium" },
+      generateId: () => sessionId,
+    })
+    runtimes.push(runtime)
+    return runtime
+  }
+  const submitPrompt = async (
+    runtime: BuliApplicationRuntime,
+    prompt: IBuliPromptInput,
+  ): Promise<void> => {
+    const run = runtime.submitPrompt(prompt)
+    await Promise.all([run.promptPersisted, run.runFinished])
+  }
+
+  try {
+    const first = createRuntime("first")
+    const second = createRuntime("second")
+    await submitPrompt(first, { text: "First question" })
+    await submitPrompt(second, { text: "Second question" })
+    const originalView = first.openSession("first")
+    const secondView = second.openSession("second")
+
+    expect(() => second.openSession("first")).toThrow("Unable to lock session log")
+    expect(second.openSession("second")).toBe(secondView)
+    expect(() => first.openSession("second")).toThrow("Unable to lock session log")
+    await submitPrompt(second, { sessionId: "second", text: "Still owned" })
+    expect(secondView.getSnapshot().messages
+      .filter((message) => message.role === "user")
+      .map((message) => message.content))
+      .toEqual(["Second question", "Still owned"])
+
+    await first.closeSession("first")
+    second.openSession("first")
+    expect(() => first.openSession("first")).toThrow("Unable to lock session log")
+    await submitPrompt(second, { sessionId: "first", text: "Added by second runtime" })
+    await second.closeSession("first")
+
+    const reopenedView = first.openSession("first")
+    expect(reopenedView).not.toBe(originalView)
+    expect(reopenedView.getSnapshot().messages
+      .filter((message) => message.role === "user")
+      .map((message) => message.content))
+      .toEqual(["First question", "Added by second runtime"])
+    await submitPrompt(first, { sessionId: "first", text: "Continue after reopening" })
+    expect(modelRequests.at(-1)).toEqual([
+      "First question",
+      "Added by second runtime",
+      "Continue after reopening",
+    ])
+  } finally {
+    await Promise.all(runtimes.map((runtime) => runtime.dispose()))
+    for (const manager of managers) manager.dispose()
+    await rm(directoryPath, { recursive: true, force: true })
+  }
+})
+
 test("publishes file-change proposals through the owning session", async () => {
   const store = new FileChangeProposalStore(() => "proposal-1")
   const runtime = runtimeWith(model, TEST_AGENTS, undefined, store)
@@ -302,6 +391,112 @@ test("application runtime rejects blank prompts", async () => {
   await runtime.dispose()
 })
 
+test("synchronous prompt failure waits for session disposal before rollback", async () => {
+  const cleanupOperations: string[] = []
+  const manager = Object.assign(new InMemorySessionManager(), {
+    releaseSession: (sessionId: string) => {
+      cleanupOperations.push(`release:${sessionId}`)
+    },
+  })
+  const deleteSession = manager.deleteSession
+  const deletion = spyOn(manager, "deleteSession").mockImplementation((sessionId) => {
+    deleteSession(sessionId)
+    cleanupOperations.push(`delete:${sessionId}`)
+  })
+  const failure = new Error("Cannot start prompt")
+  const prompt = spyOn(AgentSession.prototype, "prompt").mockImplementation(() => {
+    throw failure
+  })
+  const stopped = Promise.withResolvers<void>()
+  const originalDispose = AgentSession.prototype.dispose
+  const disposal = spyOn(AgentSession.prototype, "dispose")
+    .mockImplementation(async function (this: AgentSession) {
+      await stopped.promise
+      await originalDispose.call(this)
+    })
+  const runtime = runtimeWith(model, TEST_AGENTS, manager)
+  let rollback: Promise<void> | undefined
+
+  try {
+    let receivedError: unknown
+    try {
+      runtime.submitPrompt({ text: "New session" })
+    } catch (error) {
+      receivedError = error
+    }
+    expect(receivedError).toBe(failure)
+    rollback = runtime.closeSession("session-1")
+    await Promise.resolve()
+    expect(disposal).toHaveBeenCalledTimes(1)
+    expect(cleanupOperations).toEqual([])
+    expect(manager.getSessionInfo("session-1")).toBeDefined()
+    expect(() => runtime.openSession("session-1")).toThrow("Session is closing")
+
+    stopped.resolve()
+    await rollback
+    expect(cleanupOperations).toEqual(["delete:session-1", "release:session-1"])
+    expect(manager.getSessionInfo("session-1")).toBeUndefined()
+  } finally {
+    stopped.resolve()
+    try {
+      await rollback
+    } finally {
+      prompt.mockRestore()
+      disposal.mockRestore()
+      deletion.mockRestore()
+      await runtime.dispose()
+    }
+  }
+})
+
+test("synchronous prompt failure reports rollback failure without releasing ownership", async () => {
+  const releasedSessionIds: string[] = []
+  const manager = Object.assign(new InMemorySessionManager(), {
+    releaseSession: (sessionId: string) => {
+      releasedSessionIds.push(sessionId)
+    },
+  })
+  const deletion = spyOn(manager, "deleteSession")
+  const promptFailure = new Error("Cannot start prompt")
+  const disposalFailure = new Error("Session did not stop")
+  const prompt = spyOn(AgentSession.prototype, "prompt").mockImplementation(() => {
+    throw promptFailure
+  })
+  const disposal = spyOn(AgentSession.prototype, "dispose")
+    .mockRejectedValue(disposalFailure)
+  const reported = Promise.withResolvers<void>()
+  const logError = spyOn(console, "error").mockImplementation(() => {
+    reported.resolve()
+  })
+  const runtime = runtimeWith(model, TEST_AGENTS, manager)
+
+  try {
+    let receivedError: unknown
+    try {
+      runtime.submitPrompt({ text: "New session" })
+    } catch (error) {
+      receivedError = error
+    }
+    expect(receivedError).toBe(promptFailure)
+    await reported.promise
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith(
+      "Session rollback failed: session-1",
+      disposalFailure,
+    )
+    expect(deletion).not.toHaveBeenCalled()
+    expect(releasedSessionIds).toEqual([])
+    expect(manager.getSessionInfo("session-1")).toBeDefined()
+    expect(() => runtime.openSession("session-1")).toThrow("failed to close")
+  } finally {
+    prompt.mockRestore()
+    disposal.mockRestore()
+    deletion.mockRestore()
+    logError.mockRestore()
+    await runtime.dispose()
+  }
+})
+
 test("application runtime returns one stable view per session", async () => {
   const runtime = runtimeWith()
 
@@ -317,6 +512,146 @@ test("application runtime returns one stable view per session", async () => {
   ])
 
   await runtime.dispose()
+})
+
+test("closing a session waits for disposal before releasing ownership", async () => {
+  const releasedSessionIds: string[] = []
+  const manager = Object.assign(new InMemorySessionManager(), {
+    releaseSession: (sessionId: string) => {
+      releasedSessionIds.push(sessionId)
+    },
+  })
+  const runtime = runtimeWith(model, TEST_AGENTS, manager)
+  const view = createSession(runtime)
+  const session = view as typeof view & { dispose(): Promise<void> }
+  const stopped = Promise.withResolvers<void>()
+  const disposal = spyOn(session, "dispose").mockImplementation(() => stopped.promise)
+
+  try {
+    const closing = runtime.closeSession("session-1")
+    expect(runtime.closeSession("session-1")).toBe(closing)
+    expect(() => runtime.openSession("session-1")).toThrow("Session is closing")
+    expect(() => runtime.submitPrompt({ sessionId: "session-1", text: "Hello" }))
+      .toThrow("Session is closing")
+    await Promise.resolve()
+    expect(disposal).toHaveBeenCalledTimes(1)
+    expect(releasedSessionIds).toEqual([])
+
+    stopped.resolve()
+    await closing
+    expect(releasedSessionIds).toEqual(["session-1"])
+    expect(manager.getSessionInfo("session-1")).toBeDefined()
+    disposal.mockRestore()
+    await session.dispose()
+    expect(runtime.openSession("session-1")).not.toBe(view)
+  } finally {
+    stopped.resolve()
+    disposal.mockRestore()
+    await session.dispose()
+    await runtime.dispose()
+  }
+})
+
+test("runtime shutdown waits for an overlapping session close before disposing storage", async () => {
+  const operations: string[] = []
+  const manager = Object.assign(new InMemorySessionManager(), {
+    releaseSession: (sessionId: string) => {
+      operations.push(`release:${sessionId}`)
+    },
+    dispose: () => {
+      operations.push("dispose-manager")
+    },
+  })
+  const runtime = runtimeWith(model, TEST_AGENTS, manager)
+  const view = createSession(runtime)
+  const session = view as typeof view & { dispose(): Promise<void> }
+  const disposalStarted = Promise.withResolvers<void>()
+  const allowSessionStop = Promise.withResolvers<void>()
+  const sessionStopped = allowSessionStop.promise.then(() => {
+    operations.push("session-stopped")
+  })
+  const sessionDisposal = spyOn(session, "dispose").mockImplementation(() => {
+    disposalStarted.resolve()
+    return sessionStopped
+  })
+  const tasks: Promise<void>[] = []
+
+  try {
+    const closing = runtime.closeSession("session-1")
+    tasks.push(closing)
+    await disposalStarted.promise
+    const shutdown = runtime.dispose()
+    tasks.push(shutdown)
+    expect(operations).toEqual([])
+
+    allowSessionStop.resolve()
+    await Promise.all([closing, shutdown])
+    expect(operations).toEqual([
+      "session-stopped",
+      "release:session-1",
+      "dispose-manager",
+    ])
+  } finally {
+    allowSessionStop.resolve()
+    await Promise.allSettled(tasks)
+    sessionDisposal.mockRestore()
+    await session.dispose()
+    await runtime.dispose()
+  }
+})
+
+test("failed session disposal retains ownership and prevents reopening", async () => {
+  const releasedSessionIds: string[] = []
+  const manager = Object.assign(new InMemorySessionManager(), {
+    releaseSession: (sessionId: string) => {
+      releasedSessionIds.push(sessionId)
+    },
+  })
+  const runtime = runtimeWith(model, TEST_AGENTS, manager)
+  const view = createSession(runtime)
+  const session = view as typeof view & { dispose(): Promise<void> }
+  const failure = new Error("Session did not stop")
+  const disposal = spyOn(session, "dispose").mockRejectedValue(failure)
+
+  try {
+    const closing = runtime.closeSession("session-1")
+    await expect(closing).rejects.toBe(failure)
+    expect(runtime.closeSession("session-1")).toBe(closing)
+    expect(releasedSessionIds).toEqual([])
+    expect(manager.getSessionInfo("session-1")).toBeDefined()
+    expect(() => runtime.openSession("session-1")).toThrow("failed to close")
+  } finally {
+    disposal.mockRestore()
+    await runtime.dispose()
+  }
+})
+
+test("runtime retains the session manager when a session fails to stop", async () => {
+  let managerDisposals = 0
+  const manager = Object.assign(new InMemorySessionManager(), {
+    dispose: () => {
+      managerDisposals += 1
+    },
+  })
+  const runtime = runtimeWith(model, TEST_AGENTS, manager)
+  const view = createSession(runtime)
+  const session = view as typeof view & { dispose(): Promise<void> }
+  const failure = new Error("Session did not stop")
+  const sessionDisposal = spyOn(session, "dispose").mockRejectedValue(failure)
+
+  try {
+    const disposal = runtime.dispose()
+    const error = await disposal.catch((reason: unknown) => reason)
+    expect(error).toBeInstanceOf(AggregateError)
+    expect((error as AggregateError).errors).toEqual([failure])
+    expect(managerDisposals).toBe(0)
+    expect(runtime.dispose()).toBe(disposal)
+    expect(sessionDisposal).toHaveBeenCalledTimes(1)
+  } finally {
+    sessionDisposal.mockRestore()
+    await session.dispose()
+    manager.dispose()
+  }
 })
 
 test("application runtime auto-opens persisted history when submitting", async () => {
@@ -723,7 +1058,7 @@ test.each([
   })
   expect(runtime.getSnapshot().modelCatalog).toEqual({
     status: "ready",
-    message: `Model "base::fast" is unavailable. Using "${selected}" instead.`,
+    message: `Model "base::fast" was not returned in the model catalog for your signed-in ChatGPT account. Availability may depend on your plan or account permissions. Using "${selected}" instead.`,
   })
   const fallback = runtime.getSnapshot()
   expect(() => runtime.selectModel("missing")).toThrow("Unknown model")
@@ -769,7 +1104,7 @@ test.each([
     reasoningEffort: selectedEffort,
   })
   if (modelId === "vanishing") {
-    expect(runtime.getSnapshot().modelCatalog?.message).toContain('"vanishing" is unavailable')
+    expect(runtime.getSnapshot().modelCatalog?.message).toBe('Model "vanishing" was not returned in the model catalog for your signed-in ChatGPT account. Availability may depend on your plan or account permissions. Using "base::fast" instead.')
   } else {
     expect(runtime.getSnapshot().modelCatalog).toEqual({ status: "ready" })
   }
@@ -893,7 +1228,7 @@ test("later refreshes preserve selection, reconcile removed Fast to base, and do
   })
   expect(runtime.getSnapshot().modelCatalog).toEqual({
     status: "ready",
-    message: 'Model "base::fast" is unavailable. Using "base" instead.',
+    message: 'Model "base::fast" was not returned in the model catalog for your signed-in ChatGPT account. Availability may depend on your plan or account permissions. Using "base" instead.',
   })
   registrations = CATALOG_MODELS
   await runtime.refreshModels()
@@ -903,7 +1238,7 @@ test("later refreshes preserve selection, reconcile removed Fast to base, and do
   await runtime.refreshModels()
   expect(runtime.getSnapshot().selection.modelId).toBe("other")
   expect(runtime.getSnapshot().modelCatalog?.message).toBe(
-    'Model "base" is unavailable. Using "other" instead.',
+    'Model "base" was not returned in the model catalog for your signed-in ChatGPT account. Availability may depend on your plan or account permissions. Using "other" instead.',
   )
   await runtime.dispose()
 })
@@ -1557,6 +1892,7 @@ test("submitPrompt rolls back a new session when its first prompt is not persist
   const memory = new InMemorySessionManager()
   const persistenceFailure = new Error("Disk write failed")
   const deletedSessionIds: string[] = []
+  const cleanupOperations: string[] = []
   const manager: ISessionManager = {
     createSession: memory.createSession,
     getSessionInfo: memory.getSessionInfo,
@@ -1573,6 +1909,10 @@ test("submitPrompt rolls back a new session when its first prompt is not persist
     deleteSession: (sessionId) => {
       deletedSessionIds.push(sessionId)
       memory.deleteSession(sessionId)
+      cleanupOperations.push(`delete:${sessionId}`)
+    },
+    releaseSession: (sessionId) => {
+      cleanupOperations.push(`release:${sessionId}`)
     },
   }
   const runtime = runtimeWith(model, TEST_AGENTS, manager)
@@ -1591,6 +1931,10 @@ test("submitPrompt rolls back a new session when its first prompt is not persist
   expect(await persistenceResult).toBe(persistenceFailure)
   expect(await runResult).toBe(persistenceFailure)
   expect(deletedSessionIds).toEqual([promptRun.sessionId])
+  expect(cleanupOperations).toEqual([
+    `delete:${promptRun.sessionId}`,
+    `release:${promptRun.sessionId}`,
+  ])
   expect(runtime.listSessions()).toEqual([])
   expect(manager.listSessions()).toEqual([])
   expect(manager.getSessionInfo(promptRun.sessionId)).toBeUndefined()
@@ -1600,6 +1944,53 @@ test("submitPrompt rolls back a new session when its first prompt is not persist
   )
 
   await runtime.dispose()
+})
+
+test("failed rollback disposal preserves the conversation and ownership", async () => {
+  const releasedSessionIds: string[] = []
+  const manager = Object.assign(new InMemorySessionManager(), {
+    releaseSession: (sessionId: string) => {
+      releasedSessionIds.push(sessionId)
+    },
+  })
+  const persistenceFailure = new Error("Disk write failed")
+  const disposalFailure = new Error("Session did not stop")
+  const appendMessage = spyOn(manager, "appendMessage").mockImplementation(() => {
+    throw persistenceFailure
+  })
+  const deleteSession = spyOn(manager, "deleteSession")
+  const sessionDisposal = spyOn(AgentSession.prototype, "dispose")
+    .mockRejectedValue(disposalFailure)
+  const runtime = runtimeWith(model, TEST_AGENTS, manager)
+
+  try {
+    const run = runtime.submitPrompt({ text: "New session" })
+    const results = await Promise.allSettled([
+      run.promptPersisted,
+      run.runFinished,
+    ])
+    for (const result of results) {
+      expect(result.status).toBe("rejected")
+      if (result.status !== "rejected") {
+        throw new Error("Expected the prompt to fail")
+      }
+      expect(result.reason).toBeInstanceOf(AggregateError)
+      expect((result.reason as AggregateError).errors).toEqual([
+        persistenceFailure,
+        disposalFailure,
+      ])
+    }
+    expect(sessionDisposal).toHaveBeenCalledTimes(1)
+    expect(deleteSession).not.toHaveBeenCalled()
+    expect(releasedSessionIds).toEqual([])
+    expect(manager.getSessionInfo(run.sessionId)).toBeDefined()
+    expect(() => runtime.openSession(run.sessionId)).toThrow("failed to close")
+  } finally {
+    sessionDisposal.mockRestore()
+    appendMessage.mockRestore()
+    deleteSession.mockRestore()
+    await runtime.dispose()
+  }
 })
 
 test("new-session runFinished waits for rollback before exposing failure", async () => {

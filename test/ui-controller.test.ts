@@ -124,6 +124,7 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
       opened.push(sessionId)
       return source
     },
+    closeSession: async () => undefined,
     listSessions: () => structuredClone([...infos.values()]),
     submitPrompt: (prompt) => {
       prompts.push(prompt)
@@ -185,6 +186,120 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
     resolvedApprovals,
   }
 }
+
+test("occupied navigation target leaves the current conversation open", async () => {
+  const spy = applicationSpy()
+  const closed: string[] = []
+  const openSession = spy.application.openSession
+  const failure = new Error("Conversation is owned by another instance")
+  const application: IBuliApplication = {
+    ...spy.application,
+    openSession: (sessionId) => {
+      if (sessionId === "session-2") throw failure
+      return openSession(sessionId)
+    },
+    closeSession: async (sessionId) => {
+      closed.push(sessionId)
+    },
+  }
+  const controller = new BuliUiController({ application })
+  await controller.activateSession("session-1")
+
+  await expect(controller.activateSession("session-2")).rejects.toBe(failure)
+
+  expect(controller.getSnapshot().route).toEqual({
+    type: "session", sessionId: "session-1",
+  })
+  expect(closed).toEqual([])
+  await controller.submitInput("Continue in the first conversation")
+  expect(spy.prompts).toEqual([{
+    sessionId: "session-1", text: "Continue in the first conversation",
+  }])
+  controller.dispose()
+})
+
+test("navigation opens its target before closing the source and blocks overlapping input", async () => {
+  const spy = applicationSpy()
+  const operations: string[] = []
+  const stopped = Promise.withResolvers<void>()
+  const application: IBuliApplication = {
+    ...spy.application,
+    openSession: (sessionId) => {
+      operations.push(`open:${sessionId}`)
+      return spy.application.openSession(sessionId)
+    },
+    closeSession: async (sessionId) => {
+      operations.push(`close:${sessionId}`)
+      await stopped.promise
+    },
+  }
+  const controller = new BuliUiController({ application })
+  await controller.activateSession("session-1")
+  operations.length = 0
+  const switching = controller.activateSession("session-2")
+
+  try {
+    expect(operations).toEqual([
+      "open:session-1", "open:session-2", "close:session-1",
+    ])
+    expect(controller.getSnapshot().route).toEqual({
+      type: "session", sessionId: "session-2",
+    })
+    controller.updateInput("Keep this draft")
+    expect(await controller.submitInput("Keep this draft")).toBe("retained")
+    expect(spy.prompts).toEqual([])
+    expect(controller.getSnapshot().input).toBe("Keep this draft")
+    await expect(controller.goHome()).rejects.toThrow("Session navigation is still pending")
+    await expect(controller.activateSession("session-1"))
+      .rejects.toThrow("Session navigation is still pending")
+    expect(operations).toEqual([
+      "open:session-1", "open:session-2", "close:session-1",
+    ])
+
+    stopped.resolve()
+    await switching
+    expect(await controller.submitInput("Keep this draft")).toBe("consumed")
+    expect(spy.prompts).toEqual([{
+      sessionId: "session-2", text: "Keep this draft",
+    }])
+  } finally {
+    stopped.resolve()
+    await switching
+    controller.dispose()
+  }
+})
+
+test.each(["session", "home"] as const)(
+  "failed source close retains the destination: %s",
+  async (destination) => {
+    const spy = applicationSpy()
+    const closed: string[] = []
+    const application: IBuliApplication = {
+      ...spy.application,
+      closeSession: async (sessionId) => {
+        closed.push(sessionId)
+        throw new Error("Session did not stop")
+      },
+    }
+    const controller = new BuliUiController({ application })
+    await controller.activateSession("session-1")
+
+    if (destination === "session") {
+      await controller.activateSession("session-2")
+    } else {
+      await controller.goHome()
+    }
+
+    expect(closed).toEqual(["session-1"])
+    expect(controller.getSnapshot().route).toEqual(destination === "session"
+      ? { type: "session", sessionId: "session-2" }
+      : { type: "home" })
+    expect(controller.getSnapshot().inputError).toBe(
+      "Failed to close previous session session-1: Session did not stop",
+    )
+    controller.dispose()
+  },
+)
 
 test("publishes all command suggestions from slash input", () => {
   const spy = applicationSpy()
@@ -770,6 +885,64 @@ test("new returns Home without creating an empty session", async () => {
 
   expect(controller.getSnapshot().route).toEqual({ type: "home" })
   expect(spy.created).toEqual([])
+})
+
+test("new clears the source-close error after consuming its input", async () => {
+  const spy = applicationSpy()
+  const application: IBuliApplication = {
+    ...spy.application,
+    closeSession: async () => {
+      throw new Error("Storage release failed")
+    },
+  }
+  const controller = new BuliUiController({ application })
+  try {
+    await controller.activateSession("session-1")
+    controller.updateInput("/new")
+
+    const result = await controller.submitInput("/new")
+
+    expect(result).toBe("consumed")
+    expect(controller.getSnapshot().route).toEqual({ type: "home" })
+    expect(controller.getSnapshot().input).toBe("")
+    expect(controller.getSnapshot().inputError).toBeNull()
+    expect(spy.created).toEqual([])
+  } finally {
+    controller.dispose()
+  }
+})
+
+test("session picker clears the source-close error after consuming its input", async () => {
+  const spy = applicationSpy()
+  const closed: string[] = []
+  const application: IBuliApplication = {
+    ...spy.application,
+    closeSession: async (sessionId) => {
+      closed.push(sessionId)
+      throw new Error("Storage release failed")
+    },
+  }
+  const controller = new BuliUiController({ application })
+  try {
+    await controller.activateSession("session-1")
+    controller.updateInput("/sessions")
+    await controller.activateSelectedMenuItem()
+    controller.moveMenuSelection(1)
+
+    await controller.activateSelectedMenuItem()
+
+    expect(closed).toEqual(["session-1"])
+    expect(controller.getSnapshot().route).toEqual({
+      type: "session",
+      sessionId: "session-2",
+    })
+    expect(controller.getSnapshot().menu).toBeNull()
+    expect(controller.getSnapshot().input).toBe("")
+    expect(controller.getSnapshot().inputError).toBeNull()
+    expect(spy.created).toEqual([])
+  } finally {
+    controller.dispose()
+  }
 })
 
 test("login and logout commands activate authentication mode", async () => {

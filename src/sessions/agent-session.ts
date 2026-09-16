@@ -180,7 +180,7 @@ export class AgentSession {
     readonly getSnapshot = (): ISessionSnapshot => this.snapshot
 
     readonly subscribe = (listener: TSessionListener): (() => void) => {
-        if (this.disposed) throw new Error("AgentSession is disposed")
+        if (this.disposed) return () => {}
         this.listeners.add(listener)
         return () => this.listeners.delete(listener)
     }

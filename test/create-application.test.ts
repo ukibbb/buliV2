@@ -153,7 +153,7 @@ test.each(["Fast", "Standard"] as const)(
       expect(runtime.getSnapshot().modelCatalog).toEqual({
         status: "ready",
         ...(mode === "Fast" ? {} : {
-          message: 'Model "gpt-6-astra::fast" is unavailable. Using "gpt-6-astra" instead.',
+          message: 'Model "gpt-6-astra::fast" was not returned in the model catalog for your signed-in ChatGPT account. Availability may depend on your plan or account permissions. Using "gpt-6-astra" instead.',
         }),
       })
 

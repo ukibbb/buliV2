@@ -172,6 +172,7 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
       updatedAt: 1,
     }),
     openSession: () => session,
+    closeSession: async () => undefined,
     listSessions: () => [],
     submitPrompt: (prompt) => {
       prompts.push(prompt)

@@ -7,7 +7,7 @@ export const BULI_COMMANDS: readonly TBuliCommand[] = [
         name: "new",
         description: "Start a new session",
         handler: (_args, context) => {
-            context.goHome()
+            return context.goHome()
         },
     },
     {
@@ -107,7 +107,7 @@ export const BULI_COMMANDS: readonly TBuliCommand[] = [
             }
         },
         select: (sessionId, context) => {
-            context.activateSession(sessionId)
+            return context.activateSession(sessionId)
         },
     },
     {

@@ -80,13 +80,28 @@ bun run typecheck \
   && BULI_RELEASE_TAG="v$VERSION" bun run bundle:local
 ```
 
-Use `bun run test`, not `bun test ./test`. The project script sets
+Use `bun run test` to run the complete suite: colocated tests in `src/` and
+`cli/`, plus application-wide tests in `test/`. The project script also sets
 `SHOW_CONSOLE=0`, which prevents the OpenTUI console from taking focus during UI
-tests.
+tests. Shared fixtures live in `test/fixtures/`.
 
 This gate verifies types, the complete test suite, npm tarball contents, tag and
 package version agreement, the native executable, macOS signing when run on
 macOS, and the bundled ripgrep and fd sidecars.
+
+Verify compiled Bash/Python parsers after moving presentation code or assets:
+
+```bash
+bun run build:local
+bun build --compile scripts/smoke-terminal-parsers.ts --outfile dist/smoke-terminal-parsers
+./dist/smoke-terminal-parsers ./dist/buli ./dist/buli-darwin-arm64/bin/buli
+```
+
+Replace `buli-darwin-arm64` with the local bundle target. The compiled probe
+checks all four parser assets in the application binaries, then highlights
+Python, Bash, and the shell alias using a fresh parser cache. It complements
+the interactive `bun run dev` smoke test; typecheck alone does not verify
+embedded assets or terminal behavior.
 
 ## 5. Commit the release
 

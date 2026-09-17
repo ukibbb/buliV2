@@ -29,14 +29,14 @@ When removing the patch:
 2. Upgrade `@opentui/core` and `@opentui/react` together to the same release.
 3. Remove the patch file and its `patchedDependencies` entry from `package.json`,
    then run `bun install` to regenerate `bun.lock`.
-4. Keep the scrolling regression in `test/transcript.test.tsx` and verify it
+4. Keep the scrolling regression in `src/ui/sessions/Transcript.test.tsx` and verify it
    passes without the patch, including background colors, numbered text,
    scrolling back, and narrow resizing for proposals and Markdown diffs.
 5. Run `bun run typecheck`, `bun run test`, and a compiled CLI smoke test.
 
 ## Theme and layout
 
-- `src/terminal/theme.ts` is the only source of shared UI and syntax colors.
+- `src/ui/terminal/theme.ts` is the only source of shared UI and syntax colors.
 - Root views leave unused cells transparent within the render tree, while the
   shared renderer clears them to `theme.surface` (`#000000`). The application
   deliberately uses a black background rather than inheriting the terminal's
@@ -81,7 +81,7 @@ its durable record appears. The latest compaction checkpoint is rendered as a
 Markdown summary immediately after its `throughMessageId` anchor, while the
 status row shows an animated `Compacting context` state during generation.
 
-OpenTUI includes the TypeScript parser. `src/terminal/parsers.ts` registers
+OpenTUI includes the TypeScript parser. `src/ui/terminal/parsers.ts` registers
 tag-pinned Python 0.23.6 and Bash 0.25.0 WASM grammars and highlight queries
 from embedded assets before the shared Tree-sitter client starts. A failed or
 unknown parser still displays unstyled content.

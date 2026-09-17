@@ -3,7 +3,6 @@ import type {
     TToolApprovalDecision,
     IUserInputContent,
 } from "@/agent"
-import type { IFdPathSuggestion } from "@/tools"
 import type {
     ICompactionCheckpoint,
     ISessionInfo,
@@ -19,7 +18,16 @@ export interface IBuliPromptInput extends IUserInputContent {
     readonly sessionId?: string
 }
 
-export type IBuliPathSuggestion = IFdPathSuggestion
+export interface IBuliPathSuggestion {
+    readonly kind: "file" | "directory"
+    readonly path: string
+    readonly displayPath: string
+}
+
+export type TBuliPathSearcher = (
+    query: string,
+    signal: AbortSignal,
+) => Promise<readonly IBuliPathSuggestion[]>
 
 export interface IBuliPromptRun {
     readonly sessionId: string

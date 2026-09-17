@@ -23,7 +23,7 @@ import type {
 } from "@/app/contracts"
 import type { IAuthenticationService } from "@/authentication/contracts"
 import { BuliApplicationRuntime } from "@/app/runtime"
-import { BuliRuntimeProvider } from "@/app/ui/context/application-context"
+import { BuliRuntimeProvider } from "@/ui/context/application-context"
 import type {
   IAgentModel,
   ICommandToolApprovalRequest,
@@ -33,11 +33,11 @@ import type {
 } from "@/agent"
 import type { ISessionSnapshot } from "@/sessions"
 import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
-import { BuliTui } from "@/app/ui/shell/BuliTui"
-import { COMPLETION_NOTIFICATION_MIN_DURATION_MS } from "@/app/ui/shell/SessionCompletionNotifier"
-import { BuliUiController } from "@/app/ui/ui-controller"
-import { BuliUiControllerProvider } from "@/app/ui/context/ui-controller-context"
-import { glyphs, syntax } from "@/terminal/theme"
+import { BuliTui } from "@/ui/shell/BuliTui"
+import { COMPLETION_NOTIFICATION_MIN_DURATION_MS } from "@/ui/shell/SessionCompletionNotifier"
+import { BuliUiController } from "@/ui/ui-controller"
+import { BuliUiControllerProvider } from "@/ui/context/ui-controller-context"
+import { glyphs, syntax } from "@/ui/terminal/theme"
 
 const WORKSPACE_ROOT = "/workspace"
 const TEST_AGENT_ID = "test-agent"
@@ -416,6 +416,70 @@ test("Escape restores steering and aborts while chat input is focused", async ()
     act(() => {
       setup.renderer.destroy()
     })
+  }
+})
+
+test("two Escape keypresses close the menu before interrupting an active response", async () => {
+  let cleared = 0
+  const fake = fakeApplication({
+    sessionSnapshot: {
+      messages: [], fileChangeProposals: [],
+      pendingSteeringMessages: [{
+        id: "steer-1", sessionId: "default", runId: "run-1", role: "user",
+        source: "steer", content: "Queued steering", createdAt: 1,
+      }],
+      pendingFollowUpMessages: [{
+        id: "follow-up-1", sessionId: "default", runId: "run-1", role: "user",
+        source: "followUp", content: "Queued follow-up", createdAt: 2,
+      }],
+      isRunning: true, isCompacting: false, pendingToolCallIds: [],
+    },
+    clearQueuedMessages: () => {
+      cleared += 1
+      return { steering: ["Queued steering"], followUp: ["Queued follow-up"] }
+    },
+  })
+  const controller = new BuliUiController({ application: fake.application })
+  await controller.activateSession("default")
+  const setup = await testRender(buliElementWithController(fake.application, controller), {
+    width: 80, height: 24,
+  })
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+      await setup.mockInput.typeText("/")
+      await setup.renderOnce()
+    })
+    expect(controller.getSnapshot().menu).not.toBeNull()
+    const draft = controller.getInputDraft()
+    const session = fake.application.openSession("default").getSnapshot()
+    const pressEscape = async () => {
+      const key = parseKeypress("\u001b")
+      if (!key) throw new Error("Expected Escape to parse")
+      await act(async () => {
+        setup.renderer.keyInput.processParsedKey(key)
+        await setup.renderOnce()
+      })
+    }
+
+    await pressEscape()
+    expect(controller.getSnapshot().menu).toBeNull()
+    expect(controller.getInputDraft()).toBe(draft)
+    expect(textareaRenderable(setup.renderer.root).plainText).toBe("/")
+    expect(fake.application.openSession("default").getSnapshot()).toBe(session)
+    expect(cleared).toBe(0)
+    expect(fake.aborted).toEqual([])
+
+    await pressEscape()
+    expect(cleared).toBe(1)
+    expect(fake.aborted).toEqual(["default"])
+    expect(textareaRenderable(setup.renderer.root).plainText).toBe(
+      "Queued steering\n\nQueued follow-up\n\n/",
+    )
+  } finally {
+    controller.dispose()
+    act(() => setup.renderer.destroy())
   }
 })
 

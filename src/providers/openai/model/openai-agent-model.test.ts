@@ -1,0 +1,1371 @@
+import { expect, test } from "bun:test"
+import { realpathSync } from "node:fs"
+
+import {
+    defineAgentTool,
+    isModelContextOverflowError,
+    runAgentLoop,
+    type TAgentMessage,
+    type TAgentModelEvent,
+    type IAgentToolDescriptor,
+    type IUserMessage,
+} from "@/agent"
+import type {
+  IAuthStore,
+  IOAuthCredential,
+  TAuthCredential,
+} from "@/authentication/credentials"
+import { OpenAiAuth } from "@/providers/openai/auth/openai-auth"
+import {
+  DEFAULT_OPENAI_MODEL_ID,
+  OpenAiAgentModel,
+  type IOpenAiAgentModelOptions,
+} from "@/providers/openai/model/openai-agent-model"
+import { OPENAI_CODEX_RESPONSES_URL } from "@/providers/openai/constants"
+import { AgentSession } from "@/sessions/agent-session"
+import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
+import { createWorkspaceTools } from "../../../../test/fixtures/workspace-tools"
+import { MODELS_DEV_ASTRA_REFERENCE } from "../../../../test/fixtures/openai-astra-reference"
+
+const WORKSPACE_ROOT = realpathSync(process.cwd())
+
+test("runs an OAuth tool chain through Agent-owned iterations", async () => {
+  const capturedRequests: Request[] = []
+  const captureFetch = fetchImplementation(async (...args) => {
+    capturedRequests.push(new Request(...args))
+    if (capturedRequests.length === 1) {
+      return toolCallResponse("find", { pattern: "package.json" })
+    }
+    if (capturedRequests.length === 2) {
+      return toolCallResponse("grep", { pattern: "packageManager" })
+    }
+    if (capturedRequests.length === 3) {
+      return toolCallResponse("read", { path: "package.json" })
+    }
+    return streamResponse()
+  })
+  const auth = new OpenAiAuth({
+    store: authStore({
+      type: "oauth",
+      access: "test-access-token",
+      refresh: "test-refresh-token",
+      expires: 1_000_000,
+      accountId: "test-account-id",
+    }),
+    fetch: captureFetch,
+    now: () => 100,
+  })
+  const model = new OpenAiAgentModel({
+    auth,
+    modelId: "gpt-5.6-sol",
+  })
+  const messages: TAgentMessage[] = [
+    {
+      id: "previous-user",
+      sessionId: "session-1",
+      runId: "previous-run",
+      role: "user",
+      source: "prompt",
+      content: "First\n\nSecond",
+      createdAt: 1,
+    },
+    {
+      id: "previous-assistant",
+      sessionId: "session-1",
+      runId: "previous-run",
+      role: "assistant",
+      content: [
+        { type: "text", text: "Answer" },
+        { type: "reasoning", text: "Do not send this" },
+      ],
+      stopReason: "stop",
+      createdAt: 2,
+    },
+  ]
+  const manager = new InMemorySessionManager()
+  manager.createSession(testSessionInfo())
+  messages.forEach(manager.appendMessage)
+  const expectedSystemPrompt = "Inspect the workspace using the supplied tools."
+  const session = new AgentSession({
+    agentId: "test-agent",
+    sessionId: "session-1",
+    manager,
+    systemPrompt: expectedSystemPrompt,
+    resolveRunConfiguration: () => ({
+      model,
+      reasoningEffort: "medium",
+    }),
+    tools: createWorkspaceTools(WORKSPACE_ROOT),
+  })
+
+  await session.prompt("Continue").runFinished
+
+  const [firstRequest, secondRequest, thirdRequest, fourthRequest] = capturedRequests
+  if (!firstRequest || !secondRequest || !thirdRequest || !fourthRequest) {
+    throw new Error("Expected the OpenAI SDK to issue four requests")
+  }
+
+  expect(capturedRequests).toHaveLength(4)
+  expect(firstRequest.url).toBe(OPENAI_CODEX_RESPONSES_URL)
+  expect(firstRequest.headers.get("authorization")).toBe("Bearer test-access-token")
+  expect(firstRequest.headers.get("chatgpt-account-id")).toBe("test-account-id")
+  expect(firstRequest.headers.get("originator")).toBe("buli")
+  expect(firstRequest.headers.get("openai-beta")).toBe("responses=experimental")
+
+  const body = (await firstRequest.json()) as Record<string, unknown>
+  expect(body.model).toBe("gpt-5.6-sol")
+  expect(body.store).toBe(false)
+  expect(body.stream).toBe(true)
+  expect(body.reasoning).toMatchObject({ effort: "medium", summary: "detailed" })
+  expect(body.instructions).toBe(expectedSystemPrompt)
+  const tools = body.tools as Array<{
+    type: string
+    name: string
+    parameters: unknown
+  }>
+  const toolNames = tools.map((tool) => tool.name)
+  const parametersFor = (name: string): unknown =>
+    tools.find((tool) => tool.name === name)?.parameters
+
+  expect(tools.every((tool) => tool.type === "function")).toBe(true)
+  expect(toolNames).toEqual(["read", "find", "grep", "edit", "write", "bash"])
+  expect(toolNames).not.toContain("glob")
+  expect(toolNames).not.toContain("apply_patch")
+  expect(toolNames).not.toContain("write_file")
+  expect(parametersFor("read")).toEqual({
+    type: "object",
+    properties: {
+      path: {
+        type: "string",
+        description: "Path to the file to read (relative or absolute)",
+      },
+      offset: {
+        type: "number",
+        description: "Line number to start reading from (1-indexed)",
+      },
+      limit: {
+        type: "number",
+        description: "Maximum number of lines to read",
+      },
+    },
+    required: ["path"],
+  })
+  expect(parametersFor("find")).toEqual({
+    type: "object",
+    properties: {
+      pattern: {
+        type: "string",
+        description: "Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'",
+      },
+      path: {
+        type: "string",
+        description: "Directory to search in (default: current directory)",
+      },
+      limit: {
+        type: "number",
+        description: "Maximum number of results (default: 1000)",
+      },
+      includeIgnored: {
+        type: "boolean",
+        description: "Include files excluded by ignore rules, including .gitignore (default: false). Use a narrowly scoped path to avoid searching unrelated ignored files.",
+      },
+    },
+    required: ["pattern"],
+  })
+  expect(parametersFor("grep")).toEqual({
+    type: "object",
+    properties: {
+      pattern: {
+        type: "string",
+        description: "Search pattern (regex or literal string)",
+      },
+      path: {
+        type: "string",
+        description: "Directory or file to search (default: current directory)",
+      },
+      glob: {
+        type: "string",
+        description: "Filter files by glob pattern, e.g. '*.ts' or '**/*.spec.ts'",
+      },
+      ignoreCase: {
+        type: "boolean",
+        description: "Case-insensitive search (default: false)",
+      },
+      literal: {
+        type: "boolean",
+        description: "Treat pattern as literal string instead of regex (default: false)",
+      },
+      context: {
+        type: "number",
+        description: "Number of lines to show before and after each match (default: 0)",
+      },
+      limit: {
+        type: "number",
+        description: "Maximum number of matches to return (default: 100)",
+      },
+      includeIgnored: {
+        type: "boolean",
+        description: "Include files excluded by ignore rules, including .gitignore (default: false). Use a narrowly scoped path to avoid searching unrelated ignored files.",
+      },
+    },
+    required: ["pattern"],
+  })
+  expect(parametersFor("edit")).toEqual({
+    type: "object",
+    properties: {
+      path: {
+        type: "string",
+        description: "Path to the file to edit (relative or absolute)",
+      },
+      edits: {
+        type: "array",
+        description: "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+        items: {
+          type: "object",
+          properties: {
+            oldText: {
+              type: "string",
+              description: "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
+            },
+            newText: {
+              type: "string",
+              description: "Replacement text for this targeted edit.",
+            },
+          },
+          required: ["oldText", "newText"],
+        },
+      },
+    },
+    required: ["path", "edits"],
+  })
+  expect(parametersFor("write")).toEqual({
+    type: "object",
+    properties: {
+      path: {
+        type: "string",
+        description: "Path to the file to write (relative or absolute)",
+      },
+      content: {
+        type: "string",
+        description: "Content to write to the file",
+      },
+    },
+    required: ["path", "content"],
+  })
+  expect(parametersFor("bash")).toEqual({
+    type: "object",
+    properties: {
+      command: {
+        type: "string",
+        description: "Shell command to execute",
+      },
+      timeout: {
+        type: "number",
+        description: "Timeout in seconds (optional, no default timeout)",
+      },
+    },
+    required: ["command"],
+  })
+
+  expect(body.input).toEqual([
+    {
+      role: "user",
+      content: [{ type: "input_text", text: "First\n\nSecond" }],
+    },
+    {
+      role: "assistant",
+      content: [{ type: "output_text", text: "Answer" }],
+    },
+    {
+      role: "user",
+      content: [{ type: "input_text", text: "Continue" }],
+    },
+  ])
+  expect(JSON.stringify(body.input)).not.toContain("Do not send this")
+
+  const findContinuation = (await secondRequest.json()) as Record<string, unknown>
+  expect(findContinuation.input).toEqual(expect.arrayContaining([
+    {
+      type: "function_call",
+      call_id: "call-find",
+      name: "find",
+      arguments: JSON.stringify({ pattern: "package.json" }),
+    },
+    {
+      type: "function_call_output",
+      call_id: "call-find",
+      output: expect.stringContaining("package.json"),
+    },
+  ]))
+
+  const grepContinuation = (await thirdRequest.json()) as Record<string, unknown>
+  expect(JSON.stringify(grepContinuation.input)).toContain("bun@1.3.12")
+
+  const readContinuation = (await fourthRequest.json()) as Record<string, unknown>
+  expect(JSON.stringify(readContinuation.input)).toContain("scripts")
+
+  const stored = manager.getMessages("session-1")
+  const toolCalls = stored.flatMap((message) => message.role === "assistant"
+    ? message.content.filter((content) => content.type === "toolCall")
+    : [])
+  const toolResults = stored.filter((message) => message.role === "toolResult")
+
+  expect(toolCalls).toEqual([
+    {
+      type: "toolCall",
+      toolCallId: "call-find",
+      toolName: "find",
+      input: { pattern: "package.json" },
+    },
+    {
+      type: "toolCall",
+      toolCallId: "call-grep",
+      toolName: "grep",
+      input: { pattern: "packageManager" },
+    },
+    {
+      type: "toolCall",
+      toolCallId: "call-read",
+      toolName: "read",
+      input: { path: "package.json" },
+    },
+  ])
+  expect(toolResults).toEqual([
+    expect.objectContaining({
+      role: "toolResult",
+      toolCallId: "call-find",
+      toolName: "find",
+      content: expect.stringContaining("package.json"),
+      isError: false,
+    }),
+    expect.objectContaining({
+      role: "toolResult",
+      toolCallId: "call-grep",
+      toolName: "grep",
+      content: expect.stringContaining("bun@1.3.12"),
+      isError: false,
+    }),
+    expect.objectContaining({
+      role: "toolResult",
+      toolCallId: "call-read",
+      toolName: "read",
+      content: expect.stringContaining('"scripts"'),
+      isError: false,
+    }),
+  ])
+  const finalMessage = stored.at(-1)
+  expect(finalMessage).toMatchObject({
+    role: "assistant",
+    stopReason: "stop",
+  })
+  if (finalMessage?.role !== "assistant") {
+    throw new Error("Expected a final assistant message")
+  }
+  expect(finalMessage.content).toContainEqual({ type: "text", text: "Hello" })
+})
+
+test("replays a local tool failure into the next OAuth iteration", async () => {
+  const capturedRequests: Request[] = []
+  const missingPath = "__buli_missing_tool_file__.txt"
+  const captureFetch = fetchImplementation(async (...args) => {
+    capturedRequests.push(new Request(...args))
+    return capturedRequests.length === 1
+      ? toolCallResponse("read", { path: missingPath })
+      : streamResponse()
+  })
+  const auth = new OpenAiAuth({
+    store: authStore({
+      type: "oauth",
+      access: "test-access-token",
+      refresh: "test-refresh-token",
+      expires: 1_000_000,
+      accountId: "test-account-id",
+    }),
+    fetch: captureFetch,
+    now: () => 100,
+  })
+  const manager = new InMemorySessionManager()
+  manager.createSession(testSessionInfo())
+  const session = new AgentSession({
+    agentId: "test-agent",
+    sessionId: "session-1",
+    manager,
+    systemPrompt: "Inspect the workspace using the supplied tools.",
+    resolveRunConfiguration: () => ({
+      model: new OpenAiAgentModel({
+        auth,
+      }),
+      reasoningEffort: "medium",
+    }),
+    tools: createWorkspaceTools(WORKSPACE_ROOT),
+  })
+
+  await session.prompt("Read the missing file").runFinished
+
+  expect(capturedRequests).toHaveLength(2)
+  const failedTool = manager
+    .getMessages("session-1")
+    .find((message) => message.role === "toolResult")
+
+  if (failedTool?.role !== "toolResult") {
+    throw new Error("Expected a failed read tool")
+  }
+
+  expect(failedTool).toMatchObject({
+    toolCallId: "call-read",
+    toolName: "read",
+    isError: true,
+  })
+
+  const continuation = capturedRequests[1]
+  if (!continuation) throw new Error("Expected a continuation request")
+  const body = (await continuation.json()) as Record<string, unknown>
+  expect(body.input).toEqual(expect.arrayContaining([
+    {
+      type: "function_call",
+      call_id: "call-read",
+      name: "read",
+      arguments: JSON.stringify({ path: missingPath }),
+    },
+    {
+      type: "function_call_output",
+      call_id: "call-read",
+      output: failedTool.content,
+    },
+  ]))
+  expect(manager.getMessages("session-1").at(-1)).toMatchObject({
+    role: "assistant",
+    stopReason: "stop",
+  })
+})
+
+test("lowers direct assistant and text-only toolResult messages", async () => {
+  const capturedRequests: Request[] = []
+  const model = createModel(async (...args) => {
+    capturedRequests.push(new Request(...args))
+    return streamResponse()
+  })
+
+  const events = await collectEvents(model, [
+    userMessage("Question"),
+    {
+      id: "assistant-message",
+      sessionId: "session-1",
+      runId: "run-1",
+      role: "assistant",
+      content: [
+        { type: "text", text: "I will inspect it." },
+        {
+          type: "toolCall",
+          toolCallId: "call-read",
+          toolName: "read_file",
+          input: { path: "README.md" },
+        },
+      ],
+      stopReason: "tool-calls",
+      createdAt: 2,
+    },
+    {
+      id: "tool-result-message",
+      sessionId: "session-1",
+      runId: "run-1",
+      role: "toolResult",
+      toolCallId: "call-read",
+      toolName: "read_file",
+      content: "README contents",
+      isError: false,
+      createdAt: 3,
+    },
+  ], [toolDescriptor("read")])
+
+  expect(events).toContainEqual({
+    type: "finish",
+    reason: "stop",
+    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+  })
+  expect(capturedRequests).toHaveLength(1)
+  const request = capturedRequests[0]
+  if (!request) throw new Error("Expected an OpenAI request")
+  const body = (await request.json()) as Record<string, unknown>
+  expect(body.input).toEqual([
+    {
+      role: "user",
+      content: [{ type: "input_text", text: "Question" }],
+    },
+    {
+      role: "assistant",
+      content: [{ type: "output_text", text: "I will inspect it." }],
+    },
+    {
+      type: "function_call",
+      call_id: "call-read",
+      name: "read_file",
+      arguments: JSON.stringify({ path: "README.md" }),
+    },
+    {
+      type: "function_call_output",
+      call_id: "call-read",
+      output: "README contents",
+    },
+  ])
+})
+
+test("lowers user image attachments to OpenAI input_image parts", async () => {
+  const capturedRequests: Request[] = []
+  const model = createModel(async (...args) => {
+    capturedRequests.push(new Request(...args))
+    return streamResponse()
+  })
+  const pngData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlL8AAAAASUVORK5CYII="
+
+  await collectEvents(model, [{
+    ...userMessage("Inspect [Image 1]"),
+    attachments: [{
+      type: "image",
+      mimeType: "image/png",
+      data: pngData,
+      filename: "clipboard-1.png",
+      source: { value: "[Image 1]", start: 8, end: 17 },
+    }],
+  }], [])
+
+  const request = capturedRequests[0]
+  if (!request) throw new Error("Expected an OpenAI request")
+  const body = (await request.json()) as Record<string, unknown>
+  expect(body.input).toEqual([{
+    role: "user",
+    content: [
+      { type: "input_text", text: "Inspect [Image 1]" },
+      {
+        type: "input_image",
+        image_url: `data:image/png;base64,${pngData}`,
+      },
+    ],
+  }])
+})
+
+test("projects structured tool outcomes as text-only provider results", async () => {
+  const capturedRequests: Request[] = []
+  const model = createModel(async (...args) => {
+    capturedRequests.push(new Request(...args))
+    return streamResponse()
+  })
+  const outcomes = [
+    "completed",
+    "rejected",
+    "manual",
+    "failed",
+    "committed-after-abort",
+    "effects-unknown",
+  ] as const
+
+  for (const [index, outcome] of outcomes.entries()) {
+    const toolCallId = `call-${index}`
+    await collectEvents(model, [
+      userMessage("Question"),
+      {
+        id: `assistant-${index}`,
+        sessionId: "session-1",
+        runId: "run-1",
+        role: "assistant",
+        content: [{
+          type: "toolCall",
+          toolCallId,
+          toolName: "test_tool",
+          input: {},
+        }],
+        stopReason: "tool-calls",
+        createdAt: 2,
+      },
+      {
+        id: `result-${index}`,
+        sessionId: "session-1",
+        runId: "run-1",
+        role: "toolResult",
+        toolCallId,
+        toolName: "test_tool",
+        content: `provider-visible-${index}`,
+        isError: outcome === "failed"
+          || outcome === "committed-after-abort"
+          || outcome === "effects-unknown",
+        outcome,
+        summary: `HOST_ONLY_SUMMARY_${index}`,
+        createdAt: 3,
+      },
+    ], [toolDescriptor("test_tool")])
+  }
+
+  expect(capturedRequests).toHaveLength(outcomes.length)
+  for (const [index, request] of capturedRequests.entries()) {
+    const body = (await request.json()) as Record<string, unknown>
+    expect(body.input).toEqual(expect.arrayContaining([{
+      type: "function_call_output",
+      call_id: `call-${index}`,
+      output: `provider-visible-${index}`,
+    }]))
+    const input = JSON.stringify(body.input)
+    expect(input).not.toContain("HOST_ONLY_SUMMARY")
+    expect(input).not.toContain('"outcome"')
+    expect(input).not.toContain('"summary"')
+  }
+})
+
+test("sends cumulative checkpoints without unsupported Codex limits", async () => {
+  let capturedRequest: Request | undefined
+  const model = createModel(async (...args) => {
+    capturedRequest = new Request(...args)
+    return streamResponse()
+  })
+  const events: TAgentModelEvent[] = []
+
+  for await (const event of model.stream({
+    sessionId: "session-1",
+    runId: "compaction-1",
+    systemPrompt: "Summarize",
+    contextSummary: "Earlier durable context",
+    messages: [userMessage("New tail")],
+    tools: [],
+    reasoningEffort: "low",
+    signal: new AbortController().signal,
+  })) {
+    events.push(event)
+  }
+
+  if (!capturedRequest) throw new Error("Expected one provider request")
+  const body = (await capturedRequest.json()) as Record<string, unknown>
+  expect(body.input).toEqual([
+    {
+      role: "assistant",
+      content: [{
+        type: "output_text",
+        text: "Cumulative operational checkpoint:\nEarlier durable context",
+      }],
+    },
+    {
+      role: "user",
+      content: [{ type: "input_text", text: "New tail" }],
+    },
+  ])
+  expect(JSON.stringify(body)).not.toContain(
+    "Conversation summary before the retained transcript",
+  )
+  expect(body).not.toHaveProperty("max_output_tokens")
+  expect(body).not.toHaveProperty("parallel_tool_calls")
+  expect(body).not.toHaveProperty("service_tier")
+  expect(events.at(-1)).toMatchObject({
+    type: "finish",
+    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+  })
+})
+
+test("sends the priority service tier for a Fast model registration", async () => {
+  let capturedRequest: Request | undefined
+  const model = createModel(async (...args) => {
+    capturedRequest = new Request(...args)
+    return streamResponse()
+  }, {
+    modelId: "gpt-5.4-nano-catalog",
+    serviceTier: "priority",
+  })
+
+  await collectEvents(model, [userMessage("Fast request")], [])
+
+  if (!capturedRequest) throw new Error("Expected one provider request")
+  const body = (await capturedRequest.json()) as Record<string, unknown>
+  expect(body.model).toBe("gpt-5.4-nano-catalog")
+  expect(body.service_tier).toBe("priority")
+})
+
+test.each([...MODELS_DEV_ASTRA_REFERENCE.reasoning_options[0].values])(
+  "serializes catalog-backed Astra standard and Fast requests at %s effort",
+  async (reasoningEffort) => {
+    for (const serviceTier of [undefined, "priority"] as const) {
+      let capturedRequest: Request | undefined
+      // Capture after the real SDK has serialized the request. Inspecting only
+      // providerOptions would miss its older reasoning/tier allowlist filters.
+      const model = createModel(async (...args) => {
+        capturedRequest = new Request(...args)
+        return streamResponse()
+      }, {
+        modelId: "gpt-6-astra",
+        supportsReasoning: true,
+        ...(serviceTier === undefined ? {} : { serviceTier }),
+      })
+      const events: TAgentModelEvent[] = []
+
+      for await (const event of model.stream({
+        sessionId: "session-1",
+        runId: "run-1",
+        systemPrompt: "System",
+        messages: [userMessage("Selected effort")],
+        tools: [],
+        reasoningEffort,
+        signal: new AbortController().signal,
+      })) {
+        events.push(event)
+      }
+
+      if (!capturedRequest) throw new Error("Expected one provider request")
+      expect(capturedRequest.url).toBe(OPENAI_CODEX_RESPONSES_URL)
+      const body = (await capturedRequest.json()) as Record<string, unknown>
+      expect(body.model).toBe("gpt-6-astra")
+      expect(body.reasoning).toEqual({ effort: reasoningEffort, summary: "detailed" })
+      if (serviceTier === undefined) {
+        expect(body).not.toHaveProperty("service_tier")
+      } else {
+        expect(body.service_tier).toBe("priority")
+      }
+      expect(body).not.toHaveProperty("max_output_tokens")
+      expect(body).not.toHaveProperty("forceReasoning")
+      expect(events.at(-1)?.type).toBe("finish")
+    }
+  },
+)
+
+test("defaults to reasoning-capable Astra without a model ID or capability metadata", async () => {
+  let capturedRequest: Request | undefined
+  const model = createModel(async (...args) => {
+    capturedRequest = new Request(...args)
+    return streamResponse()
+  })
+
+  await collectEvents(model, [userMessage("Default model")], [])
+
+  expect(DEFAULT_OPENAI_MODEL_ID).toBe("gpt-6-astra")
+  if (!capturedRequest) throw new Error("Expected one provider request")
+  const body = (await capturedRequest.json()) as Record<string, unknown>
+  expect(body.model).toBe("gpt-6-astra")
+  expect(body.reasoning).toEqual({ effort: "medium", summary: "detailed" })
+})
+
+// Negative controls intentionally retain SDK warnings and omit wire reasoning;
+// missing metadata must not become either a forced false or a GPT-6 prefix guess.
+test.each([
+  ["gpt-6-catalog-model", true, true],
+  ["gpt-6-catalog-model", undefined, false],
+  ["account-reasoner", true, true],
+  ["gpt-5.6-sol", undefined, true],
+  ["gpt-6-astra", false, false],
+] as const)(
+  "preserves capability trust for %s with supportsReasoning=%s",
+  async (modelId, supportsReasoning, expectsReasoning) => {
+    let capturedRequest: Request | undefined
+    const model = createModel(async (...args) => {
+      capturedRequest = new Request(...args)
+      return streamResponse()
+    }, {
+      modelId,
+      ...(supportsReasoning === undefined ? {} : { supportsReasoning }),
+    })
+
+    await collectEvents(model, [userMessage("Reasoning capability")], [])
+
+    if (!capturedRequest) throw new Error("Expected one provider request")
+    const body = (await capturedRequest.json()) as Record<string, unknown>
+    expect(body.model).toBe(modelId)
+    if (expectsReasoning) {
+      expect(body.reasoning).toEqual({ effort: "medium", summary: "detailed" })
+    } else {
+      expect(body).not.toHaveProperty("reasoning")
+    }
+  },
+)
+
+test("normalizes cache and reasoning usage without double-counting totals", async () => {
+  const model = createModel(async () => streamResponse({
+    input_tokens: 100,
+    input_tokens_details: {
+      cached_tokens: 40,
+      cache_write_tokens: 10,
+    },
+    output_tokens: 25,
+    output_tokens_details: { reasoning_tokens: 15 },
+  }))
+
+  const events = await collectEvents(model, [userMessage("Usage")], [])
+
+  expect(events.at(-1)).toEqual({
+    type: "finish",
+    reason: "stop",
+    usage: {
+      inputTokens: 100,
+      outputTokens: 25,
+      totalTokens: 125,
+      cacheReadTokens: 40,
+      cacheWriteTokens: 10,
+      reasoningTokens: 15,
+    },
+  })
+})
+
+test("uses the unified finish reason instead of the raw provider reason", async () => {
+  const model = createModel(async () => eventStream([
+    {
+      type: "response.created",
+      response: {
+        id: "response-incomplete",
+        created_at: 1,
+        model: "gpt-5.6-sol",
+        service_tier: null,
+      },
+    },
+    {
+      type: "response.incomplete",
+      response: {
+        incomplete_details: { reason: "max_output_tokens" },
+        usage: {
+          input_tokens: 1,
+          input_tokens_details: null,
+          output_tokens: 1,
+          output_tokens_details: null,
+        },
+        service_tier: null,
+      },
+    },
+  ]))
+
+  const events = await collectEvents(model, [userMessage("Long response")], [])
+
+  expect(events.at(-1)).toMatchObject({
+    type: "finish",
+    reason: "length",
+  })
+})
+
+test("classifies only explicit OpenAI context-limit failures", async () => {
+  const contextModel = createModel(async () => new Response(JSON.stringify({
+    error: {
+      message: "This model's maximum context length is 200000 tokens",
+      type: "invalid_request_error",
+      code: "context_length_exceeded",
+    },
+  }), {
+    status: 400,
+    headers: { "content-type": "application/json" },
+  }))
+  const genericModel = createModel(async () => new Response(JSON.stringify({
+    error: {
+      message: "Invalid tool schema",
+      type: "invalid_request_error",
+      code: "invalid_tool_schema",
+    },
+  }), {
+    status: 400,
+    headers: {
+      "content-type": "application/json",
+      "x-request-id": "request-invalid-schema",
+    },
+  }))
+
+  const contextEvents = await collectEvents(
+    contextModel,
+    [userMessage("Too large")],
+    [],
+  )
+  const genericEvents = await collectEvents(
+    genericModel,
+    [userMessage("Invalid")],
+    [],
+  )
+
+  const contextError = contextEvents.find((event) => event.type === "error")
+  const genericError = genericEvents.find((event) => event.type === "error")
+  expect(contextError?.type).toBe("error")
+  expect(contextError?.type === "error"
+    && isModelContextOverflowError(contextError.error)).toBe(true)
+  expect(genericError?.type).toBe("error")
+  expect(genericError?.type === "error"
+    && isModelContextOverflowError(genericError.error)).toBe(false)
+  expect(genericError?.type === "error"
+    && genericError.error instanceof Error
+    && genericError.error.message).toBe(
+      "OpenAI request failed (400): Invalid tool schema "
+      + "[request request-invalid-schema]",
+    )
+})
+
+test("rejects a discovered model after the authenticated account changes", async () => {
+  let networkCalls = 0
+  const model = new OpenAiAgentModel({
+    auth: {
+      authenticatedFetch: fetchImplementation(async () => {
+        networkCalls += 1
+        return streamResponse()
+      }),
+      requireCredential: async () => ({ accountId: "account-b" }),
+    },
+    modelId: "account-a-model",
+    expectedAccountId: "account-a",
+  })
+  const consume = async (): Promise<void> => {
+    for await (const _event of model.stream({
+      sessionId: "session-1",
+      runId: "run-1",
+      systemPrompt: "System",
+      messages: [userMessage("Hello")],
+      tools: [],
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+    })) {
+      // The account check must fail before a provider event can arrive.
+    }
+  }
+
+  await expect(consume()).rejects.toThrow(
+    "OpenAI account changed; run `/model` to refresh available models",
+  )
+  expect(networkCalls).toBe(0)
+})
+
+test("binds a fallback model request to its preflight account", async () => {
+  let boundAccountId: string | undefined
+  let reportedAccountId: string | undefined
+  let genericNetworkCalls = 0
+  const model = new OpenAiAgentModel({
+    auth: {
+      authenticatedFetch: fetchImplementation(async () => {
+        genericNetworkCalls += 1
+        return streamResponse()
+      }),
+      authenticatedFetchForAccount: (accountId) => {
+        boundAccountId = accountId
+        return fetchImplementation(async () => streamResponse())
+      },
+      requireCredential: async () => ({ accountId: "account-a" }),
+    },
+  })
+
+  const events = await collectEvents(
+    model,
+    [userMessage("Hello")],
+    [],
+    (accountId) => {
+      reportedAccountId = accountId
+    },
+  )
+
+  expect(boundAccountId).toBe("account-a")
+  expect(reportedAccountId).toBe("account-a")
+  expect(genericNetworkCalls).toBe(0)
+  expect(events.at(-1)?.type).toBe("finish")
+})
+
+test("emits every tool call from one provider response for the host loop", async () => {
+  const model = createModel(async () => multiToolCallResponse([
+    {
+      toolCallId: "call-find",
+      toolName: "find",
+      input: { pattern: "*.ts" },
+    },
+    {
+      toolCallId: "call-grep",
+      toolName: "grep",
+      input: { pattern: "toolCallId" },
+    },
+  ]))
+
+  const events = await collectEvents(
+    model,
+    [userMessage("Inspect the workspace")],
+    [toolDescriptor("find"), toolDescriptor("grep")],
+  )
+
+  expect(events.filter((event) => event.type === "tool-call")).toEqual([
+    {
+      type: "tool-call",
+      toolCallId: "call-find",
+      toolName: "find",
+      input: { pattern: "*.ts" },
+    },
+    {
+      type: "tool-call",
+      toolCallId: "call-grep",
+      toolName: "grep",
+      input: { pattern: "toolCallId" },
+    },
+  ])
+  expect(events.at(-1)).toEqual({
+    type: "finish",
+    reason: "tool-calls",
+    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+  })
+})
+
+test("does not execute an OpenAI tool call from an output-limited response", async () => {
+  let requests = 0
+  let executions = 0
+  const model = createModel(async () => {
+    requests += 1
+    return requests === 1
+      ? incompleteToolCallResponse("dangerous_action", { value: "partial" })
+      : streamResponse()
+  })
+  const tool = defineAgentTool({
+    name: "dangerous_action",
+    description: "Perform a local side effect",
+    inputSchema: { type: "object" },
+    execute: async () => {
+      executions += 1
+      return "executed"
+    },
+  })
+
+  const result = await runAgentLoop(
+    userMessage("Perform the action"),
+    {
+      systemPrompt: "System",
+      messages: [],
+      tools: [tool],
+    },
+    {
+      sessionId: "session-1",
+      runId: "run-1",
+      model,
+      reasoningEffort: "medium",
+      signal: new AbortController().signal,
+      emit: () => undefined,
+    },
+  )
+
+  expect(executions).toBe(0)
+  expect(requests).toBe(2)
+  expect(result.messages.find((message) => message.role === "toolResult"))
+    .toMatchObject({
+      toolName: "dangerous_action",
+      isError: true,
+      content: expect.stringContaining("output token limit"),
+    })
+})
+
+test("forwards cancellation to the OpenAI request", async () => {
+  const requestStarted = Promise.withResolvers<AbortSignal>()
+  const stalledFetch = fetchImplementation(async (_input, init) => {
+    const signal = init?.signal
+    if (!signal) throw new Error("Expected an OpenAI request signal")
+    requestStarted.resolve(signal)
+
+    return new Promise<Response>((_resolve, reject) => {
+      const abort = () => reject(new DOMException("Request aborted", "AbortError"))
+      if (signal.aborted) return abort()
+      signal.addEventListener("abort", abort, { once: true })
+    })
+  })
+  const auth = new OpenAiAuth({
+    store: authStore({
+      type: "oauth",
+      access: "test-access-token",
+      refresh: "test-refresh-token",
+      expires: 1_000_000,
+      accountId: "test-account-id",
+    }),
+    fetch: stalledFetch,
+    now: () => 100,
+  })
+  const model = new OpenAiAgentModel({
+    auth,
+  })
+  const controller = new AbortController()
+  const eventsPromise = (async () => {
+    const events = []
+    for await (const event of model.stream({
+      sessionId: "session-1",
+      runId: "run-1",
+      systemPrompt: "Answer questions.",
+      messages: [userMessage("Wait")],
+      tools: [],
+      reasoningEffort: "medium",
+      signal: controller.signal,
+    })) {
+      events.push(event)
+    }
+    return events
+  })()
+
+  const providerSignal = await requestStarted.promise
+  controller.abort("Stopped by test")
+  const events = await eventsPromise
+
+  expect(providerSignal.aborted).toBe(true)
+  expect(events).toContainEqual({ type: "abort", reason: "Stopped by test" })
+})
+
+function authStore(credential: IOAuthCredential): IAuthStore {
+  let current: TAuthCredential | undefined = credential
+  return {
+    async get(providerID) {
+      return providerID === "openai" ? current : undefined
+    },
+    async set(providerID, next) {
+      if (providerID === "openai") current = next
+    },
+    async remove(providerID) {
+      if (providerID !== "openai" || !current) return false
+      current = undefined
+      return true
+    },
+    async modify(providerID, update) {
+      if (providerID !== "openai") return undefined
+      current = await update(current)
+      return current
+    },
+    async beginOperation() {
+      return 1
+    },
+    async commitOperation(providerID, _operation, next) {
+      if (providerID !== "openai") return false
+      current = next
+      return true
+    },
+  }
+}
+
+function fetchImplementation(
+  run: (...args: Parameters<typeof globalThis.fetch>) => Promise<Response>,
+): typeof fetch {
+  return Object.assign(run, { preconnect: globalThis.fetch.preconnect })
+}
+
+function streamResponse(usage: Record<string, unknown> = {
+  input_tokens: 1,
+  input_tokens_details: null,
+  output_tokens: 1,
+  output_tokens_details: null,
+}): Response {
+  return eventStream([
+    {
+      type: "response.created",
+      response: {
+        id: "response-1",
+        created_at: 1,
+        model: "gpt-5.6-sol",
+        service_tier: null,
+      },
+    },
+    {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { type: "message", id: "answer" },
+    },
+    {
+      type: "response.output_text.delta",
+      item_id: "answer",
+      delta: "Hello",
+      logprobs: null,
+    },
+    {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: { type: "message", id: "answer" },
+    },
+    {
+      type: "response.completed",
+      response: {
+        incomplete_details: null,
+        usage,
+        service_tier: null,
+      },
+    },
+  ])
+}
+
+function toolCallResponse(
+  toolName: string,
+  input: Record<string, unknown>,
+): Response {
+  return multiToolCallResponse([{ toolCallId: `call-${toolName}`, toolName, input }])
+}
+
+function multiToolCallResponse(
+  calls: readonly {
+    toolCallId: string
+    toolName: string
+    input: Record<string, unknown>
+  }[],
+): Response {
+  const toolCallItems = calls.flatMap((call, outputIndex) => [
+    {
+      type: "response.output_item.added",
+      output_index: outputIndex,
+      item: {
+        type: "function_call",
+        id: `function-${call.toolCallId}`,
+        call_id: call.toolCallId,
+        name: call.toolName,
+        arguments: "",
+      },
+    },
+    {
+      type: "response.output_item.done",
+      output_index: outputIndex,
+      item: {
+        type: "function_call",
+        id: `function-${call.toolCallId}`,
+        call_id: call.toolCallId,
+        name: call.toolName,
+        arguments: JSON.stringify(call.input),
+        status: "completed",
+      },
+    },
+  ])
+
+  return eventStream([
+    {
+      type: "response.created",
+      response: {
+        id: "response-tools",
+        created_at: 1,
+        model: "gpt-5.6-sol",
+        service_tier: null,
+      },
+    },
+    ...toolCallItems,
+    {
+      type: "response.completed",
+      response: {
+        incomplete_details: null,
+        usage: {
+          input_tokens: 1,
+          input_tokens_details: null,
+          output_tokens: 1,
+          output_tokens_details: null,
+        },
+        service_tier: null,
+      },
+    },
+  ])
+}
+
+function incompleteToolCallResponse(
+  toolName: string,
+  input: Record<string, unknown>,
+): Response {
+  return eventStream([
+    {
+      type: "response.created",
+      response: {
+        id: "response-incomplete-tool",
+        created_at: 1,
+        model: "gpt-5.6-sol",
+        service_tier: null,
+      },
+    },
+    {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: {
+        type: "function_call",
+        id: "function-call-incomplete",
+        call_id: "call-incomplete",
+        name: toolName,
+        arguments: "",
+      },
+    },
+    {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: {
+        type: "function_call",
+        id: "function-call-incomplete",
+        call_id: "call-incomplete",
+        name: toolName,
+        arguments: JSON.stringify(input),
+        status: "completed",
+      },
+    },
+    {
+      type: "response.incomplete",
+      response: {
+        incomplete_details: { reason: "max_output_tokens" },
+        usage: {
+          input_tokens: 1,
+          input_tokens_details: null,
+          output_tokens: 1,
+          output_tokens_details: null,
+        },
+        service_tier: null,
+      },
+    },
+  ])
+}
+
+function eventStream(chunks: readonly Record<string, unknown>[]): Response {
+  const body = chunks
+    .map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`)
+    .join("")
+
+  return new Response(`${body}data: [DONE]\n\n`, {
+    headers: { "content-type": "text/event-stream" },
+  })
+}
+
+function createModel(
+  run: (...args: Parameters<typeof globalThis.fetch>) => Promise<Response>,
+  options: Omit<IOpenAiAgentModelOptions, "auth"> = {},
+): OpenAiAgentModel {
+  const auth = new OpenAiAuth({
+    store: authStore({
+      type: "oauth",
+      access: "test-access-token",
+      refresh: "test-refresh-token",
+      expires: 1_000_000,
+      accountId: "test-account-id",
+    }),
+    fetch: fetchImplementation(run),
+    now: () => 100,
+  })
+  return new OpenAiAgentModel({ auth, ...options })
+}
+
+async function collectEvents(
+  model: OpenAiAgentModel,
+  messages: readonly TAgentMessage[],
+  tools: readonly IAgentToolDescriptor[],
+  reportProviderAccountId?: (accountId: string) => void,
+): Promise<TAgentModelEvent[]> {
+  const events: TAgentModelEvent[] = []
+  for await (const event of model.stream({
+    sessionId: "session-1",
+    runId: "run-1",
+    systemPrompt: "System",
+    messages,
+    tools,
+    reasoningEffort: "medium",
+    signal: new AbortController().signal,
+    ...(reportProviderAccountId === undefined
+      ? {}
+      : { reportProviderAccountId }),
+  })) {
+    events.push(event)
+  }
+  return events
+}
+
+function userMessage(content: string): IUserMessage {
+  return {
+    id: "user-message",
+    sessionId: "session-1",
+    runId: "run-1",
+    role: "user",
+    source: "prompt",
+    content,
+    createdAt: 1,
+  }
+}
+
+function testSessionInfo() {
+  return {
+    id: "session-1",
+    agentId: "test-agent",
+    title: "Test session",
+    createdAt: 1,
+    updatedAt: 1,
+  }
+}
+
+function toolDescriptor(name: string): IAgentToolDescriptor {
+  return {
+    name,
+    description: `Run ${name}`,
+    inputSchema: { type: "object" },
+  }
+}

@@ -267,6 +267,7 @@ async function buildThirdPartyLicenses(
     const treeSitterRoot = join(
         workspaceRoot,
         "src",
+        "ui",
         "terminal",
         "assets",
         "tree-sitter",

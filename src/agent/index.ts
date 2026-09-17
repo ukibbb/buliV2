@@ -1,7 +1,13 @@
 /** Public agent feature API used by sessions, adapters and application composition. */
-export { Agent } from "@/agent/agent"
-export type { IAgentOptions } from "@/agent/agent"
-export { runAgentLoop } from "@/agent/agent-loop"
+export { Agent } from "@/agent/engine/agent"
+export type { IAgentOptions } from "@/agent/engine/agent"
+export { createAgentDefinition } from "@/agent/create-agent-definition"
+export type {
+    IAgentDeclaration,
+    IAgentDefinition,
+    IAgentToolDeclaration,
+} from "@/agent/definition"
+export { runAgentLoop } from "@/agent/engine/agent-loop"
 export type {
     IAgentApprovalContext,
     TAgentApprovalHandler,
@@ -9,10 +15,9 @@ export type {
     TAgentEventSink,
     IAgentInputQueue,
     IAgentLoopConfig,
-} from "@/agent/agent-loop"
-export { isImmutableAssistantSnapshot } from "@/agent/assistant-message-builder"
-export { systemPrompt } from "@/agent/system-prompt"
-export type { IWorkspaceInstructions } from "@/agent/system-prompt"
+} from "@/agent/engine/agent-loop"
+export { isImmutableAssistantSnapshot } from "@/agent/engine/assistant-message-builder"
+export type { IWorkspaceInstructions } from "@/agent/workspace-instructions"
 export type {
     TAgentCriticalEventSink,
     TAgentEvent,
@@ -87,7 +92,7 @@ export { TOOL_OUTPUT_PARTS } from "@/agent/tool-output-store"
 export {
     MAX_TOOL_OUTPUT_BYTES,
     MAX_TOOL_OUTPUT_LINES,
-} from "@/agent/tool-output"
+} from "@/agent/engine/tool-output"
 export type {
     IStoredToolOutput,
     IToolOutputIdentity,

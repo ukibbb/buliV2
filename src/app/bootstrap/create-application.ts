@@ -1,22 +1,22 @@
 import { realpath } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
 
-import {
-    systemPrompt,
-    type IAgentModel,
-    type IRuntimeAgentTool,
+import type {
+    IAgentModel,
+    IRuntimeAgentTool,
 } from "@/agent"
+import { createBuliAgentDefinition } from "@/agent/definitions/buli"
 import type { IAuthenticationService } from "@/authentication"
 import {
     createAuthentication,
     type IAuthenticationComposition,
 } from "@/app/bootstrap/create-authentication"
 import { loadWorkspaceInstructions } from "@/app/bootstrap/load-workspace-instructions"
+import { createFdPathSearcher } from "@/app/path-search/fd-path-search"
 import type { IBuliModelSelection } from "@/app/contracts"
 import type { IBuliApplication } from "@/app/contracts"
 import {
     BuliApplicationRuntime,
-    type IBuliAgentRuntimeConfig,
     type IBuliModelRuntimeConfig
 } from "@/app/runtime"
 import {
@@ -34,35 +34,19 @@ import {
     WorkspaceSessionManager,
 } from "@/sessions"
 import {
-    createFdPathSearcher,
-    createToolOutputTool,
-    createWorkspaceTools,
     EphemeralToolOutputStore,
     FileChangeProposalStore,
-} from "@/tools"
+} from "@/agent/tools"
 
-const BULI_AGENT_ID = "buli"
-
-function defaultWorkspaceTools(
-    workspaceRoot: string,
-    toolOutputStore: EphemeralToolOutputStore,
-    fileChangeProposalStore: FileChangeProposalStore,
-): readonly IRuntimeAgentTool[] {
-    if (process.env.BULI_DEVELOPMENT === "1") {
-        return createWorkspaceTools(workspaceRoot, {
-            toolOutputStore,
-            fileChangeProposalStore,
-        })
-    }
+function defaultToolExecutablePaths() {
+    if (process.env.BULI_DEVELOPMENT === "1") return {}
     const executableDirectory = resolve(
         dirname(process.execPath),
         "..",
         "lib",
         "buli",
     )
-    return createWorkspaceTools(workspaceRoot, {
-        toolOutputStore,
-        fileChangeProposalStore,
+    return {
         fdExecutablePath: resolve(
             executableDirectory,
             process.platform === "win32" ? "fd.exe" : "fd",
@@ -71,7 +55,7 @@ function defaultWorkspaceTools(
             executableDirectory,
             process.platform === "win32" ? "rg.exe" : "rg",
         ),
-    })
+    }
 }
 
 function defaultPathSearcher(workspaceRoot: string) {
@@ -122,7 +106,7 @@ export async function createBuliApplication(
         options.workspaceRoot ?? process.cwd(),
     )
     options.signal.throwIfAborted()
-    const workspaceInstructions = await loadWorkspaceInstructions(
+    await loadWorkspaceInstructions(
         workspaceRoot,
         options.signal,
     )
@@ -173,41 +157,22 @@ export async function createBuliApplication(
             modelId: DEFAULT_OPENAI_MODEL_ID,
             reasoningEffort: defaultReasoningEffort,
         }
-        const baseTools: readonly IRuntimeAgentTool[] = options.tools
-            ?? [
-                ...defaultWorkspaceTools(
-                    workspaceRoot,
-                    toolOutputStore,
-                    fileChangeProposalStore,
-                ),
-                ...(options.model === undefined
-                    ? [createOpenAiWebSearchTool({ search: auth.openAi.search })]
-                    : []),
-            ]
-        if (baseTools.some((tool) => tool.name === "tool_output")) {
-            throw new Error("The tool name \"tool_output\" is reserved by Buli")
-        }
-        const tools: readonly IRuntimeAgentTool[] = [
-            ...baseTools,
-            createToolOutputTool(toolOutputStore),
-        ]
-
-        const agents: readonly IBuliAgentRuntimeConfig[] = [{
-            id: BULI_AGENT_ID,
-            name: "Buli",
-            systemPrompt: systemPrompt(
-                workspaceRoot,
-                tools,
-                workspaceInstructions,
-            ),
-            tools,
-        }]
+        const buli = createBuliAgentDefinition({
+            workspaceRoot,
+            toolOutputStore,
+            ...defaultToolExecutablePaths(),
+        }, {
+            ...(options.tools === undefined ? {} : { tools: options.tools }),
+            additionalTools: options.tools === undefined && options.model === undefined
+                ? [createOpenAiWebSearchTool({ search: auth.openAi.search })]
+                : [],
+        })
 
         const applicationRuntime = new BuliApplicationRuntime({
             workspaceRoot,
             manager,
-            agents,
-            defaultAgentId: BULI_AGENT_ID,
+            agents: [buli],
+            defaultAgentId: buli.id,
             models,
             selection,
             searchPaths: defaultPathSearcher(workspaceRoot),

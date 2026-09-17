@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test"
+import { existsSync } from "node:fs"
+import { posix } from "node:path"
 
 interface ISourceFile {
   readonly path: string
@@ -14,24 +16,16 @@ const ALLOWED_DEPENDENCIES: Readonly<Record<string, ReadonlySet<string>>> = {
     "common",
     "providers",
     "sessions",
-    "terminal",
-    "tools",
   ]),
-  authentication: new Set(["authentication", "common", "terminal"]),
+  authentication: new Set(["authentication", "common"]),
   common: new Set(["common"]),
   providers: new Set(["agent", "authentication", "common", "providers"]),
-  sessions: new Set(["agent", "common", "sessions", "terminal"]),
-  terminal: new Set(["common", "terminal"]),
-  tools: new Set(["agent", "common", "terminal", "tools"]),
+  sessions: new Set(["agent", "common", "sessions"]),
+  ui: new Set(["agent", "app", "authentication", "common", "sessions", "ui"]),
 }
 
 const PRESENTATION_PREFIXES = [
-  "src/app/entrypoints/",
-  "src/app/ui/",
-  "src/authentication/ui/",
-  "src/sessions/ui/",
-  "src/terminal/",
-  "src/tools/ui/",
+  "src/ui/",
 ] as const
 
 test("enforces feature dependency direction", async () => {
@@ -53,7 +47,7 @@ test("enforces feature dependency direction", async () => {
       continue
     }
 
-    for (const specifier of projectImports(file.source)) {
+    for (const specifier of projectImports(file.source, file.path)) {
       const dependency = specifier.split("/")[0] ?? ""
       if (!ALLOWED_DEPENDENCIES[dependency]) {
         violations.push(`${file.path}: unknown import @/${specifier}`)
@@ -82,11 +76,39 @@ test("keeps framework code in presentation adapters", async () => {
     }
 
     if (
-      projectImports(file.source).some((specifier) => specifier === "terminal"
-        || specifier.startsWith("terminal/"))
+      projectImports(file.source, file.path).some((specifier) => specifier === "ui"
+        || specifier.startsWith("ui/"))
       && !PRESENTATION_PREFIXES.some((prefix) => file.path.startsWith(prefix))
     ) {
-      violations.push(`${file.path}: terminal dependency outside presentation`)
+      violations.push(`${file.path}: UI dependency outside presentation`)
+    }
+  }
+
+  expect(violations).toEqual([])
+})
+
+test("obsolete presentation directories are absent, including assets", () => {
+  for (const path of [
+    "src/app/ui", "src/app/entrypoints", "src/authentication/ui",
+    "src/sessions/ui", "src/terminal",
+  ]) {
+    expect(existsSync(path), path).toBe(false)
+  }
+})
+
+test("keeps the agent engine independent of concrete agents and tools", async () => {
+  const files = await readSourceFiles()
+  const engineFiles = files.filter(({ path }) => path.startsWith("src/agent/engine/"))
+  expect(engineFiles.length).toBeGreaterThan(0)
+  const violations: string[] = []
+
+  for (const file of engineFiles) {
+    for (const specifier of projectImports(file.source)) {
+      if (/^agent\/(?:tools|definitions|prompts)(?:\/|$)/.test(specifier)
+        || specifier === "agent/create-agent-definition"
+        || specifier === "agent/definition") {
+        violations.push(`${file.path}: engine depends on agent composition @/${specifier}`)
+      }
     }
   }
 
@@ -168,6 +190,8 @@ async function readSourceFiles(): Promise<readonly ISourceFile[]> {
   const files: ISourceFile[] = []
   const glob = new Bun.Glob("src/**/*.{ts,tsx}")
   for await (const path of glob.scan({ onlyFiles: true })) {
+    // Test fixtures may cross feature boundaries; enforce production dependencies only.
+    if (/\.(test|spec)\.tsx?$/.test(path)) continue
     files.push({ path, source: await Bun.file(path).text() })
   }
   expect(files.length, "architecture scan found no source files").toBeGreaterThan(0)
@@ -178,8 +202,15 @@ function sourceFeature(path: string): string {
   return path.split("/")[1] ?? ""
 }
 
-function projectImports(source: string): readonly string[] {
-  return [...source.matchAll(/["']@\/([^"']+)["']/g)].map((match) => match[1] ?? "")
+function projectImports(source: string, path?: string): readonly string[] {
+  const aliases = [...source.matchAll(/["']@\/([^"']+)["']/g)]
+    .map((match) => match[1] ?? "")
+  if (!path) return aliases
+  const relatives = [...source.matchAll(/(?:from\s*|import\s*\(\s*|import\s*)["'](\.[^"']+)["']/g)]
+    .map((match) => posix.normalize(posix.join(posix.dirname(path), match[1]!)))
+    .filter((resolved) => resolved.startsWith("src/"))
+    .map((resolved) => resolved.slice(4))
+  return [...aliases, ...relatives]
 }
 
 function isFeatureWithPublicSurface(feature: string): boolean {
@@ -187,16 +218,13 @@ function isFeatureWithPublicSurface(feature: string): boolean {
     || feature === "authentication"
     || feature === "providers"
     || feature === "sessions"
-    || feature === "tools"
 }
 
 function isPublicFeatureSurface(specifier: string): boolean {
   return specifier === "agent"
     || specifier === "authentication"
-    || specifier === "authentication/ui"
     || specifier === "sessions"
-    || specifier === "sessions/ui"
-    || specifier === "tools"
-    || specifier === "tools/ui"
+    || specifier === "agent/tools"
+    || specifier === "agent/definitions/buli"
     || /^providers\/[^/]+$/.test(specifier)
 }

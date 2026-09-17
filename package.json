@@ -13,7 +13,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "SHOW_CONSOLE=0 bun test ./test",
+    "test": "SHOW_CONSOLE=0 bun test ./src ./cli ./test",
     "dev": "BULI_DEVELOPMENT=1 SHOW_CONSOLE=1 bun cli/main.ts",
     "dev:quiet": "BULI_DEVELOPMENT=1 bun --watch cli/main.ts",
     "start": "BULI_DEVELOPMENT=1 bun cli/main.ts",

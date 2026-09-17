@@ -1,18 +1,18 @@
 import type {
+    IAgentDefinition,
     IAgentModel,
-    IRuntimeAgentTool,
     IModelProfile,
     IToolOutputStore,
     TReasoningEffort,
     TToolApprovalDecision,
 } from "@/agent"
 import type {
-    IBuliAgentDisplayInfo,
     IBuliApplication,
     IBuliApplicationSnapshot,
     IBuliModelDisplayInfo,
     IBuliModelSelection,
     IBuliPathSuggestion,
+    TBuliPathSearcher,
     IBuliPromptInput,
     IBuliPromptRun,
     IBuliSessionCreationOptions,
@@ -27,16 +27,10 @@ import {
 } from "@/sessions"
 import type {
     FileChangeProposalStore,
-    TFdPathSearcher,
-} from "@/tools"
+} from "@/agent/tools"
 
 type TBuliRuntimeListener = () => void
 type TBuliRuntimeSubscribe = () => void
-
-export interface IBuliAgentRuntimeConfig extends IBuliAgentDisplayInfo {
-    readonly systemPrompt: string
-    readonly tools: readonly IRuntimeAgentTool[]
-}
 
 export interface IBuliModelRuntimeConfig extends IBuliModelDisplayInfo {
     readonly model: IAgentModel
@@ -50,12 +44,12 @@ export type TBuliModelRegistrationLoader = (
     signal: AbortSignal,
 ) => Promise<readonly IBuliModelRuntimeConfig[]>
 
-export type TBuliPathSearcher = TFdPathSearcher
+export type { TBuliPathSearcher } from "@/app/contracts"
 
 export interface IBuliRuntimeOptions {
     readonly workspaceRoot: string
     readonly manager: ISessionManager
-    readonly agents: readonly IBuliAgentRuntimeConfig[]
+    readonly agents: readonly IAgentDefinition[]
     readonly defaultAgentId: string
     // readonly tuiControler: ITuiController
     readonly models: readonly IBuliModelRuntimeConfig[]
@@ -78,7 +72,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
     readonly workspaceRoot: string
 
     private readonly manager: ISessionManager
-    private readonly agents: readonly IBuliAgentRuntimeConfig[]
+    private readonly agents: readonly IAgentDefinition[]
     private readonly defaultAgentId: string
     private models: readonly IBuliModelRuntimeConfig[]
     private readonly loadModels: TBuliModelRegistrationLoader | undefined
@@ -686,7 +680,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
 
     private createLiveSession(
         info: ISessionInfo,
-        agent: IBuliAgentRuntimeConfig,
+        agent: IAgentDefinition,
     ): AgentSession {
         return new AgentSession({
             agentId: agent.id,
@@ -727,7 +721,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
         })
     }
 
-    private resolveAgent(agentId: string): IBuliAgentRuntimeConfig {
+    private resolveAgent(agentId: string): IAgentDefinition {
         const registration = this.agents.find((agent) => agent.id === agentId)
         if (!registration) throw new Error(`Unknown agent: ${agentId}`)
 

@@ -1,12 +1,10 @@
 import { expect, spyOn, test } from "bun:test"
 
 import {
-  defineAgentTool,
   type IAgentModel,
   type IAgentModelRequest,
   type IAssistantMessage,
   type IFileChangeProposalRecord,
-  type TToolApprovalDecision,
   type IToolResultMessage,
   type IUserMessage,
 } from "@/agent"
@@ -17,7 +15,6 @@ import {
   type ISessionManager,
   type ISessionSnapshot,
 } from "@/sessions"
-import { FileChangeProposalStore } from "@/agent/tools"
 
 test("AgentSession restores history, persists completion barriers, and publishes stable snapshots", async () => {
   const manager = new InMemorySessionManager()
@@ -73,10 +70,10 @@ test("AgentSession restores history, persists completion barriers, and publishes
   await session.dispose()
 })
 
-test("AgentSession expires durable pending proposals that cannot be reapplied", async () => {
+test("AgentSession preserves historical pending proposals without making them actionable", async () => {
   const manager = new InMemorySessionManager()
   manager.createSession(sessionInfo("session-1", "test-agent", "Restored"))
-  manager.saveFileChangeProposal({
+  manager.restoreFileChangeProposal({
     id: "proposal-1",
     sessionId: "session-1",
     runId: "run-1",
@@ -109,9 +106,8 @@ test("AgentSession expires durable pending proposals that cannot be reapplied", 
     operation: "edit",
     path: "src/example.ts",
     diff: "--- a/src/example.ts\n+++ b/src/example.ts\n",
-    status: "expired",
+    status: "pending",
     createdAt: 10,
-    resolvedAt: 20,
   }])
   expect(session.getSnapshot().fileChangeProposals).toEqual(
     manager.getFileChangeProposals("session-1"),
@@ -129,20 +125,16 @@ test.each([false, true])("AgentSession structurally shares immutable streaming b
   seedConversation(manager, 1)
   const checkpoint = compactionCheckpoint()
   manager.saveCompactionCheckpoint(checkpoint)
-  const proposalStore = new FileChangeProposalStore({
-    generateId: () => "proposal-1",
-    now: () => 10,
-    saveProposal: manager.saveFileChangeProposal,
-  })
   if (populated) {
-    proposalStore.propose({
+    manager.restoreFileChangeProposal({
+      id: "proposal-1",
+      status: "pending",
+      createdAt: 10,
       sessionId: "session-1",
       runId: "run-1",
       toolCallId: "edit-1",
       operation: "edit",
       path: "src/example.ts",
-      baseContent: "private before\n",
-      targetContent: "private after\n",
       diff: "-before\n+after\n",
     })
   }
@@ -180,7 +172,6 @@ test.each([false, true])("AgentSession structurally shares immutable streaming b
     systemPrompt: "System",
     resolveRunConfiguration: () => ({ model, reasoningEffort: "medium" }),
     tools: [],
-    fileChangeProposalStore: proposalStore,
   })
   const initial = session.getSnapshot()
   let publication = {
@@ -226,7 +217,6 @@ test.each([false, true])("AgentSession structurally shares immutable streaming b
     for (const branch of [
       "fileChangeProposals",
       "compactionCheckpoint",
-      "pendingFileChangeProposal",
       "pendingSteeringMessages",
       "pendingFollowUpMessages",
     ] as const) {
@@ -236,7 +226,6 @@ test.each([false, true])("AgentSession structurally shares immutable streaming b
     expect(first.compactionCheckpoint).toEqual(checkpoint)
     expect(first.compactionCheckpoint).toBe(initial.compactionCheckpoint)
     expect(first.fileChangeProposals).toBe(initial.fileChangeProposals)
-    expect(first.pendingFileChangeProposal).toEqual(proposalStore.getSnapshot("session-1"))
     for (const items of [
       first.fileChangeProposals,
       first.pendingSteeringMessages,
@@ -353,7 +342,7 @@ test("AgentSession refreshes grouped presentation after external same-ID saves a
     createdAt: 10,
     resolvedAt: 20,
   }
-  manager.saveFileChangeProposal(proposal)
+  manager.restoreFileChangeProposal(proposal)
   manager.saveCompactionCheckpoint(checkpoint)
   const session = openAgentSession(manager)
 
@@ -361,7 +350,7 @@ test("AgentSession refreshes grouped presentation after external same-ID saves a
     const initial = session.getSnapshot()
     const initialValue = structuredClone(initial)
     const replacement = { ...proposal, status: "applied" as const, resolvedAt: 30 }
-    manager.saveFileChangeProposal(replacement)
+    manager.restoreFileChangeProposal(replacement)
     expect(session.getSnapshot()).toBe(initial)
     session.refreshContextUsage()
     const afterProposal = session.getSnapshot()
@@ -438,108 +427,6 @@ test("freezeSessionSnapshot freezes and structurally shares checkpoints", () => 
   expect(third.compactionCheckpoint).not.toBe(second.compactionCheckpoint)
   expect(third.compactionCheckpoint?.summary).toBe("Latest preserved context")
   expect(Object.isFrozen(third.compactionCheckpoint)).toBe(true)
-})
-
-test("AgentSession publishes immutable approval request and resolution snapshots", async () => {
-  const manager = new InMemorySessionManager()
-  manager.createSession(sessionInfo("session-1", "test-agent", "Approval"))
-  const approvalStarted = Promise.withResolvers<void>()
-  const decisions: TToolApprovalDecision[] = []
-  const tool = defineAgentTool({
-    name: "bash",
-    approvalKind: "command",
-    description: "Run a command",
-    inputSchema: { type: "object", additionalProperties: false },
-    async execute(_input, context) {
-      if (!context.requestApproval) throw new Error("Missing approval bridge")
-      const decisionTask = context.requestApproval({
-        kind: "command",
-        title: "Verify the runtime",
-        explanation: "Run the focused runtime tests",
-        command: "bun test test/runtime.test.ts",
-        cwd: "/workspace",
-        purpose: "Verify the runtime behavior",
-        expectedOutcome: "The runtime tests pass",
-        sideEffects: "May write temporary test caches",
-        timeoutSeconds: 30,
-      })
-      approvalStarted.resolve()
-      const decision = await decisionTask
-      decisions.push(decision)
-      return decision
-    },
-  })
-  let requestCount = 0
-  const session = new AgentSession({
-    agentId: "test-agent",
-    sessionId: "session-1",
-    manager,
-    systemPrompt: "System",
-    resolveRunConfiguration: () => ({
-      model: {
-        async *stream() {
-          if (requestCount++ === 0) {
-            yield {
-              type: "tool-call",
-              toolCallId: "command-call",
-              toolName: tool.name,
-              input: {},
-            }
-            yield { type: "finish", reason: "tool-calls" }
-            return
-          }
-          yield { type: "finish", reason: "stop" }
-        },
-      },
-      reasoningEffort: "medium",
-    }),
-    tools: [tool],
-  })
-  const approvalTransitions: Array<string | undefined> = []
-  let previousApprovalId: string | undefined
-  session.subscribe(() => {
-    const approvalId = session.getSnapshot().pendingToolApproval?.id
-    if (approvalId === previousApprovalId) return
-    previousApprovalId = approvalId
-    approvalTransitions.push(approvalId)
-  })
-
-  const run = session.prompt("Run the runtime tests")
-  await approvalStarted.promise
-  const waitingSnapshot = session.getSnapshot()
-  const request = waitingSnapshot.pendingToolApproval
-  if (!request) {
-    throw new Error("Expected pending command approval")
-  }
-
-  expect(request).toMatchObject({
-    sessionId: "session-1",
-    runId: run.runId,
-    toolCallId: "command-call",
-    kind: "command",
-    command: "bun test test/runtime.test.ts",
-    cwd: "/workspace",
-    timeoutSeconds: 30,
-  })
-  expect(Object.isFrozen(waitingSnapshot)).toBe(true)
-  expect(Object.isFrozen(request)).toBe(true)
-  expect(() => {
-    (request as { command: string }).command = "bun test"
-  }).toThrow()
-  expect(manager.getMessages("session-1").map((message) => message.role)).toEqual([
-    "user",
-    "assistant",
-  ])
-
-  session.resolveToolApproval(request.id, "approve")
-
-  expect(session.getSnapshot().pendingToolApproval).toBeUndefined()
-  expect(approvalTransitions).toEqual([request.id, undefined])
-  await run.runFinished
-  expect(decisions).toEqual(["approve"])
-  expect(session.getSnapshot()).not.toHaveProperty("pendingToolApproval")
-
-  await session.dispose()
 })
 
 test("AgentSession persists steering and follow-up before each model request", async () => {
@@ -653,7 +540,6 @@ test("AgentSession restores steering to the queue when persistence fails", async
     },
     getPresentationRevision: memory.getPresentationRevision,
     getFileChangeProposals: memory.getFileChangeProposals,
-    saveFileChangeProposal: memory.saveFileChangeProposal,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
     saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
     deleteSession: memory.deleteSession,
@@ -728,7 +614,6 @@ test("AgentSession restores follow-up to the queue when persistence fails", asyn
     },
     getPresentationRevision: memory.getPresentationRevision,
     getFileChangeProposals: memory.getFileChangeProposals,
-    saveFileChangeProposal: memory.saveFileChangeProposal,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
     saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
     deleteSession: memory.deleteSession,
@@ -800,7 +685,6 @@ test("AgentSession rejects acceptance without invoking the provider or diverging
     },
     getPresentationRevision: memory.getPresentationRevision,
     getFileChangeProposals: memory.getFileChangeProposals,
-    saveFileChangeProposal: memory.saveFileChangeProposal,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
     saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
     deleteSession: memory.deleteSession,

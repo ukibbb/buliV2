@@ -45,17 +45,6 @@ export function reduceAgentState(
             pendingToolCallIds.delete(event.toolCallId)
             return { ...state, pendingToolCallIds }
         }
-        case "tool_approval_requested":
-            return Object.freeze({
-                ...state,
-                pendingToolApproval: event.request,
-            })
-        case "tool_approval_resolved":
-            if (state.pendingToolApproval?.id !== event.approvalId) return state
-            return {
-                ...state,
-                pendingToolApproval: undefined,
-            }
         case "turn_end":
             return {
                 ...state,

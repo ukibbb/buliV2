@@ -161,28 +161,6 @@ export class JsonlSessionManager implements ISessionManager {
         return this.memory.getFileChangeProposals(sessionId)
     }
 
-    readonly saveFileChangeProposal = (
-        proposal: IFileChangeProposalRecord,
-    ): void => {
-        this.assertWritable()
-        assertFileChangeProposalRecord(proposal)
-
-        const info = this.memory.getSessionInfo(proposal.sessionId)
-        if (!info) {
-            throw new Error(`Session does not exist: ${proposal.sessionId}`)
-        }
-
-        const isPersisted = this.persistedSessionIds.has(proposal.sessionId)
-        const records: readonly unknown[] = isPersisted
-            ? [fileChangeProposalRecord(proposal)]
-            : [sessionRecord(info), fileChangeProposalRecord(proposal)]
-
-        if (isPersisted) this.appendRecords(records)
-        else this.replaceFile(this.currentContents() + serializeRecords(records))
-        this.memory.saveFileChangeProposal(proposal)
-        this.persistedSessionIds.add(proposal.sessionId)
-    }
-
     readonly getCompactionCheckpoint = (
         sessionId: string,
     ): ICompactionCheckpoint | undefined => {
@@ -428,7 +406,7 @@ export class JsonlSessionManager implements ISessionManager {
             this.memory.createSession(info)
             for (const message of messages) this.memory.appendMessage(message)
             for (const proposal of proposalsBySession.get(sessionId) ?? []) {
-                this.memory.saveFileChangeProposal(proposal)
+                this.memory.restoreFileChangeProposal(proposal)
             }
             // A later replacement may invalidate a previously complete tool sequence.
             // Recheck against the final replay before choosing the newest usable summary.

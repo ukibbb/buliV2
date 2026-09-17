@@ -1,24 +1,15 @@
 import {
     KeyboardShortcutResolver,
     type IKeyboardShortcut,
-    type ITuiKey,
 } from "@/ui/terminal/input/shortcut-resolver"
-import type { TToolApprovalKeyboardAction } from "@/ui/tool-approval/tool-approval-model"
 
-export type TBuliKeyboardScope = "global" | "input" | "menu" | "approval"
+export type TBuliKeyboardScope = "global" | "input" | "menu"
 
 export type TBuliKeyboardAction =
     | "cancel"
     | "console.toggle"
     | "input.followUp"
     | "input.pasteClipboard"
-    | "approval.previous"
-    | "approval.next"
-    | "approval.activate"
-    | "approval.scrollUp"
-    | "approval.scrollDown"
-    | "approval.scrollStart"
-    | "approval.scrollEnd"
     | "menu.previous"
     | "menu.next"
     | "menu.activate"
@@ -32,17 +23,6 @@ const SHORTCUTS: readonly TBuliKeyboardShortcut[] = [
     { scope: "global", key: { name: "escape" }, action: "cancel" },
     { scope: "global", key: { name: "d", ctrl: true }, action: "console.toggle" },
     { scope: "input", key: { name: "v", ctrl: true }, action: "input.pasteClipboard" },
-    { scope: "approval", key: { name: "up" }, action: "approval.previous" },
-    { scope: "approval", key: { name: "left" }, action: "approval.previous" },
-    { scope: "approval", key: { name: "down" }, action: "approval.next" },
-    { scope: "approval", key: { name: "right" }, action: "approval.next" },
-    { scope: "approval", key: { name: "return" }, action: "approval.activate" },
-    { scope: "approval", key: { name: "enter" }, action: "approval.activate" },
-    { scope: "approval", key: { name: "linefeed" }, action: "approval.activate" },
-    { scope: "approval", key: { name: "pageup" }, action: "approval.scrollUp" },
-    { scope: "approval", key: { name: "pagedown" }, action: "approval.scrollDown" },
-    { scope: "approval", key: { name: "home" }, action: "approval.scrollStart" },
-    { scope: "approval", key: { name: "end" }, action: "approval.scrollEnd" },
     // Raw terminals encode Alt as `meta`; Kitty additionally marks `option`.
     // Register both shapes so Alt+Enter behaves identically in either protocol.
     { scope: "input", key: { name: "return", meta: true }, action: "input.followUp" },
@@ -80,11 +60,3 @@ export const buliKeyboardShortcuts = new KeyboardShortcutResolver<
     TBuliKeyboardScope,
     TBuliKeyboardAction
 >(SHORTCUTS)
-
-/** Resolves approval-panel keys through the application keymap. */
-export function resolveApprovalKeyboardAction(
-    key: ITuiKey,
-): TToolApprovalKeyboardAction | undefined {
-    const action = buliKeyboardShortcuts.resolve("approval", key)
-    return action as TToolApprovalKeyboardAction | undefined
-}

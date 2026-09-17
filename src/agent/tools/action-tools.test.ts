@@ -34,7 +34,6 @@ test("bash publishes the Pi command and optional timeout schema", () => {
     },
     required: ["command"],
   })
-  expect(bash.approvalKind).toBeUndefined()
 })
 
 test("bash validates direct input before starting a process", async () => {

@@ -1,13 +1,13 @@
+import { Buffer } from "node:buffer"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
-import { createTwoFilesPatch } from "diff"
 import { Type } from "typebox"
 
 import { defineAgentTool, type IAgentTool } from "@/agent/tool"
 import {
     withFileMutationQueue,
 } from "@/agent/tools/shared/file-mutation"
-import type { FileChangeProposalStore } from "@/agent/tools/patch/file-change-proposal-store"
+import { createFileWriteResult } from "@/agent/tools/shared/file-write-result"
 import { resolveToCwd } from "@/agent/tools/shared/path-utils"
 
 // Ported from Pi 6c87d9a026677b601e8278030dcf1ad97fe0bd86 (c) 2025 Mario Zechner, MIT License.
@@ -21,13 +21,11 @@ const WRITE_INPUT_SCHEMA = Type.Object({
 /** Creates Pi's direct file creation and overwrite tool for one working directory. */
 export function createWriteTool(
     cwd: string,
-    proposalStore?: FileChangeProposalStore,
 ): IAgentTool<typeof WRITE_INPUT_SCHEMA, "write"> {
     return defineAgentTool({
         name: "write",
-        description: proposalStore
-            ? "Prepare an immutable proposal to create or fully overwrite one file. This does not modify the file."
-            : "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+        description:
+            "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
         inputSchema: WRITE_INPUT_SCHEMA,
         execute: async ({ path, content }, context) => {
             const absolutePath = resolveToCwd(path, cwd)
@@ -41,36 +39,28 @@ export function createWriteTool(
                 }
 
                 throwIfAborted()
-                if (proposalStore) {
-                    const baseContent = await readOptionalFile(absolutePath)
-                    throwIfAborted()
-                    const proposal = proposalStore.propose({
-                        sessionId: context.sessionId,
-                        runId: context.runId,
-                        toolCallId: context.toolCallId,
-                        operation: "write",
-                        path,
-                        baseContent,
-                        targetContent: content,
-                        diff: createTwoFilesPatch(
-                            `a/${path}`,
-                            `b/${path}`,
-                            baseContent ?? "",
-                            content,
-                            "",
-                            "",
-                        ),
-                    })
-                    return `Proposed writing ${content.length} bytes to ${path}. Proposal ID: ${proposal.id}. Wait for the user's next message before applying or rejecting it.`
-                }
+                const baseContent = await readOptionalFile(absolutePath)
+                throwIfAborted()
 
                 await mkdir(directory, { recursive: true })
                 throwIfAborted()
 
-                await writeFile(absolutePath, content, "utf-8")
-                throwIfAborted()
+                try {
+                    await writeFile(absolutePath, content, "utf-8")
+                } catch (error) {
+                    throw Object.assign(
+                        new Error(`Could not complete writing file: ${path}.`, { cause: error }),
+                        { sideEffectsUnknown: true },
+                    )
+                }
 
-                return `Successfully wrote ${content.length} bytes to ${path}`
+                return createFileWriteResult({
+                    path,
+                    before: baseContent,
+                    after: content,
+                    content: `Successfully wrote ${Buffer.byteLength(content, "utf8")} bytes to ${path}`,
+                    signal: context.signal,
+                })
             })
         },
     })

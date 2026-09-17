@@ -44,7 +44,6 @@ const chatTextAreaKeybindings: KeyBinding[] = [
 
 interface IPromptEditorProps {
     readonly value: IUserInputContent
-    readonly blocked: boolean
     readonly menuOpen: boolean
     readonly clipboard?: Pick<ClipboardService, "read">
     readonly getCurrentValue: () => IUserInputContent
@@ -118,10 +117,6 @@ export function PromptEditor(props: IPromptEditorProps) {
 
     useEffect(() => () => cancelClipboardRead("Prompt editor unmounted"), [])
 
-    useEffect(() => {
-        if (props.blocked) cancelClipboardRead("Prompt editor is blocked")
-    }, [props.blocked])
-
     const cancelClipboardRead = (reason: string): void => {
         clipboardGenerationRef.current += 1
         activeClipboardReadRef.current?.abort(reason)
@@ -168,7 +163,6 @@ export function PromptEditor(props: IPromptEditorProps) {
     }
 
     const submitInput = (delivery: TBuliInputDelivery): void => {
-        if (props.blocked) return
         cancelClipboardRead("Prompt was submitted")
         const input = currentDraft()
         if (!input.text.trim() && !input.attachments?.length) return
@@ -331,12 +325,6 @@ export function PromptEditor(props: IPromptEditorProps) {
     }
 
     const handleKeyDown = (key: KeyEvent): void => {
-        if (props.blocked) {
-            key.preventDefault()
-            key.stopPropagation()
-            return
-        }
-
         const inputAction = buliKeyboardShortcuts.resolve("input", key)
         if (inputAction === "input.pasteClipboard" && props.clipboard) {
             key.preventDefault()
@@ -387,7 +375,7 @@ export function PromptEditor(props: IPromptEditorProps) {
                     if (!sameUserInput(input, props.getCurrentValue())) publishDraft()
                 }}
                 onCursorChange={publishDraft}
-                focused={!props.blocked}
+                focused
                 style={{ keyBindings: chatTextAreaKeybindings }}
             />
         </box>

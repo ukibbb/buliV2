@@ -3,7 +3,6 @@ import type {
     IAssistantMessage,
 } from "@/agent/messages"
 import type { IRuntimeAgentTool } from "@/agent/tool"
-import type { TToolApprovalRequest } from "@/agent/tool-approval"
 
 /** Terminal reason published when an agent run settles. */
 export type TAgentRunEndReason =
@@ -31,7 +30,6 @@ export interface IAgentState {
     readonly activeRunId: string | undefined
     readonly streamingMessage: IAssistantMessage | undefined
     readonly pendingToolCallIds: ReadonlySet<string>
-    readonly pendingToolApproval: TToolApprovalRequest | undefined
     readonly errorMessage: string | undefined
     readonly lastRunReason: TAgentRunEndReason | undefined
 }

@@ -16,7 +16,6 @@ test("keeps errors readable beside a long model name", async () => {
       contextUsage={undefined}
       pendingSteeringMessages={[]}
       pendingFollowUpMessages={[]}
-      pendingToolApproval={undefined}
       lastRunReason="error"
       errorMessage="Critical provider failure"
       inputError={null}
@@ -58,7 +57,6 @@ test("renders compaction lifecycle and estimated context usage", async () => {
       }}
       pendingSteeringMessages={[]}
       pendingFollowUpMessages={[]}
-      pendingToolApproval={undefined}
       lastRunReason="error"
       errorMessage="Stale provider failure"
       inputError={null}
@@ -212,7 +210,6 @@ test.each([
         contextUsage={usage}
         pendingSteeringMessages={[]}
         pendingFollowUpMessages={[]}
-        pendingToolApproval={undefined}
         lastRunReason={undefined}
         errorMessage={undefined}
         inputError={null}
@@ -278,7 +275,6 @@ test.each([40, 80])("keeps the active Astra budget readable at %i columns", asyn
     }}
     pendingSteeringMessages={[]}
     pendingFollowUpMessages={[]}
-    pendingToolApproval={undefined}
     lastRunReason={undefined}
     errorMessage={undefined}
     inputError={null}

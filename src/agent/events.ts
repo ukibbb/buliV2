@@ -5,10 +5,6 @@ import type {
     IToolResultMessage,
 } from "@/agent/messages"
 import type { TAgentRunEndReason } from "@/agent/state"
-import type {
-    TToolApprovalDecision,
-    TToolApprovalRequest,
-} from "@/agent/tool-approval"
 
 interface IAgentEventBase {
     readonly runId: string
@@ -53,15 +49,6 @@ type TAgentEventPayload =
         readonly toolCallId: string
         readonly toolName: string
         readonly result: IToolResultMessage
-    }
-    | {
-        readonly type: "tool_approval_requested"
-        readonly request: TToolApprovalRequest
-    }
-    | {
-        readonly type: "tool_approval_resolved"
-        readonly approvalId: string
-        readonly decision: TToolApprovalDecision | undefined
     }
     | {
         readonly type: "agent_settled"

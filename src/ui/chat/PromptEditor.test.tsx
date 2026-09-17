@@ -318,7 +318,6 @@ function PromptHarness(props: {
   return (
     <PromptEditor
       value={initialValueRef.current}
-      blocked={false}
       menuOpen={
         props.keepMenuOpen && completionIndexRef.current < completions.length
           ? true

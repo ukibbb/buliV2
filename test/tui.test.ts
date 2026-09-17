@@ -3,12 +3,9 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
-  BoxRenderable,
   CodeRenderable,
   parseKeypress,
   type Renderable,
-  ScrollBoxRenderable,
-  TextRenderable,
   TextareaRenderable,
 } from "@opentui/core"
 import { testRender } from "@opentui/react/test-utils"
@@ -26,10 +23,6 @@ import { BuliApplicationRuntime } from "@/app/runtime"
 import { BuliRuntimeProvider } from "@/ui/context/application-context"
 import type {
   IAgentModel,
-  ICommandToolApprovalRequest,
-  TToolApprovalDecision,
-  TToolApprovalRequest,
-  IUserMessage,
 } from "@/agent"
 import type { ISessionSnapshot } from "@/sessions"
 import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
@@ -37,7 +30,7 @@ import { BuliTui } from "@/ui/shell/BuliTui"
 import { COMPLETION_NOTIFICATION_MIN_DURATION_MS } from "@/ui/shell/SessionCompletionNotifier"
 import { BuliUiController } from "@/ui/ui-controller"
 import { BuliUiControllerProvider } from "@/ui/context/ui-controller-context"
-import { glyphs, syntax } from "@/ui/terminal/theme"
+import { glyphs } from "@/ui/terminal/theme"
 
 const WORKSPACE_ROOT = "/workspace"
 const TEST_AGENT_ID = "test-agent"
@@ -78,31 +71,6 @@ function codeRenderables(root: Renderable): CodeRenderable[] {
   ])
 }
 
-function textRenderables(root: Renderable): TextRenderable[] {
-  return root.getChildren().flatMap((child) => [
-    ...(child instanceof TextRenderable ? [child] : []),
-    ...textRenderables(child),
-  ])
-}
-
-function scrollBoxRenderable(root: Renderable, id: string): ScrollBoxRenderable {
-  const scrollBox = findScrollBoxRenderable(root, id)
-  if (scrollBox) return scrollBox
-  throw new Error(`Expected scrollbox ${id}`)
-}
-
-function findScrollBoxRenderable(
-  root: Renderable,
-  id: string,
-): ScrollBoxRenderable | undefined {
-  if (root instanceof ScrollBoxRenderable && root.id === id) return root
-  for (const child of root.getChildren()) {
-    const scrollBox = findScrollBoxRenderable(child, id)
-    if (scrollBox) return scrollBox
-  }
-  return undefined
-}
-
 function textareaRenderable(root: Renderable): TextareaRenderable {
   const textarea = findTextareaRenderable(root)
   if (textarea) return textarea
@@ -125,7 +93,6 @@ interface IFakeApplicationOptions {
   readonly steer?: (sessionId: string, text: string) => void
   readonly followUp?: (sessionId: string, text: string) => void
   readonly clearQueuedMessages?: IBuliApplication["clearQueuedMessages"]
-  readonly resolveToolApproval?: IBuliApplication["resolveToolApproval"]
   readonly refreshModels?: IBuliApplication["refreshModels"]
 }
 
@@ -133,11 +100,6 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
   const prompts: IBuliPromptInput[] = []
   const steering: Array<{ sessionId: string; text: string }> = []
   const followUps: Array<{ sessionId: string; text: string }> = []
-  const resolvedApprovals: Array<{
-    sessionId: string
-    approvalId: string
-    decision: TToolApprovalDecision
-  }> = []
   const aborted: string[] = []
   const sessionListeners = new Set<() => void>()
   let sessionSnapshot: ISessionSnapshot = options.sessionSnapshot ?? {
@@ -197,10 +159,6 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
         followUp: [],
       }
     },
-    resolveToolApproval: (sessionId, approvalId, decision) => {
-      options.resolveToolApproval?.(sessionId, approvalId, decision)
-      resolvedApprovals.push({ sessionId, approvalId, decision })
-    },
     compactSession: async () => undefined,
     abort: async (sessionId) => {
       aborted.push(sessionId)
@@ -213,47 +171,11 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
     prompts,
     steering,
     followUps,
-    resolvedApprovals,
     aborted,
     setSessionSnapshot(snapshot: ISessionSnapshot) {
       sessionSnapshot = snapshot
       for (const listener of [...sessionListeners]) listener()
     },
-  }
-}
-
-function commandApproval(): ICommandToolApprovalRequest {
-  return {
-    kind: "command",
-    id: "command-approval",
-    sessionId: "default",
-    runId: "run-1",
-    toolCallId: "command-call",
-    title: "Verify the implementation",
-    purpose: "Run focused tests and then check TypeScript.",
-    command: "bun test test/tui.test.ts && bun run typecheck",
-    explanation:
-      "bun test runs the UI tests; && continues on success; bun run typecheck checks types.",
-    cwd: "/workspace/project",
-    expectedOutcome: "All UI tests pass and TypeScript reports no errors.",
-    sideEffects: "May create temporary test caches in the workspace.",
-    timeoutSeconds: 120,
-  }
-}
-
-function approvalSessionSnapshot(
-  pendingToolApproval: TToolApprovalRequest,
-): ISessionSnapshot {
-  return {
-    messages: [],
-    fileChangeProposals: [],
-    pendingSteeringMessages: [],
-    pendingFollowUpMessages: [],
-    pendingToolApproval,
-    isRunning: true,
-    isCompacting: false,
-    activeRunId: "run-1",
-    pendingToolCallIds: [pendingToolApproval.toolCallId],
   }
 }
 
@@ -1064,527 +986,6 @@ test("renders running and failed session status", async () => {
     )
     expect(frame).not.toContain(glyphs.snakeHead)
     expect(frame).toContain("Provider request failed")
-  } finally {
-    act(() => {
-      setup.renderer.destroy()
-    })
-  }
-})
-
-test("renders complete command approval details and command actions", async () => {
-  const approval = commandApproval()
-  const fake = fakeApplication({
-    sessionSnapshot: approvalSessionSnapshot(approval),
-  })
-  const setup = await testRender(
-    buliElement(fake.application, "default"),
-    { width: 100, height: 52 },
-  )
-
-  try {
-    await act(async () => {
-      await setup.renderOnce()
-    })
-
-    const frame = setup.captureCharFrame()
-    const renderedText = textRenderables(setup.renderer.root).map(
-      (renderable) => renderable.plainText,
-    )
-    const commandPreview = codeRenderables(setup.renderer.root).find(
-      (renderable) => renderable.content === approval.command,
-    )
-    expect(frame).toContain("Command approval")
-    expect(frame).toContain(approval.title)
-    expect(frame).toContain(approval.purpose)
-    expect(commandPreview?.filetype).toBe("bash")
-    expect(commandPreview?.syntaxStyle).toBe(syntax)
-    expect(frame).toContain(approval.explanation)
-    expect(frame).toContain(approval.cwd)
-    expect(frame).toContain(`${approval.timeoutSeconds} seconds`)
-    expect(frame).toContain(approval.expectedOutcome)
-    expect(frame).toContain(approval.sideEffects)
-    expect(frame).toContain("Not sandboxed")
-    expect(renderedText).toContain("> Copy")
-    expect(renderedText).toContain("  Run once")
-    expect(renderedText).toContain("  Reject")
-    expect(renderedText.indexOf("> Copy")).toBeLessThan(
-      renderedText.indexOf("  Run once"),
-    )
-    expect(renderedText.indexOf("  Run once")).toBeLessThan(
-      renderedText.indexOf("  Reject"),
-    )
-    expect(frame).toContain(
-      "PageUp/PageDown review | Arrows select | Enter confirm | Esc stop",
-    )
-  } finally {
-    act(() => {
-      setup.renderer.destroy()
-    })
-  }
-})
-
-test("keeps approval reviewable with many queued messages on a short terminal", async () => {
-  const approval = commandApproval()
-  const queuedSteering = Array.from({ length: 6 }, (_, index) => ({
-    id: `queued-steering-${index}`,
-    sessionId: "default",
-    runId: "run-1",
-    role: "user" as const,
-    source: "steer" as const,
-    content: `LONG QUEUED STEERING ${index}`,
-    createdAt: index + 1,
-  }))
-  const queuedFollowUp = Array.from({ length: 6 }, (_, index) => ({
-    id: `queued-follow-up-${index}`,
-    sessionId: "default",
-    runId: "run-1",
-    role: "user" as const,
-    source: "followUp" as const,
-    content: `LONG QUEUED FOLLOW-UP ${index}`,
-    createdAt: index + 10,
-  }))
-  const fake = fakeApplication({
-    sessionSnapshot: {
-      ...approvalSessionSnapshot(approval),
-      pendingSteeringMessages: queuedSteering,
-      pendingFollowUpMessages: queuedFollowUp,
-    },
-  })
-  const setup = await testRender(
-    buliElement(fake.application, "default"),
-    { width: 80, height: 24 },
-  )
-
-  try {
-    await act(async () => {
-      await setup.renderOnce()
-    })
-
-    const frame = setup.captureCharFrame()
-    expect(frame).toContain("Command approval")
-    expect(frame).toContain("> Copy")
-    expect(frame).toContain("Queued: 6 steering, 6 follow-up")
-    expect(frame).not.toContain("LONG QUEUED STEERING")
-    expect(frame).not.toContain("LONG QUEUED FOLLOW-UP")
-  } finally {
-    act(() => {
-      setup.renderer.destroy()
-    })
-  }
-})
-
-test("reviews a tall command from the top without changing its action", async () => {
-  const approval: ICommandToolApprovalRequest = {
-    ...commandApproval(),
-    command: [
-      "printf 'REVIEW TOP\\n'",
-      ...Array.from(
-        { length: 80 },
-        (_, index) =>
-          `printf 'review-line-${String(index).padStart(3, "0")}\\n'`,
-      ),
-      "printf 'REVIEW END\\n'",
-    ].join("\n"),
-  }
-  const fake = fakeApplication({
-    sessionSnapshot: approvalSessionSnapshot(approval),
-  })
-  const setup = await testRender(
-    buliElement(fake.application, "default"),
-    { width: 80, height: 30 },
-  )
-  const pageDown = parseKeypress("\u001b[6~")
-  const pageUp = parseKeypress("\u001b[5~")
-  const end = parseKeypress("\u001b[F")
-  const home = parseKeypress("\u001b[H")
-  const down = parseKeypress("\u001b[B")
-  const enter = parseKeypress("\r")
-  if (!pageDown || !pageUp || !end || !home || !down || !enter) {
-    throw new Error("Expected approval keys to parse")
-  }
-
-  try {
-    await act(async () => {
-      await setup.renderOnce()
-    })
-
-    const details = scrollBoxRenderable(
-      setup.renderer.root,
-      "tool-approval-details",
-    )
-    const initialFrame = setup.captureCharFrame()
-    expect(codeRenderables(setup.renderer.root).some(
-      (renderable) => renderable.content === approval.command,
-    )).toBe(true)
-    expect(details.scrollTop).toBe(0)
-    expect(initialFrame).toContain("Command approval")
-    expect(initialFrame).toContain(approval.title)
-    expect(initialFrame).toContain("REVIEW TOP")
-    expect(initialFrame).not.toContain("REVIEW END")
-    expect(initialFrame).toContain("> Copy")
-    expect(initialFrame).toContain("PageUp/PageDown review")
-    expect(setup.renderer.currentFocusedRenderable?.id).toBe(
-      "tool-approval-panel",
-    )
-
-    await act(async () => {
-      setup.renderer.keyInput.processParsedKey(pageDown)
-      await setup.renderOnce()
-    })
-
-    const scrolledFrame = setup.captureCharFrame()
-    const laterLine = scrolledFrame.match(/review-line-(\d{3})/)
-    expect(details.scrollTop).toBeGreaterThan(0)
-    expect(laterLine).not.toBeNull()
-    if (!laterLine) throw new Error("Expected later diff content")
-    expect(Number(laterLine[1])).toBeGreaterThan(0)
-    expect(initialFrame).not.toContain(laterLine[0])
-    expect(scrolledFrame).toContain("> Copy")
-    expect(scrolledFrame).toContain("PageUp/PageDown review")
-    expect(fake.resolvedApprovals).toEqual([])
-    expect(setup.renderer.currentFocusedRenderable?.id).toBe(
-      "tool-approval-panel",
-    )
-
-    await act(async () => {
-      setup.renderer.keyInput.processParsedKey(pageUp)
-      await setup.renderOnce()
-    })
-
-    const returnedFrame = setup.captureCharFrame()
-    expect(details.scrollTop).toBe(0)
-    expect(returnedFrame).toContain("Command approval")
-    expect(returnedFrame).toContain("REVIEW TOP")
-    expect(returnedFrame).toContain("> Copy")
-    expect(fake.resolvedApprovals).toEqual([])
-    expect(setup.renderer.currentFocusedRenderable?.id).toBe(
-      "tool-approval-panel",
-    )
-
-    await act(async () => {
-      setup.renderer.keyInput.processParsedKey(end)
-      await setup.renderOnce()
-    })
-    expect(details.scrollTop).toBeGreaterThan(0)
-    expect(setup.captureCharFrame()).toContain("REVIEW END")
-    expect(setup.captureCharFrame()).toContain("> Copy")
-    expect(fake.resolvedApprovals).toEqual([])
-
-    await act(async () => {
-      setup.renderer.keyInput.processParsedKey(home)
-      await setup.renderOnce()
-    })
-    expect(details.scrollTop).toBe(0)
-    expect(setup.captureCharFrame()).toContain("REVIEW TOP")
-
-    act(() => {
-      setup.renderer.keyInput.processParsedKey(down)
-    })
-    await act(async () => {
-      await setup.renderOnce()
-    })
-    expect(setup.captureCharFrame()).toContain("> Run once")
-    expect(fake.resolvedApprovals).toEqual([])
-
-    await act(async () => {
-      setup.renderer.keyInput.processParsedKey(enter)
-      await setup.renderOnce()
-    })
-    expect(fake.resolvedApprovals).toEqual([{
-      sessionId: "default",
-      approvalId: approval.id,
-      decision: "approve",
-    }])
-  } finally {
-    act(() => {
-      setup.renderer.destroy()
-    })
-  }
-})
-
-test("focuses approval and ignores printable keys and chat submission", async () => {
-  const approval = commandApproval()
-  const transcriptMessage: IUserMessage = {
-    id: "transcript-message",
-    sessionId: "default",
-    runId: "run-1",
-    role: "user",
-    source: "prompt",
-    content: "Transcript returns after approval",
-    createdAt: 1,
-  }
-  const fake = fakeApplication({
-    sessionSnapshot: {
-      ...approvalSessionSnapshot(approval),
-      messages: [transcriptMessage],
-    },
-  })
-  const controller = new BuliUiController({ application: fake.application })
-  controller.activateSession("default")
-  controller.updateInput("Draft y/n/c stays exactly")
-  const setup = await testRender(
-    buliElementWithController(fake.application, controller),
-    { width: 80, height: 42 },
-  )
-  const copied: string[] = []
-  setup.renderer.copyToClipboardOSC52 = (text) => {
-    copied.push(text)
-    return true
-  }
-
-  try {
-    await act(async () => {
-      await setup.renderOnce()
-    })
-
-    const textarea = textareaRenderable(setup.renderer.root)
-    expect(textarea.focused).toBe(false)
-    expect(setup.renderer.currentFocusedRenderable).toBeInstanceOf(BoxRenderable)
-    expect(setup.renderer.currentFocusedRenderable?.id).toBe("tool-approval-panel")
-    expect(setup.captureCharFrame()).not.toContain(transcriptMessage.content)
-
-    await act(async () => {
-      await setup.mockInput.typeText("ync ordinary text")
-      textarea.submit()
-      setup.mockInput.pressEnter({ meta: true })
-      await setup.renderOnce()
-    })
-
-    expect(copied).toEqual([])
-    expect(fake.resolvedApprovals).toEqual([])
-    expect(fake.prompts).toEqual([])
-    expect(fake.steering).toEqual([])
-    expect(fake.followUps).toEqual([])
-    expect(controller.getSnapshot().input).toBe("Draft y/n/c stays exactly")
-    expect(textarea.plainText).toBe(
-      "Draft y/n/c stays exactly",
-    )
-
-    await act(async () => {
-      fake.setSessionSnapshot({
-        messages: [transcriptMessage],
-        fileChangeProposals: [],
-        pendingSteeringMessages: [],
-        pendingFollowUpMessages: [],
-        isRunning: true,
-        isCompacting: false,
-        activeRunId: "run-1",
-        pendingToolCallIds: [],
-      })
-      await setup.renderOnce()
-    })
-    expect(textarea.focused).toBe(true)
-    expect(setup.renderer.currentFocusedRenderable).toBe(textarea)
-    expect(textarea.plainText).toBe("Draft y/n/c stays exactly")
-    expect(setup.captureCharFrame()).toContain(transcriptMessage.content)
-  } finally {
-    act(() => {
-      setup.renderer.destroy()
-    })
-  }
-})
-
-test("defaults command Enter to Copy and resolves only after clipboard success", async () => {
-  const approval = commandApproval()
-  const fake = fakeApplication({
-    sessionSnapshot: approvalSessionSnapshot(approval),
-  })
-  const controller = new BuliUiController({ application: fake.application })
-  controller.activateSession("default")
-  controller.updateInput("Command draft remains")
-  const setup = await testRender(
-    buliElementWithController(fake.application, controller),
-    { width: 80, height: 44 },
-  )
-  const copied: string[] = []
-  setup.renderer.copyToClipboardOSC52 = (text) => {
-    copied.push(text)
-    return true
-  }
-
-  try {
-    await act(async () => {
-      await setup.renderOnce()
-      setup.mockInput.pressEnter()
-      await setup.renderOnce()
-    })
-
-    expect(copied).toEqual([approval.command])
-    expect(fake.resolvedApprovals).toEqual([{
-      sessionId: "default",
-      approvalId: approval.id,
-      decision: "copy",
-    }])
-    expect(fake.steering).toEqual([])
-    expect(controller.getSnapshot().input).toBe("Command draft remains")
-    expect(textareaRenderable(setup.renderer.root).plainText).toBe(
-      "Command draft remains",
-    )
-  } finally {
-    act(() => {
-      setup.renderer.destroy()
-    })
-  }
-})
-
-for (const approvalCase of [
-  {
-    name: "Down then Enter runs a command once",
-    approval: commandApproval(),
-    direction: "down",
-    selectedLabel: "> Run once",
-    decision: "approve",
-  },
-  {
-    name: "Left then Enter rejects a command",
-    approval: commandApproval(),
-    direction: "left",
-    selectedLabel: "> Reject",
-    decision: "reject",
-  },
-] as const) {
-  test(approvalCase.name, async () => {
-    const fake = fakeApplication({
-      sessionSnapshot: approvalSessionSnapshot(approvalCase.approval),
-    })
-    const controller = new BuliUiController({ application: fake.application })
-    controller.activateSession("default")
-    controller.updateInput("Navigation keeps this draft")
-    const setup = await testRender(
-      buliElementWithController(fake.application, controller),
-      { width: 80, height: 44 },
-    )
-    const copied: string[] = []
-    setup.renderer.copyToClipboardOSC52 = (text) => {
-      copied.push(text)
-      return true
-    }
-
-    try {
-      await act(async () => {
-        await setup.renderOnce()
-        setup.mockInput.pressArrow(approvalCase.direction)
-        await setup.renderOnce()
-      })
-      expect(textRenderables(setup.renderer.root).map((item) => item.plainText))
-        .toContain(approvalCase.selectedLabel)
-
-      await act(async () => {
-        setup.mockInput.pressEnter()
-        await setup.renderOnce()
-      })
-
-      expect(copied).toEqual([])
-      expect(fake.resolvedApprovals).toEqual([{
-        sessionId: "default",
-        approvalId: approvalCase.approval.id,
-        decision: approvalCase.decision,
-      }])
-      expect(fake.steering).toEqual([])
-      expect(controller.getSnapshot().input).toBe("Navigation keeps this draft")
-      expect(textareaRenderable(setup.renderer.root).plainText).toBe(
-        "Navigation keeps this draft",
-      )
-    } finally {
-      act(() => {
-        setup.renderer.destroy()
-      })
-    }
-  })
-}
-
-test("resets command selection to Copy when the approval ID changes", async () => {
-  const firstApproval = commandApproval()
-  const secondApproval: ICommandToolApprovalRequest = {
-    ...commandApproval(),
-    id: "command-approval-2",
-    toolCallId: "command-call-2",
-    command: "bun test test/keyboard-shortcuts.test.ts",
-  }
-  const fake = fakeApplication({
-    sessionSnapshot: approvalSessionSnapshot(firstApproval),
-  })
-  const controller = new BuliUiController({ application: fake.application })
-  controller.activateSession("default")
-  const setup = await testRender(
-    buliElementWithController(fake.application, controller),
-    { width: 80, height: 44 },
-  )
-  const copied: string[] = []
-  setup.renderer.copyToClipboardOSC52 = (text) => {
-    copied.push(text)
-    return true
-  }
-
-  try {
-    await act(async () => {
-      await setup.renderOnce()
-      setup.mockInput.pressArrow("down")
-      await setup.renderOnce()
-    })
-    expect(textRenderables(setup.renderer.root).map((item) => item.plainText))
-      .toContain("> Run once")
-
-    await act(async () => {
-      fake.setSessionSnapshot(approvalSessionSnapshot(secondApproval))
-      await setup.renderOnce()
-    })
-    expect(textRenderables(setup.renderer.root).map((item) => item.plainText))
-      .toContain("> Copy")
-
-    await act(async () => {
-      setup.mockInput.pressEnter()
-      await setup.renderOnce()
-    })
-
-    expect(copied).toEqual([secondApproval.command])
-    expect(fake.resolvedApprovals).toEqual([{
-      sessionId: "default",
-      approvalId: secondApproval.id,
-      decision: "copy",
-    }])
-  } finally {
-    act(() => {
-      setup.renderer.destroy()
-    })
-  }
-})
-
-test("keeps command approval pending when default Copy is unavailable", async () => {
-  const approval = commandApproval()
-  const fake = fakeApplication({
-    sessionSnapshot: approvalSessionSnapshot(approval),
-  })
-  const controller = new BuliUiController({ application: fake.application })
-  controller.activateSession("default")
-  controller.updateInput("Still preserved")
-  const setup = await testRender(
-    buliElementWithController(fake.application, controller),
-    { width: 80, height: 44 },
-  )
-  setup.renderer.copyToClipboardOSC52 = () => false
-
-  try {
-    await act(async () => {
-      await setup.renderOnce()
-      setup.mockInput.pressEnter()
-      await setup.renderOnce()
-    })
-
-    expect(fake.resolvedApprovals).toEqual([])
-    expect(fake.application.openSession("default").getSnapshot().pendingToolApproval)
-      .toBe(approval)
-    expect(controller.getSnapshot()).toMatchObject({
-      input: "Still preserved",
-      inputError: "Clipboard copy is not supported by this terminal",
-    })
-    expect(setup.captureCharFrame()).toContain(
-      "Clipboard copy is not supported",
-    )
-    expect(textareaRenderable(setup.renderer.root).plainText).toBe(
-      "Still preserved",
-    )
-    expect(setup.renderer.currentFocusedRenderable?.id).toBe("tool-approval-panel")
   } finally {
     act(() => {
       setup.renderer.destroy()

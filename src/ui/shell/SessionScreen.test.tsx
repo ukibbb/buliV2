@@ -25,7 +25,7 @@ import {
 } from "@/ui/shell/SessionCompletionNotifier"
 import { SessionScreen } from "@/ui/shell/SessionScreen"
 import { BuliUiController } from "@/ui/ui-controller"
-import type { ICommandToolApprovalRequest, IUserMessage } from "@/agent"
+import type { IUserMessage } from "@/agent"
 import type { ICompactionCheckpoint, ISessionSnapshot } from "@/sessions"
 import { theme } from "@/ui/terminal/theme"
 
@@ -43,22 +43,6 @@ const APPLICATION_SNAPSHOT: IBuliApplicationSnapshot = {
     modelId: "test-model",
     reasoningEffort: "medium",
   },
-}
-
-const APPROVAL: ICommandToolApprovalRequest = {
-  kind: "command",
-  id: "approval",
-  sessionId: SESSION_ID,
-  runId: "run-approval",
-  toolCallId: "tool-call",
-  title: "Run checks",
-  purpose: "Verify the change",
-  command: "bun test",
-  explanation: "Runs focused tests.",
-  cwd: "/workspace",
-  expectedOutcome: "Tests pass.",
-  sideEffects: "None.",
-  timeoutSeconds: 30,
 }
 
 function sessionSnapshot(
@@ -114,7 +98,6 @@ function createSessionHarness(initialSnapshot: ISessionSnapshot) {
     steer: () => undefined,
     followUp: () => undefined,
     clearQueuedMessages: () => ({ steering: [], followUp: [] }),
-    resolveToolApproval: () => undefined,
     compactSession: async () => undefined,
     abort: async () => undefined,
     dispose: async () => undefined,
@@ -348,7 +331,7 @@ test("renders and replaces the latest session checkpoint", async () => {
   }
 })
 
-test("navigates only modified transcript keys and drops a stale approval ref", async () => {
+test("navigates only modified transcript keys", async () => {
   const harness = createSessionHarness(sessionSnapshot({
     messages: transcriptMessages(40),
   }))
@@ -406,25 +389,6 @@ test("navigates only modified transcript keys and drops a stale approval ref", a
     expect(unhandled.defaultPrevented).toBe(false)
     expect(unhandled.propagationStopped).toBe(false)
 
-    let staleScrollCalls = 0
-    transcript.scrollTo = () => {
-      staleScrollCalls += 1
-    }
-    await act(async () => {
-      harness.setSnapshot(sessionSnapshot({
-        isRunning: true,
-        activeRunId: APPROVAL.runId,
-        pendingToolCallIds: [APPROVAL.toolCallId],
-        pendingToolApproval: APPROVAL,
-      }))
-      await setup.renderOnce()
-    })
-    expect(findScrollBoxRenderable(setup.renderer.root)).toBeUndefined()
-
-    const approvalKey = pressKey(setup.renderer, "home", { meta: true })
-    expect(staleScrollCalls).toBe(0)
-    expect(approvalKey.defaultPrevented).toBe(false)
-    expect(approvalKey.propagationStopped).toBe(false)
   } finally {
     harness.controller.dispose()
     act(() => setup.renderer.destroy())

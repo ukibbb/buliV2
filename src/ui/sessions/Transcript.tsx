@@ -8,7 +8,6 @@ import { useMemo, type ReactNode } from "react"
 import type {
     TAgentMessage,
     IAssistantMessage,
-    IFileChangeProposal,
     IFileChangeProposalRecord,
     IToolCallContent,
     IToolResultMessage,
@@ -45,7 +44,6 @@ export interface ITranscriptProps {
     readonly compactionCheckpoint?: ICompactionCheckpoint
     readonly activeRunId?: string
     readonly pendingToolCallIds?: readonly string[]
-    readonly pendingFileChangeProposal?: IFileChangeProposal
 }
 
 function MarkdownBody(props: {
@@ -219,20 +217,12 @@ export function Transcript(props: ITranscriptProps): ReactNode {
         props.fileChangeProposals,
         props.compactionCheckpoint,
     ])
-    const durableProposalIds = new Set(
-        (props.fileChangeProposals ?? []).map((proposal) => proposal.id),
-    )
-    const liveProposal = props.pendingFileChangeProposal === undefined
-        || durableProposalIds.has(props.pendingFileChangeProposal.id)
-        ? undefined
-        : props.pendingFileChangeProposal
 
     if (
         props.messages.length === 0
         && (props.fileChangeProposals?.length ?? 0) === 0
         && !props.streamingMessage
         && !props.compactionCheckpoint
-        && !liveProposal
     ) {
         return <text fg={theme.textMuted} selectable={false}>
             Start conversation
@@ -255,9 +245,6 @@ export function Transcript(props: ITranscriptProps): ReactNode {
     return (
         <box width="100%" flexDirection="column">
             {renderedMessages}
-            {liveProposal === undefined
-                ? null
-                : <ProposedChanges proposal={liveProposal} />}
         </box>
     )
 }

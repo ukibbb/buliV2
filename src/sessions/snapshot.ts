@@ -3,9 +3,7 @@ import {
     type TAgentMessage,
     type TAgentRunEndReason,
     type IAssistantMessage,
-    type IFileChangeProposal,
     type IFileChangeProposalRecord,
-    type TToolApprovalRequest,
     type IUserMessage,
 } from "@/agent"
 import type { ICompactionCheckpoint } from "@/sessions/compaction/checkpoint"
@@ -18,8 +16,6 @@ export interface ISessionSnapshot {
     readonly pendingSteeringMessages: readonly IUserMessage[]
     readonly pendingFollowUpMessages: readonly IUserMessage[]
     readonly streamingMessage?: IAssistantMessage
-    readonly pendingToolApproval?: TToolApprovalRequest
-    readonly pendingFileChangeProposal?: IFileChangeProposal
     readonly compactionCheckpoint?: ICompactionCheckpoint
     readonly isRunning: boolean
     readonly isCompacting: boolean
@@ -73,24 +69,6 @@ export function freezeSessionSnapshot(
                     snapshot.streamingMessage,
                     previousSource?.streamingMessage,
                     previousValue?.streamingMessage,
-                ),
-            }),
-        ...(snapshot.pendingToolApproval === undefined
-            ? {}
-            : {
-                pendingToolApproval: freezeBranch(
-                    snapshot.pendingToolApproval,
-                    previousSource?.pendingToolApproval,
-                    previousValue?.pendingToolApproval,
-                ),
-            }),
-        ...(snapshot.pendingFileChangeProposal === undefined
-            ? {}
-            : {
-                pendingFileChangeProposal: freezeBranch(
-                    snapshot.pendingFileChangeProposal,
-                    previousSource?.pendingFileChangeProposal,
-                    previousValue?.pendingFileChangeProposal,
                 ),
             }),
         ...(snapshot.compactionCheckpoint === undefined

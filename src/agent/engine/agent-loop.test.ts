@@ -479,6 +479,23 @@ test("accepts every structured tool outcome", async () => {
   }
 })
 
+test.each(["completed", "committed-after-abort"] as const)(
+  "preserves tool diff for %s results",
+  async (outcome) => {
+    const diff = "--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-before\n+after\n"
+    const { toolResult } = await executeSingleTool(async () => ({
+      content: "Written",
+      outcome,
+      diff,
+    }))
+    expect(toolResult).toMatchObject({
+      diff,
+      outcome,
+      isError: outcome === "committed-after-abort",
+    })
+  },
+)
+
 test("turns invalid structured tool results into errors", async () => {
   const cases = [
     {
@@ -492,6 +509,10 @@ test("turns invalid structured tool results into errors", async () => {
     {
       value: { content: "result", summary: 42 },
       error: 'Tool "test_tool" result summary must be a string',
+    },
+    {
+      value: { content: "result", diff: 42 },
+      error: 'Tool "test_tool" result diff must be a string',
     },
   ]
 
@@ -594,149 +615,6 @@ test("keeps ordinary aborted tool errors generic", async () => {
   expect("summary" in toolResult).toBe(false)
 })
 
-test("always gives tools an approval bridge with exact execution context", async () => {
-  const model = new ScriptedModel((iteration) => iteration === 0
-    ? [
-        {
-          type: "tool-call",
-          toolCallId: "call-command",
-          toolName: "run_command",
-          input: {},
-        },
-        { type: "finish", reason: "tool-calls" },
-      ]
-    : [{ type: "finish", reason: "stop" }])
-  const decisions: string[] = []
-  const tool = defineAgentTool({
-    name: "run_command",
-    approvalKind: "command",
-    description: "Run a command",
-    inputSchema: Type.Object({}),
-    async execute(_input, context) {
-      if (!context.requestApproval) throw new Error("Missing approval bridge")
-      decisions.push(await context.requestApproval({
-        kind: "command",
-        title: "List files",
-        explanation: "Inspect the workspace",
-        command: "ls",
-        cwd: "/workspace",
-        purpose: "Find project files",
-        expectedOutcome: "A file list",
-        sideEffects: "None",
-        timeoutSeconds: 30,
-      }))
-      return "complete"
-    },
-  })
-  const approvalContexts: Array<{
-    sessionId: string
-    runId: string
-    toolCallId: string
-    aborted: boolean
-  }> = []
-
-  const result = await runAgentLoop(
-    userMessage("List the workspace files"),
-    {
-      systemPrompt: "System",
-      messages: [],
-      tools: [tool],
-    },
-    {
-      sessionId: "session-1",
-      runId: RUN_ID,
-      model,
-      reasoningEffort: "medium",
-      signal: new AbortController().signal,
-      emit: () => undefined,
-      requestApproval: async (draft, context) => {
-        expect(draft).toMatchObject({
-          kind: "command",
-          command: "ls",
-          cwd: "/workspace",
-        })
-        approvalContexts.push({
-          sessionId: context.sessionId,
-          runId: context.runId,
-          toolCallId: context.toolCallId,
-          aborted: context.signal.aborted,
-        })
-        return "copy"
-      },
-      now: timeGenerator(),
-      generateId: idGenerator(),
-    },
-  )
-
-  expect(decisions).toEqual(["copy"])
-  expect(approvalContexts).toEqual([{
-    sessionId: "session-1",
-    runId: RUN_ID,
-    toolCallId: "call-command",
-    aborted: false,
-  }])
-  expect(result.messages.find((message) => message.role === "toolResult"))
-    .toMatchObject({ content: "complete", isError: false })
-})
-
-test("allows one approval request per tool call", async () => {
-  const model = new ScriptedModel((iteration) => iteration === 0
-    ? [
-        {
-          type: "tool-call",
-          toolCallId: "call-command",
-          toolName: "run_command",
-          input: {},
-        },
-        { type: "finish", reason: "tool-calls" },
-      ]
-    : [{ type: "finish", reason: "stop" }])
-  let approvals = 0
-  const draft = commandApprovalDraft()
-  const tool = defineAgentTool({
-    name: "run_command",
-    approvalKind: "command",
-    description: "Run a command",
-    inputSchema: Type.Object({}),
-    async execute(_input, context) {
-      if (!context.requestApproval) throw new Error("Missing approval bridge")
-      await context.requestApproval(draft)
-      await context.requestApproval(draft)
-      return "unexpected"
-    },
-  })
-
-  const result = await runAgentLoop(
-    userMessage("Run the command"),
-    {
-      systemPrompt: "System",
-      messages: [],
-      tools: [tool],
-    },
-    {
-      sessionId: "session-1",
-      runId: RUN_ID,
-      model,
-      reasoningEffort: "medium",
-      signal: new AbortController().signal,
-      emit: () => undefined,
-      requestApproval: async () => {
-        approvals += 1
-        return "reject"
-      },
-      now: timeGenerator(),
-      generateId: idGenerator(),
-    },
-  )
-
-  expect(approvals).toBe(1)
-  expect(result.messages.find((message) => message.role === "toolResult"))
-    .toMatchObject({
-      isError: true,
-      content: expect.stringContaining("already requested approval for this call"),
-    })
-})
-
 test("exposes every registered tool for every prompt", async () => {
   const readTool = defineAgentTool({
     name: "read",
@@ -752,7 +630,6 @@ test("exposes every registered tool for every prompt", async () => {
   })
   const commandTool = defineAgentTool({
     name: "bash",
-    approvalKind: "command",
     description: "Command",
     inputSchema: Type.Object({}),
     execute: async () => "command",
@@ -827,7 +704,7 @@ test("exposes action tools independently of message history", async () => {
   ])
 })
 
-test("keeps all tools available across read and approval continuations", async () => {
+test("keeps all tools available across read and command continuations", async () => {
   const model = new ScriptedModel((iteration) => {
     if (iteration === 0) {
       return [
@@ -853,7 +730,6 @@ test("keeps all tools available across read and approval continuations", async (
     }
     return [{ type: "finish", reason: "stop" }]
   })
-  let approvals = 0
   const readTool = defineAgentTool({
     name: "read",
     description: "Read",
@@ -862,12 +738,10 @@ test("keeps all tools available across read and approval continuations", async (
   })
   const commandTool = defineAgentTool({
     name: "bash",
-    approvalKind: "command",
     description: "Run a command",
     inputSchema: Type.Object({}),
-    async execute(_input, context) {
-      if (!context.requestApproval) throw new Error("Missing approval bridge")
-      return await context.requestApproval(commandApprovalDraft())
+    async execute() {
+      return "command completed"
     },
   })
 
@@ -885,16 +759,11 @@ test("keeps all tools available across read and approval continuations", async (
       reasoningEffort: "medium",
       signal: new AbortController().signal,
       emit: () => undefined,
-      requestApproval: async () => {
-        approvals += 1
-        return "reject"
-      },
       now: timeGenerator(),
       generateId: idGenerator(),
     },
   )
 
-  expect(approvals).toBe(1)
   expect(model.requests[0]?.tools.map((tool) => tool.name)).toEqual([
     "read",
     "bash",
@@ -909,7 +778,7 @@ test("keeps all tools available across read and approval continuations", async (
   ])
 })
 
-test("lets each action call request its own approval", async () => {
+test("executes each action call in a batch", async () => {
   const model = new ScriptedModel((iteration) => iteration === 0
     ? [
         {
@@ -928,16 +797,13 @@ test("lets each action call request its own approval", async () => {
       ]
     : [{ type: "finish", reason: "stop" }])
   let executions = 0
-  let approvals = 0
   const tool = defineAgentTool({
     name: "bash",
-    approvalKind: "command",
     description: "Run a command",
     inputSchema: Type.Object({}),
-    async execute(_input, context) {
+    async execute() {
       executions += 1
-      if (!context.requestApproval) throw new Error("Missing approval bridge")
-      return await context.requestApproval(commandApprovalDraft())
+      return "command completed"
     },
   })
 
@@ -955,17 +821,12 @@ test("lets each action call request its own approval", async () => {
       reasoningEffort: "medium",
       signal: new AbortController().signal,
       emit: () => undefined,
-      requestApproval: async () => {
-        approvals += 1
-        return "reject"
-      },
       now: timeGenerator(),
       generateId: idGenerator(),
     },
   )
 
   expect(executions).toBe(2)
-  expect(approvals).toBe(2)
   expect(model.requests[0]?.tools.map((entry) => entry.name)).toEqual([
     "bash",
   ])
@@ -1867,18 +1728,4 @@ function timeGenerator(): () => number {
 function idGenerator(): () => string {
   let value = 0
   return () => `generated-${++value}`
-}
-
-function commandApprovalDraft() {
-  return {
-    kind: "command" as const,
-    title: "Run focused tests",
-    explanation: "Execute the requested verification command",
-    command: "bun test test/agent-loop.test.ts",
-    cwd: "/workspace",
-    purpose: "Verify agent behavior",
-    expectedOutcome: "The focused tests pass",
-    sideEffects: "May write temporary test caches",
-    timeoutSeconds: 30,
-  }
 }

@@ -11,10 +11,6 @@ import type {
 } from "@/agent/messages"
 import type { IModelProfile } from "@/agent/model-values"
 import type {
-    TToolApprovalDecision,
-    TToolApprovalDraft,
-} from "@/agent/tool-approval"
-import type {
     IRuntimeAgentTool,
     TToolExecutionOutcome,
 } from "@/agent/tool"
@@ -40,15 +36,6 @@ interface IExecuteToolCallsOptions {
     readonly selectedPathReferences?: readonly IUserPathReference[]
     readonly signal: AbortSignal
     readonly emit: (event: TAgentEvent) => void | Promise<void>
-    readonly requestApproval?: (
-        draft: TToolApprovalDraft,
-        context: {
-            readonly sessionId: string
-            readonly runId: string
-            readonly toolCallId: string
-            readonly signal: AbortSignal
-        },
-    ) => Promise<TToolApprovalDecision>
     readonly now: () => number
     readonly generateId: () => string
     readonly toolOutputStore?: IToolOutputStore
@@ -149,6 +136,7 @@ async function executeToolCall(
     let isError: boolean
     let outcome: TToolExecutionOutcome | undefined
     let summary: string | undefined
+    let diff: string | undefined
     const tool = toolsByName.get(toolCall.toolName)
 
     if (options.signal.aborted) {
@@ -159,9 +147,6 @@ async function executeToolCall(
         isError = true
     } else {
         let acceptingProgress = true
-        let acceptingApprovals = true
-        let approvalRequested = false
-        let pendingApprovalTask: Promise<TToolApprovalDecision> | undefined
         let progressTask: Promise<void> = Promise.resolve()
         const reportProgress = (progress: string): void => {
             if (!acceptingProgress) return
@@ -175,68 +160,6 @@ async function executeToolCall(
             }))
             void progressTask.catch(() => { })
         }
-        const requestApproval = (
-            draft: TToolApprovalDraft,
-        ): Promise<TToolApprovalDecision> => {
-            if (!acceptingApprovals) {
-                return Promise.reject(new Error(
-                    `Tool "${tool.name}" is no longer accepting approval requests`,
-                ))
-            }
-            if (approvalRequested) {
-                return Promise.reject(new Error(
-                    `Tool "${tool.name}" already requested approval for this call`,
-                ))
-            }
-            if (!options.requestApproval) {
-                return Promise.reject(new Error(
-                    "Tool approval is not available in this agent loop",
-                ))
-            }
-            if (tool.approvalKind === undefined) {
-                return Promise.reject(new Error(
-                    `Tool "${tool.name}" cannot request approval because it does not declare an approval kind`,
-                ))
-            }
-            if (tool.approvalKind !== draft.kind) {
-                return Promise.reject(new Error(
-                    `Tool "${tool.name}" declares ${tool.approvalKind} approval but requested ${draft.kind} approval`,
-                ))
-            }
-
-            let task: Promise<TToolApprovalDecision>
-            try {
-                options.signal.throwIfAborted()
-                approvalRequested = true
-                task = Promise.resolve(options.requestApproval(
-                    structuredClone(draft),
-                    {
-                        sessionId: options.sessionId,
-                        runId: options.runId,
-                        toolCallId: toolCall.toolCallId,
-                        signal: options.signal,
-                    },
-                ))
-            } catch (error) {
-                return Promise.reject(error)
-            }
-
-            pendingApprovalTask = task
-            void task.then(
-                () => {
-                    if (pendingApprovalTask === task) {
-                        pendingApprovalTask = undefined
-                    }
-                },
-                () => {
-                    if (pendingApprovalTask === task) {
-                        pendingApprovalTask = undefined
-                    }
-                },
-            )
-            return task
-        }
-
         try {
             const preparedInput = tool.prepareArguments
                 ? tool.prepareArguments(structuredClone(toolCall.input))
@@ -275,12 +198,12 @@ async function executeToolCall(
                         : {}),
                     signal: options.signal,
                     reportProgress,
-                    requestApproval,
                 }),
             )
             content = executionResult.content
             outcome = executionResult.outcome
             summary = executionResult.summary
+            diff = executionResult.diff
             isError = outcome === "failed"
                 || outcome === "committed-after-abort"
                 || outcome === "effects-unknown"
@@ -303,9 +226,6 @@ async function executeToolCall(
             isError = true
         } finally {
             acceptingProgress = false
-            acceptingApprovals = false
-            const approvalTask = pendingApprovalTask
-            if (approvalTask) await approvalTask.catch(() => { })
         }
         await progressTask
     }
@@ -336,6 +256,7 @@ async function executeToolCall(
         isError,
         ...(outcome === undefined ? {} : { outcome }),
         ...(summary === undefined ? {} : { summary }),
+        ...(diff === undefined ? {} : { diff }),
         createdAt: options.now(),
     }
 }
@@ -496,6 +417,7 @@ function normalizeToolExecutionResult(
     readonly content: string
     readonly outcome: TToolExecutionOutcome
     readonly summary?: string
+    readonly diff?: string
 } {
     if (typeof value === "string") {
         return { content: value, outcome: "completed" }
@@ -520,10 +442,15 @@ function normalizeToolExecutionResult(
         throw new TypeError(`Tool "${toolName}" result summary must be a string`)
     }
 
+    if (result.diff !== undefined && typeof result.diff !== "string") {
+        throw new TypeError(`Tool "${toolName}" result diff must be a string`)
+    }
+
     return {
         content: result.content,
         outcome: result.outcome ?? "completed",
         ...(result.summary === undefined ? {} : { summary: result.summary }),
+        ...(result.diff === undefined ? {} : { diff: result.diff }),
     }
 }
 

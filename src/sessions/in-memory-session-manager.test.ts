@@ -240,7 +240,7 @@ test("stores the latest defensive file-change proposal state", () => {
   manager.createSession(sessionInfo())
   const pending = fileChangeProposal()
 
-  manager.saveFileChangeProposal(pending)
+  manager.restoreFileChangeProposal(pending)
   ;(pending as { diff: string }).diff = "mutated input"
   const returned = manager.getFileChangeProposals("session-1")
   ;(returned[0] as { diff: string }).diff = "mutated output"
@@ -253,10 +253,10 @@ test("stores the latest defensive file-change proposal state", () => {
     status: "applied",
     resolvedAt: 3,
   })
-  manager.saveFileChangeProposal(applied)
+  manager.restoreFileChangeProposal(applied)
 
   expect(manager.getFileChangeProposals("session-1")).toEqual([applied])
-  expect(() => manager.saveFileChangeProposal(fileChangeProposal({
+  expect(() => manager.restoreFileChangeProposal(fileChangeProposal({
     sessionId: "missing-session",
   }))).toThrow("Session does not exist: missing-session")
 })
@@ -287,8 +287,8 @@ test("presentation revisions track successful metadata saves without reusing del
   let revision = otherRevision
   // Successful saves invalidate even identical payloads; IDs are not cache keys.
   for (const save of [
-    () => manager.saveFileChangeProposal(fileChangeProposal()),
-    () => manager.saveFileChangeProposal(fileChangeProposal()),
+    () => manager.restoreFileChangeProposal(fileChangeProposal()),
+    () => manager.restoreFileChangeProposal(fileChangeProposal()),
     () => manager.saveCompactionCheckpoint(checkpoint),
     () => manager.saveCompactionCheckpoint(checkpoint),
   ]) {
@@ -299,8 +299,8 @@ test("presentation revisions track successful metadata saves without reusing del
 
   for (const invalidSave of [
     () => manager.createSession(sessionInfo()),
-    () => manager.saveFileChangeProposal(fileChangeProposal({ diff: "" })),
-    () => manager.saveFileChangeProposal(fileChangeProposal({ sessionId: "missing" })),
+    () => manager.restoreFileChangeProposal(fileChangeProposal({ diff: "" })),
+    () => manager.restoreFileChangeProposal(fileChangeProposal({ sessionId: "missing" })),
     () => manager.saveCompactionCheckpoint({ ...checkpoint, summary: "" }),
     () => manager.saveCompactionCheckpoint({ ...checkpoint, throughMessageId: "missing" }),
     () => manager.saveCompactionCheckpoint({ ...checkpoint, sessionId: "missing" }),
@@ -331,8 +331,8 @@ test("delete removes selected metadata, messages, and proposals without affectin
   const retained = userMessage("Second", "session-2", "user-2", 20)
   manager.appendMessage(userMessage("First", "session-1", "user-1", 10))
   manager.appendMessage(retained)
-  manager.saveFileChangeProposal(fileChangeProposal())
-  manager.saveFileChangeProposal(fileChangeProposal({
+  manager.restoreFileChangeProposal(fileChangeProposal())
+  manager.restoreFileChangeProposal(fileChangeProposal({
     id: "proposal-2",
     sessionId: "session-2",
   }))

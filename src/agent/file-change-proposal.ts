@@ -22,14 +22,3 @@ export interface IFileChangeProposalRecord extends IFileChangeProposal {
     readonly createdAt: number
     readonly resolvedAt?: number
 }
-
-/** Read-only proposal state consumed by a live session. */
-export interface IFileChangeProposalSource {
-    readonly getSnapshot: (
-        sessionId: string,
-    ) => IFileChangeProposal | undefined
-    readonly subscribe: (
-        sessionId: string,
-        listener: () => void,
-    ) => () => void
-}

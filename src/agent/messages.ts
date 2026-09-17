@@ -99,6 +99,7 @@ export interface IToolResultMessage extends IMessageBase {
     readonly isError: boolean
     readonly outcome?: TToolExecutionOutcome
     readonly summary?: string
+    readonly diff?: string
 }
 
 /** Complete provider-neutral message history owned by an agent. */

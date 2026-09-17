@@ -198,6 +198,7 @@ export function assertDurableSessionMessage(
                     "isError",
                     ...(value.outcome === undefined ? [] : ["outcome"]),
                     ...(value.summary === undefined ? [] : ["summary"]),
+                    ...(value.diff === undefined ? [] : ["diff"]),
                     "createdAt",
                 ])
                 || typeof value.toolCallId !== "string"
@@ -217,6 +218,10 @@ export function assertDurableSessionMessage(
                 || (
                     value.summary !== undefined
                     && typeof value.summary !== "string"
+                )
+                || (
+                    value.diff !== undefined
+                    && typeof value.diff !== "string"
                 )
             ) {
                 throw new Error("Invalid tool result message")

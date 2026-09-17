@@ -223,7 +223,6 @@ test("tool_output exposes strict bounded paging and disposal removes files", asy
   const tool = createReadToolOutputTool(store)
 
   expect(tool.name).toBe("tool_output")
-  expect(tool.approvalKind).toBeUndefined()
   expect(tool.inputSchema).toMatchObject({
     type: "object",
     required: ["outputId"],

@@ -40,14 +40,6 @@ test("registers the exact Pi-style tool and schema contract", () => {
   const editItems = getTool(tools, "edit").inputSchema.properties.edits.items
   expect(Object.keys(editItems.properties)).toEqual(["oldText", "newText"])
   expect(editItems.required).toEqual(["oldText", "newText"])
-  expect(tools.map((tool) => tool.approvalKind)).toEqual([
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-  ])
 })
 
 test("read is text-only and uses Pi offset and truncation messages", async () => {
@@ -263,9 +255,11 @@ test("edit applies fuzzy, disjoint edits while preserving BOM and CRLF", async (
         { oldText: "middle \"quote\"", newText: "CENTER" },
         { oldText: "omega", newText: "OMEGA" },
       ],
-    }, context())).resolves.toBe(
-      `Successfully replaced 3 block(s) in ${target}.`,
-    )
+    }, context())).resolves.toMatchObject({
+      content: `Successfully replaced 3 block(s) in ${target}.`,
+      outcome: "completed",
+      diff: expect.any(String),
+    })
     expect(await readFile(target, "utf8")).toBe(
       "\uFEFFALPHA\r\nuntouched  \u201Ccurly\u201D  \r\nCENTER\r\nOMEGA\r\n",
     )
@@ -331,13 +325,21 @@ test("write creates parents and overwrites absolute and parent-relative paths", 
     await expect(write.execute({
       path: relative(workspace, target),
       content: "first",
-    }, context())).resolves.toContain("Successfully wrote 5 bytes")
+    }, context())).resolves.toMatchObject({
+      content: expect.stringContaining("Successfully wrote 5 bytes"),
+      outcome: "completed",
+      diff: expect.any(String),
+    })
     expect(await readFile(target, "utf8")).toBe("first")
 
     await expect(write.execute({
       path: target,
       content: "replacement",
-    }, context())).resolves.toContain("Successfully wrote 11 bytes")
+    }, context())).resolves.toMatchObject({
+      content: expect.stringContaining("Successfully wrote 11 bytes"),
+      outcome: "completed",
+      diff: expect.any(String),
+    })
     expect(await readFile(target, "utf8")).toBe("replacement")
   })
 })

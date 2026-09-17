@@ -4,7 +4,7 @@ import type {
     IToolCallContent,
     IToolResultMessage,
 } from "@/agent"
-import { glyphs, theme } from "@/ui/terminal/theme"
+import { glyphs, syntax, theme } from "@/ui/terminal/theme"
 
 const TOOL_DETAIL_MAX_CHARACTERS = 160
 const TOOL_NAME_MAX_CHARACTERS = 40
@@ -42,7 +42,7 @@ export function ToolActivityLine(props: IToolActivityLineProps): ReactNode {
     )
     const detail = detailParts.length === 0 ? undefined : detailParts.join(" | ")
 
-    return <text
+    const line = <text
         fg={state.critical ? theme.red : state.live ? theme.amber : theme.textMuted}
         minWidth={0}
         flexShrink={1}
@@ -62,6 +62,21 @@ export function ToolActivityLine(props: IToolActivityLineProps): ReactNode {
             ? null
             : <span fg={state.accent}>{` ${state.marker}`}</span>}
     </text>
+
+    if (!props.result?.diff) return line
+
+    return <box width="100%" flexDirection="column">
+        {line}
+        <diff
+            diff={props.result.diff}
+            width="100%"
+            view="unified"
+            fg={theme.text}
+            syntaxStyle={syntax}
+            wrapMode="word"
+            showLineNumbers
+        />
+    </box>
 }
 
 interface IToolPresentation {

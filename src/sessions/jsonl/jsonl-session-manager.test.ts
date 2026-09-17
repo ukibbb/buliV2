@@ -97,6 +97,32 @@ test("stages cloned metadata and writes exact version 2 envelopes on first appen
   }
 })
 
+test("round-trips tool diffs and rejects invalid diff values", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-diff-"))
+  const filePath = join(directory, "sessions.jsonl")
+  try {
+    const manager = jsonlManager(filePath)
+    manager.createSession(sessionInfo("session-1"))
+    const result: IToolResultMessage = {
+      ...toolResultMessage("Written"),
+      diff: "--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-before\n+after\n",
+    }
+    manager.appendMessage(result)
+    for (const diff of [42, null, {}]) {
+      expect(() => manager.appendMessage({
+        ...result,
+        diff,
+      } as unknown as TAgentMessage)).toThrow("Invalid tool result message")
+    }
+    manager.dispose()
+    const restored = jsonlManager(filePath)
+    expect(restored.getMessages("session-1")).toEqual([result])
+    restored.dispose()
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test("round-trips selected paths and direct image attachments", async () => {
   const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-resources-"))
   const filePath = join(directory, "sessions.jsonl")
@@ -1111,27 +1137,37 @@ test("rechecks checkpoint tool sequences after later message replacements", asyn
   }
 })
 
-test("round-trips the latest file-change proposal state", async () => {
+test("replays the latest historical proposal state and preserves it when rewriting the log", async () => {
   const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-proposals-"))
   const filePath = join(directory, "sessions.jsonl")
 
   try {
-    const manager = jsonlManager(filePath)
-    manager.createSession(sessionInfo())
     const pending = fileChangeProposal()
     const applied = fileChangeProposal({
       status: "applied",
       resolvedAt: 4,
     })
 
-    manager.saveFileChangeProposal(pending)
-    manager.saveFileChangeProposal(applied)
+    await writeFile(filePath, serializeRecords([
+      sessionRecord(sessionInfo()),
+      { recordType: "fileChangeProposal", version: 2, proposal: pending },
+      { recordType: "fileChangeProposal", version: 2, proposal: applied },
+      sessionRecord(sessionInfo("session-2")),
+    ]))
+    const manager = jsonlManager(filePath)
+    expect(manager.getFileChangeProposals("session-1")).toEqual([applied])
 
     const records = await jsonlRecords(filePath)
     expect(records[0]).toEqual(sessionRecord(sessionInfo()))
     expect(records.filter((record) => (
       record as { recordType?: string }
     ).recordType === "fileChangeProposal")).toHaveLength(2)
+    manager.deleteSession("session-2")
+    expect((await jsonlRecords(filePath)).filter((record) => (
+      record as { recordType?: string }
+    ).recordType === "fileChangeProposal")).toEqual([
+      { recordType: "fileChangeProposal", version: 2, proposal: applied },
+    ])
     manager.dispose()
     expect(jsonlManager(filePath).getFileChangeProposals("session-1"))
       .toEqual([applied])
@@ -1140,15 +1176,15 @@ test("round-trips the latest file-change proposal state", async () => {
   }
 })
 
-test("expires a restored pending proposal through append-only JSONL", async () => {
+test("preserves a restored pending proposal without appending expiration records", async () => {
   const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-orphaned-proposal-"))
   const filePath = join(directory, "sessions.jsonl")
 
   try {
-    const manager = jsonlManager(filePath)
-    manager.createSession(sessionInfo())
-    manager.saveFileChangeProposal(fileChangeProposal())
-    manager.dispose()
+    await writeFile(filePath, serializeRecords([
+      sessionRecord(sessionInfo()),
+      { recordType: "fileChangeProposal", version: 2, proposal: fileChangeProposal() },
+    ]))
 
     const restored = jsonlManager(filePath)
     const session = new AgentSession({
@@ -1165,11 +1201,11 @@ test("expires a restored pending proposal through append-only JSONL", async () =
     })
 
     expect(restored.getFileChangeProposals("session-1")).toEqual([
-      fileChangeProposal({ status: "expired", resolvedAt: 5 }),
+      fileChangeProposal(),
     ])
     expect((await jsonlRecords(filePath)).filter((record) => (
       record as { recordType?: string }
-    ).recordType === "fileChangeProposal")).toHaveLength(2)
+    ).recordType === "fileChangeProposal")).toHaveLength(1)
 
     await session.dispose()
   } finally {
@@ -1224,7 +1260,6 @@ test("read-only history can be inspected while a writer owns the log without per
     expect(inspected.getMessages(info.id)).toEqual([message])
     expect(() => inspected.createSession(sessionInfo("session-2"))).toThrow("Session log is read-only")
     expect(() => inspected.appendMessage(userMessage("Forbidden"))).toThrow("Session log is read-only")
-    expect(() => inspected.saveFileChangeProposal(fileChangeProposal())).toThrow("Session log is read-only")
     expect(() => inspected.saveCompactionCheckpoint(compactionCheckpoint())).toThrow("Session log is read-only")
     expect(() => inspected.deleteSession(info.id)).toThrow("Session log is read-only")
     expect(inspected.listSessions()).toEqual([info])

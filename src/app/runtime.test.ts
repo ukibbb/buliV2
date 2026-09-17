@@ -21,7 +21,6 @@ import {
   WorkspaceSessionManager,
   type ISessionManager,
 } from "@/sessions"
-import { FileChangeProposalStore } from "@/agent/tools"
 
 const WORKSPACE_ROOT = "/workspace"
 const TEST_AGENT_ID = "test-agent"
@@ -97,7 +96,6 @@ function runtimeWith(
   modelOverride: IAgentModel = model,
   agents: readonly IAgentDefinition[] = TEST_AGENTS,
   manager: ISessionManager = new InMemorySessionManager(),
-  fileChangeProposalStore?: FileChangeProposalStore,
 ): BuliApplicationRuntime {
   let sessionNumber = 0
   return new BuliApplicationRuntime({
@@ -118,9 +116,6 @@ function runtimeWith(
     workspaceRoot: WORKSPACE_ROOT,
     now: () => 100 + sessionNumber,
     generateId: () => `session-${++sessionNumber}`,
-    ...(fileChangeProposalStore === undefined
-      ? {}
-      : { fileChangeProposalStore }),
   })
 }
 
@@ -257,50 +252,6 @@ test("runtime hands off file ownership and reloads history into model context", 
     for (const manager of managers) manager.dispose()
     await rm(directoryPath, { recursive: true, force: true })
   }
-})
-
-test("publishes file-change proposals through the owning session", async () => {
-  const store = new FileChangeProposalStore(() => "proposal-1")
-  const runtime = runtimeWith(model, TEST_AGENTS, undefined, store)
-  const session = createSession(runtime)
-  let notifications = 0
-  session.subscribe(() => {
-    notifications += 1
-  })
-
-  store.propose({
-    sessionId: "session-1",
-    runId: "run-1",
-    toolCallId: "call-1",
-    operation: "edit",
-    path: "src/example.ts",
-    baseContent: "before\n",
-    targetContent: "after\n",
-    diff: "--- a/src/example.ts\n+++ b/src/example.ts\n",
-  })
-
-  const proposal = session.getSnapshot().pendingFileChangeProposal
-  expect(proposal).toEqual({
-    id: "proposal-1",
-    sessionId: "session-1",
-    runId: "run-1",
-    toolCallId: "call-1",
-    operation: "edit",
-    path: "src/example.ts",
-    diff: "--- a/src/example.ts\n+++ b/src/example.ts\n",
-  })
-  expect(proposal).not.toHaveProperty("baseContent")
-  expect(proposal).not.toHaveProperty("targetContent")
-  expect(Object.isFrozen(proposal)).toBe(true)
-  expect(notifications).toBe(1)
-
-  store.resolve("session-1", "proposal-1")
-
-  expect(session.getSnapshot()).not.toHaveProperty(
-    "pendingFileChangeProposal",
-  )
-  expect(notifications).toBe(2)
-  await runtime.dispose()
 })
 
 test("application runtime queues and clears steering and follow-up", async () => {
@@ -1903,7 +1854,6 @@ test("submitPrompt rolls back a new session when its first prompt is not persist
     },
     getPresentationRevision: memory.getPresentationRevision,
     getFileChangeProposals: memory.getFileChangeProposals,
-    saveFileChangeProposal: memory.saveFileChangeProposal,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
     saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
     deleteSession: (sessionId) => {
@@ -2006,7 +1956,6 @@ test("new-session runFinished waits for rollback before exposing failure", async
     },
     getPresentationRevision: memory.getPresentationRevision,
     getFileChangeProposals: memory.getFileChangeProposals,
-    saveFileChangeProposal: memory.saveFileChangeProposal,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
     saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
     deleteSession: memory.deleteSession,
@@ -2067,94 +2016,6 @@ test("application runtime awaits abort and rejects it after disposal", async () 
   await expect(runtime.abort("session-1")).rejects.toThrow(
     "Buli runtime is disposed",
   )
-})
-
-test("runtime resolves approval only in the addressed session and dispose releases a waiter", async () => {
-  const firstApprovalStarted = Promise.withResolvers<void>()
-  const secondApprovalStarted = Promise.withResolvers<void>()
-  const decisions: string[] = []
-  let approvalCount = 0
-  const tool = defineAgentTool({
-    name: "run_command",
-    approvalKind: "command",
-    description: "Run a command",
-    inputSchema: { type: "object", additionalProperties: false },
-    async execute(_input, context) {
-      if (!context.requestApproval) throw new Error("Missing approval bridge")
-      const decisionTask = context.requestApproval({
-        kind: "command",
-        title: "Run tests",
-        explanation: "Verify the workspace",
-        command: "bun test",
-        cwd: WORKSPACE_ROOT,
-        purpose: "Check the implementation",
-        expectedOutcome: "Tests pass",
-        sideEffects: "Writes test caches",
-        timeoutSeconds: 30,
-      })
-      approvalCount += 1
-      if (approvalCount === 1) firstApprovalStarted.resolve()
-      else secondApprovalStarted.resolve()
-      const decision = await decisionTask
-      decisions.push(decision)
-      return decision
-    },
-  })
-  const continuedRuns = new Set<string>()
-  const runtime = runtimeWith({
-    async *stream(request) {
-      if (!continuedRuns.has(request.runId)) {
-        continuedRuns.add(request.runId)
-        yield {
-          type: "tool-call",
-          toolCallId: `command-${request.runId}`,
-          toolName: tool.name,
-          input: {},
-        }
-        yield { type: "finish", reason: "tool-calls" }
-        return
-      }
-      yield { type: "finish", reason: "stop" }
-    },
-  }, [{
-    id: TEST_AGENT_ID,
-    name: "Test Agent",
-    systemPrompt: "System",
-    tools: [tool],
-  }])
-  const firstView = createSession(runtime)
-  const secondView = createSession(runtime)
-  const firstRun = runtime.submitPrompt({
-    sessionId: "session-1",
-    text: "Run the tests",
-  })
-  await firstApprovalStarted.promise
-  const firstRequest = firstView.getSnapshot().pendingToolApproval
-  if (!firstRequest) throw new Error("Expected command approval")
-
-  expect(() => runtime.resolveToolApproval(
-    "session-2",
-    firstRequest.id,
-    "approve",
-  )).toThrow("No tool approval is pending")
-  expect(firstView.getSnapshot().pendingToolApproval?.id).toBe(firstRequest.id)
-  expect(secondView.getSnapshot().pendingToolApproval).toBeUndefined()
-
-  runtime.resolveToolApproval("session-1", firstRequest.id, "copy")
-  await firstRun.runFinished
-  expect(decisions).toEqual(["copy"])
-
-  const secondRun = runtime.submitPrompt({
-    sessionId: "session-1",
-    text: "Run the tests again",
-  })
-  await secondApprovalStarted.promise
-  expect(firstView.getSnapshot().pendingToolApproval).toBeDefined()
-
-  await Promise.all([runtime.dispose(), secondRun.runFinished])
-
-  expect(decisions).toEqual(["copy"])
-  expect(firstView.getSnapshot().pendingToolApproval).toBeUndefined()
 })
 
 test("treats slash input as prompts", async () => {

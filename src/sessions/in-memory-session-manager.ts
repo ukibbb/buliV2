@@ -98,7 +98,8 @@ export class InMemorySessionManager implements ISessionManager {
         return structuredClone(this.proposalsBySession.get(sessionId) ?? [])
     }
 
-    readonly saveFileChangeProposal = (
+    /** Restores a legacy record during history replay; does not write to disk. */
+    readonly restoreFileChangeProposal = (
         proposal: IFileChangeProposalRecord,
     ): void => {
         assertFileChangeProposalRecord(proposal)

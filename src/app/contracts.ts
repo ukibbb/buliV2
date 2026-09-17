@@ -1,6 +1,5 @@
 import type {
     TReasoningEffort,
-    TToolApprovalDecision,
     IUserInputContent,
 } from "@/agent"
 import type {
@@ -105,11 +104,6 @@ export interface IBuliApplication
         query: string,
         signal?: AbortSignal,
     ) => Promise<readonly IBuliPathSuggestion[]>
-    readonly resolveToolApproval: (
-        sessionId: string,
-        approvalId: string,
-        decision: TToolApprovalDecision,
-    ) => void
     readonly compactSession: (
         sessionId: string,
     ) => Promise<ICompactionCheckpoint | undefined>

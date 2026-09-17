@@ -15,15 +15,6 @@ export {
     MAX_TOOL_OUTPUT_PAGE_BYTES,
     MAX_TOOL_OUTPUT_PAGE_LINES,
 } from "@/agent/tools/read-tool-output/read-tool-output-tool"
-export {
-    FileChangeProposalStore,
-} from "@/agent/tools/patch/file-change-proposal-store"
-export {
-    createApplyFileChangesTool,
-} from "@/agent/tools/apply-file-changes/apply-file-changes-tool"
-export {
-    createRejectFileChangesTool,
-} from "@/agent/tools/reject-file-changes/reject-file-changes-tool"
 export { FindTool, createFindTool } from "@/agent/tools/find/find-tool"
 export { GrepTool, createGrepTool } from "@/agent/tools/grep/grep-tool"
 export { ReadTool, createReadTool } from "@/agent/tools/read/read-tool"

@@ -1,4 +1,4 @@
-import { memo, useEffect } from "react"
+import { memo } from "react"
 
 import { ChatStatus } from "@/ui/chat/ChatStatus"
 import { CommandMenu } from "@/ui/chat/CommandMenu"
@@ -10,7 +10,6 @@ import {
 } from "@/ui/context/ui-controller-context"
 import type {
     TAgentRunEndReason,
-    TToolApprovalRequest,
     IUserMessage,
 } from "@/agent"
 import type { IContextUsage } from "@/sessions"
@@ -23,7 +22,6 @@ interface IChatProps {
     readonly contextUsage?: IContextUsage | undefined
     readonly pendingSteeringMessages?: readonly IUserMessage[]
     readonly pendingFollowUpMessages?: readonly IUserMessage[]
-    readonly pendingToolApproval?: TToolApprovalRequest
     readonly lastRunReason?: TAgentRunEndReason
     readonly errorMessage?: string
 }
@@ -45,18 +43,13 @@ function ChatView(props: IChatProps) {
     const catalogMessage = catalog?.message
         ?? (catalog?.status === "loading" ? "Loading available account models..." : undefined)
 
-    useEffect(() => {
-        if (props.pendingToolApproval) controller.dismissMenu()
-    }, [controller, props.pendingToolApproval])
-
-    const menu = props.pendingToolApproval ? null : ui.menu
+    const menu = ui.menu
 
     return (
         <box width="100%" flexShrink={0} flexDirection="column">
             <text>{controller.workspaceRoot}</text>
             <PromptEditor
                 value={controller.getInputDraft()}
-                blocked={props.pendingToolApproval !== undefined}
                 menuOpen={menu !== null}
                 {...(clipboard?.read
                     ? { clipboard: { read: clipboard.read } }
@@ -83,7 +76,6 @@ function ChatView(props: IChatProps) {
                 contextUsage={props.contextUsage}
                 pendingSteeringMessages={props.pendingSteeringMessages}
                 pendingFollowUpMessages={props.pendingFollowUpMessages}
-                pendingToolApproval={props.pendingToolApproval}
                 lastRunReason={props.lastRunReason}
                 errorMessage={props.errorMessage}
                 inputError={ui.inputError}
@@ -101,7 +93,6 @@ export const Chat = memo(ChatView, (previous, next) => (
     previous.isRunning === next.isRunning
     && previous.isCompacting === next.isCompacting
     && previous.contextUsage === next.contextUsage
-    && previous.pendingToolApproval === next.pendingToolApproval
     && previous.lastRunReason === next.lastRunReason
     && previous.errorMessage === next.errorMessage
     && sameMessageQueue(

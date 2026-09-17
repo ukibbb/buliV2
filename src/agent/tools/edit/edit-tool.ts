@@ -4,14 +4,13 @@ import {
     readFile,
     writeFile,
 } from "node:fs/promises"
-import { createTwoFilesPatch } from "diff"
 import { Type, type Static } from "typebox"
 
 import { defineAgentTool, type IAgentTool } from "@/agent/tool"
 import {
     withFileMutationQueue,
 } from "@/agent/tools/shared/file-mutation"
-import type { FileChangeProposalStore } from "@/agent/tools/patch/file-change-proposal-store"
+import { createFileWriteResult } from "@/agent/tools/shared/file-write-result"
 import { resolveToCwd } from "@/agent/tools/shared/path-utils"
 
 // Ported from Pi 6c87d9a026677b601e8278030dcf1ad97fe0bd86 (c) 2025 Mario Zechner, MIT License.
@@ -115,13 +114,11 @@ export function prepareEditArguments(input: unknown): EditToolInput {
 /** Creates Pi's direct, exact-text edit tool for one working directory. */
 export function createEditTool(
     cwd: string,
-    proposalStore?: FileChangeProposalStore,
 ): IAgentTool<typeof EDIT_INPUT_SCHEMA, "edit"> {
     return defineAgentTool({
         name: "edit",
-        description: proposalStore
-            ? "Prepare an immutable proposal to edit one file using exact text replacement. This does not modify the file. Every edits[].oldText must match a unique, non-overlapping region of the original file."
-            : "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+        description:
+            "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
         inputSchema: EDIT_INPUT_SCHEMA,
         prepareArguments: prepareEditArguments,
         execute: async (input, context) => {
@@ -166,31 +163,22 @@ export function createEditTool(
 
                 const finalContent = bom
                     + restoreLineEndings(newContent, originalEnding)
-                if (proposalStore) {
-                    const proposal = proposalStore.propose({
-                        sessionId: context.sessionId,
-                        runId: context.runId,
-                        toolCallId: context.toolCallId,
-                        operation: "edit",
-                        path,
-                        baseContent: rawContent,
-                        targetContent: finalContent,
-                        diff: createTwoFilesPatch(
-                            `a/${path}`,
-                            `b/${path}`,
-                            rawContent,
-                            finalContent,
-                            "",
-                            "",
-                        ),
-                    })
-                    return `Proposed ${edits.length} replacement(s) in ${path}. Proposal ID: ${proposal.id}. Wait for the user's next message before applying or rejecting it.`
+                try {
+                    await writeFile(absolutePath, finalContent, "utf-8")
+                } catch (error) {
+                    throw Object.assign(
+                        new Error(`Could not complete writing file: ${path}.`, { cause: error }),
+                        { sideEffectsUnknown: true },
+                    )
                 }
 
-                await writeFile(absolutePath, finalContent, "utf-8")
-                throwIfAborted()
-
-                return `Successfully replaced ${edits.length} block(s) in ${path}.`
+                return createFileWriteResult({
+                    path,
+                    before: rawContent,
+                    after: finalContent,
+                    content: `Successfully replaced ${edits.length} block(s) in ${path}.`,
+                    signal: context.signal,
+                })
             })
         },
     })

@@ -28,10 +28,8 @@ import {
     type IBuliUiSnapshot,
     type TBuliRoute,
 } from "@/ui/controller/state"
-import { BuliToolApproval } from "@/ui/controller/tool-approval"
 import type { TAuthenticationMode } from "@/ui/authentication"
 import type {
-    TToolApprovalDecision,
     TUserInput,
     IUserInputContent,
 } from "@/agent"
@@ -63,7 +61,6 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     private readonly commandMenu: BuliCommandMenu
     private readonly pathMenu: BuliPathMenu
     private readonly inputSubmission: BuliInputSubmission
-    private readonly toolApproval: BuliToolApproval
     private inputDraft: IUserInputContent = { text: "" }
     private navigationPending = false
 
@@ -90,11 +87,6 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
             activeSessionId: this.activeSessionId,
             executeCommand: this.commandMenu.executeCommand,
             consumeInput: this.consumeInputDraft,
-        })
-        this.toolApproval = new BuliToolApproval({
-            application: this.application,
-            store: this.store,
-            activeSessionId: this.activeSessionId,
         })
     }
 
@@ -168,14 +160,6 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
             typeof input === "string" ? { text: input } : input,
             delivery,
         )
-    }
-
-    readonly resolveToolApproval = (
-        approvalId: string,
-        decision: TToolApprovalDecision,
-        beforeResolve?: () => boolean,
-    ): void => {
-        this.toolApproval.resolve(approvalId, decision, beforeResolve)
     }
 
     readonly setExternalUiError = (error: unknown): void => {

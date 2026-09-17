@@ -35,7 +35,6 @@ import {
 } from "@/sessions"
 import {
     EphemeralToolOutputStore,
-    FileChangeProposalStore,
 } from "@/agent/tools"
 
 function defaultToolExecutablePaths() {
@@ -122,9 +121,6 @@ export async function createBuliApplication(
         manager = options.manager ?? new WorkspaceSessionManager({
             directoryPath: defaultSessionDirectoryPath(workspaceRoot),
         })
-        const fileChangeProposalStore = new FileChangeProposalStore({
-            saveProposal: manager.saveFileChangeProposal,
-        })
         const model: IAgentModel = options.model ?? new OpenAiAgentModel({
             auth: auth.openAi,
         })
@@ -177,7 +173,6 @@ export async function createBuliApplication(
             selection,
             searchPaths: defaultPathSearcher(workspaceRoot),
             toolOutputStore,
-            fileChangeProposalStore,
             ...(options.model === undefined
                 ? {
                     preferredModelIds: [`${DEFAULT_OPENAI_MODEL_ID}::fast`, DEFAULT_OPENAI_MODEL_ID],

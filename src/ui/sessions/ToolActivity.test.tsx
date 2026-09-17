@@ -43,6 +43,29 @@ function toolResult(overrides: Partial<IToolResultMessage>): IToolResultMessage 
     }
 }
 
+test.each([false, true])("renders an OpenTUI diff even when isError=%s", (isError) => {
+    const diff = "--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-before\n+after\n"
+    const node = ToolActivityLine({ result: toolResult({ diff, isError }) })
+    if (!isValidElement<{ children: ReactNode[] }>(node)) {
+        throw new Error("Expected tool activity element")
+    }
+    expect(node.type).toBe("box")
+    const renderedDiff = node.props.children[1]
+    if (!isValidElement<{ diff: string; view: string; showLineNumbers: boolean }>(renderedDiff)) {
+        throw new Error("Expected diff element")
+    }
+    expect(renderedDiff.type).toBe("diff")
+    expect(renderedDiff.props).toMatchObject({ diff, view: "unified", showLineNumbers: true })
+})
+
+test("keeps the existing text-only view without a nonempty diff", () => {
+    for (const result of [toolResult({}), toolResult({ diff: "" })]) {
+        const node = ToolActivityLine({ result })
+        if (!isValidElement(node)) throw new Error("Expected activity element")
+        expect(node.type).toBe("text")
+    }
+})
+
 // Small fixtures only: pin the shipped escape-before-code-point-truncation order.
 // Large-work tests below build bounded expectations instead of serializing fixtures.
 function shippedTarget(value: string, maximum = 96): string {

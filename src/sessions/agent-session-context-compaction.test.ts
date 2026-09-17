@@ -842,7 +842,6 @@ test("AgentSession aborts preflight compaction without saving a checkpoint", asy
     appendMessage: memory.appendMessage,
     getPresentationRevision: memory.getPresentationRevision,
     getFileChangeProposals: memory.getFileChangeProposals,
-    saveFileChangeProposal: memory.saveFileChangeProposal,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
     saveCompactionCheckpoint: (checkpoint) => {
       checkpointSaves += 1

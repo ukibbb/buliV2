@@ -9,8 +9,6 @@ export type {
 } from "@/agent/definition"
 export { runAgentLoop } from "@/agent/engine/agent-loop"
 export type {
-    IAgentApprovalContext,
-    TAgentApprovalHandler,
     IAgentContext,
     TAgentEventSink,
     IAgentInputQueue,
@@ -26,7 +24,6 @@ export type {
 export type {
     IFileChangeProposal,
     IFileChangeProposalRecord,
-    IFileChangeProposalSource,
     TFileChangeOperation,
     TFileChangeProposalStatus,
 } from "@/agent/file-change-proposal"
@@ -85,7 +82,6 @@ export type {
     IAgentToolDescriptor,
     IAgentToolResult,
     IRuntimeAgentTool,
-    TToolApprovalKind,
     TToolExecutionOutcome,
 } from "@/agent/tool"
 export { TOOL_OUTPUT_PARTS } from "@/agent/tool-output-store"
@@ -102,10 +98,3 @@ export type {
     TToolOutputEncoding,
     TToolOutputPart,
 } from "@/agent/tool-output-store"
-export type {
-    ICommandToolApprovalDraft,
-    ICommandToolApprovalRequest,
-    TToolApprovalDecision,
-    TToolApprovalDraft,
-    TToolApprovalRequest,
-} from "@/agent/tool-approval"

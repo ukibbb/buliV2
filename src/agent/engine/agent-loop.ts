@@ -19,10 +19,6 @@ import type {
 } from "@/agent/state"
 import type { IRuntimeAgentTool } from "@/agent/tool"
 import type { IToolOutputStore } from "@/agent/tool-output-store"
-import type {
-    TToolApprovalDecision,
-    TToolApprovalDraft,
-} from "@/agent/tool-approval"
 import {
     createToolIndex,
     executeToolCallsSequentially,
@@ -33,30 +29,6 @@ const TRUNCATED_TOOL_CALL_MESSAGE =
     "Tool call was not executed because the model response reached its output token limit and its arguments may be incomplete. Re-issue the tool call with complete arguments."
 
 export type TAgentEventSink = (event: TAgentEvent) => void | Promise<void>
-
-export interface IAgentApprovalContext {
-    readonly sessionId: string
-    readonly runId: string
-    readonly toolCallId: string
-    readonly signal: AbortSignal
-}
-
-/**
- * Bridges a tool's approval request to Agent state and the UI.
- *
- * No production tool currently uses this bridge; the end-to-end infrastructure
- * is implemented and covered by tests. To enable approval for a tool:
- * 1. Set its `approvalKind` to a kind declared in `tool-approval.ts`.
- * 2. Call and await `context.requestApproval(draft)` inside `tool.execute()`.
- * 3. Handle every returned decision before performing the protected action.
- * 4. Present `tool_approval_requested` in the UI and pass the user's decision
- *    through `BuliRuntime.resolveToolApproval()`.
- * 5. Add focused tool, Agent, session, runtime, and UI tests for the full flow.
- */
-export type TAgentApprovalHandler = (
-    draft: TToolApprovalDraft,
-    context: IAgentApprovalContext,
-) => Promise<TToolApprovalDecision>
 
 export interface IAgentInputQueue {
     hasSteering(): boolean
@@ -84,7 +56,6 @@ export interface IAgentLoopConfig {
     readonly reasoningEffort: TReasoningEffort
     readonly signal: AbortSignal
     readonly emit: TAgentEventSink
-    readonly requestApproval?: TAgentApprovalHandler
     readonly inputQueue?: IAgentInputQueue
     readonly now?: () => number
     readonly generateId?: () => string
@@ -222,9 +193,6 @@ export async function runAgentLoop(
                 selectedPathReferences,
                 signal: config.signal,
                 emit: config.emit,
-                ...(config.requestApproval === undefined
-                    ? {}
-                    : { requestApproval: config.requestApproval }),
                 now,
                 generateId,
                 ...(config.toolOutputStore === undefined

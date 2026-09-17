@@ -1,16 +1,10 @@
 import type {
-    TToolApprovalDecision,
-    TToolApprovalDraft,
-} from "@/agent/tool-approval"
-import type {
     TAgentMessage,
     IUserPathReference,
 } from "@/agent/messages"
 import type { IModelProfile } from "@/agent/model-values"
 import type { Static, TSchema } from "typebox"
 import { Value } from "typebox/value"
-
-export type TToolApprovalKind = TToolApprovalDraft["kind"]
 
 /** Final outcome of a local tool execution stored in conversation history. */
 export type TToolExecutionOutcome =
@@ -42,19 +36,16 @@ export interface IAgentToolContext {
     readonly selectedPathReferences?: readonly IUserPathReference[]
     readonly signal: AbortSignal
     readonly reportProgress?: (progress: string) => void
-    readonly requestApproval?: (
-        draft: TToolApprovalDraft,
-    ) => Promise<TToolApprovalDecision>
 }
 
 export interface IAgentToolResult {
     readonly content: string
     readonly outcome?: TToolExecutionOutcome
     readonly summary?: string
+    readonly diff?: string
 }
 
 interface IAgentToolOptions {
-    readonly approvalKind?: TToolApprovalKind
     readonly prepareArguments?: (input: unknown) => unknown
     readonly selfTruncatesOutput?: boolean
     readonly requiresConversationContext?: boolean

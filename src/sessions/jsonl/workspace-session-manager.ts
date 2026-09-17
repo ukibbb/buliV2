@@ -123,12 +123,6 @@ export class WorkspaceSessionManager implements ISessionManager {
         return this.requireOpenSession(sessionId).getFileChangeProposals(sessionId)
     }
 
-    readonly saveFileChangeProposal = (proposal: IFileChangeProposalRecord): void => {
-        this.requireOpenSession(proposal.sessionId).saveFileChangeProposal(proposal)
-        this.stagedSessionIds.delete(proposal.sessionId)
-        this.advancePresentationRevision(proposal.sessionId)
-    }
-
     readonly getCompactionCheckpoint = (sessionId: string): ICompactionCheckpoint | undefined => {
         return this.requireOpenSession(sessionId).getCompactionCheckpoint(sessionId)
     }

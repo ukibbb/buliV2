@@ -2,7 +2,8 @@ import { expect, test } from "bun:test"
 import { isValidElement, type ReactNode } from "react"
 
 import type { IToolResultMessage } from "@/agent"
-import { ToolActivityLine } from "@/ui/sessions/ToolActivity"
+import { FileChangeDiff } from "@/ui/sessions/FileChangeDiff"
+import { ToolCallDisplay } from "@/ui/sessions/ToolCallDisplay"
 import { glyphs } from "@/ui/terminal/theme"
 
 // The component has no hooks. Reading its intrinsic JSX keeps work counters scoped
@@ -21,7 +22,7 @@ function activity(
     input: Record<string, unknown>,
     result?: IToolResultMessage,
 ): string {
-    return textContent(ToolActivityLine({
+    return textContent(ToolCallDisplay({
         call: { type: "toolCall", toolCallId: "call", toolName, input },
         phase: "running",
         ...(result === undefined ? {} : { result }),
@@ -45,7 +46,7 @@ function toolResult(overrides: Partial<IToolResultMessage>): IToolResultMessage 
 
 test.each([false, true])("renders an OpenTUI diff even when isError=%s", (isError) => {
     const diff = "--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-before\n+after\n"
-    const node = ToolActivityLine({ result: toolResult({ diff, isError }) })
+    const node = ToolCallDisplay({ result: toolResult({ diff, isError }) })
     if (!isValidElement<{ children: ReactNode[] }>(node)) {
         throw new Error("Expected tool activity element")
     }
@@ -54,13 +55,13 @@ test.each([false, true])("renders an OpenTUI diff even when isError=%s", (isErro
     if (!isValidElement<{ diff: string; view: string; showLineNumbers: boolean }>(renderedDiff)) {
         throw new Error("Expected diff element")
     }
-    expect(renderedDiff.type).toBe("diff")
-    expect(renderedDiff.props).toMatchObject({ diff, view: "unified", showLineNumbers: true })
+    expect(renderedDiff.type).toBe(FileChangeDiff)
+    expect(renderedDiff.props).toMatchObject({ diff })
 })
 
 test("keeps the existing text-only view without a nonempty diff", () => {
     for (const result of [toolResult({}), toolResult({ diff: "" })]) {
-        const node = ToolActivityLine({ result })
+        const node = ToolCallDisplay({ result })
         if (!isValidElement(node)) throw new Error("Expected activity element")
         expect(node.type).toBe("text")
     }

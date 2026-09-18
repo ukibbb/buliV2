@@ -4,7 +4,8 @@ import type {
     IToolCallContent,
     IToolResultMessage,
 } from "@/agent"
-import { glyphs, syntax, theme } from "@/ui/terminal/theme"
+import { FileChangeDiff } from "@/ui/sessions/FileChangeDiff"
+import { glyphs, theme } from "@/ui/terminal/theme"
 
 const TOOL_DETAIL_MAX_CHARACTERS = 160
 const TOOL_NAME_MAX_CHARACTERS = 40
@@ -13,14 +14,14 @@ const TOOL_TARGET_MAX_CHARACTERS = 96
 // Persisted sessions can still contain calls to the removed handoff tool.
 const LEGACY_PATCH_HANDOFF_TOOL_NAME = "request_patch_handoff"
 
-interface IToolActivityLineProps {
+interface IToolCallDisplayProps {
     readonly call?: IToolCallContent
     readonly result?: IToolResultMessage
     readonly phase?: "pending" | "running"
 }
 
-/** Presents one evolving line for a tool call and its optional result. */
-export function ToolActivityLine(props: IToolActivityLineProps): ReactNode {
+/** Displays a tool call, its current state, and its optional result or diff. */
+export function ToolCallDisplay(props: IToolCallDisplayProps): ReactNode {
     if (!props.call && !props.result) return null
     const toolName = props.call?.toolName ?? props.result?.toolName
     if (!toolName || toolName === LEGACY_PATCH_HANDOFF_TOOL_NAME) return null
@@ -67,15 +68,7 @@ export function ToolActivityLine(props: IToolActivityLineProps): ReactNode {
 
     return <box width="100%" flexDirection="column">
         {line}
-        <diff
-            diff={props.result.diff}
-            width="100%"
-            view="unified"
-            fg={theme.text}
-            syntaxStyle={syntax}
-            wrapMode="word"
-            showLineNumbers
-        />
+        <FileChangeDiff diff={props.result.diff} />
     </box>
 }
 
@@ -197,7 +190,7 @@ interface IToolActivityState {
 
 function activityState(
     result: IToolResultMessage | undefined,
-    phase: IToolActivityLineProps["phase"],
+    phase: IToolCallDisplayProps["phase"],
 ): IToolActivityState {
     if (!result) {
         return phase !== undefined

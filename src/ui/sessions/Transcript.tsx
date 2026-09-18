@@ -1,6 +1,7 @@
 import {
     createMarkdownCodeBlockRenderer,
     DiffRenderable,
+    TextRenderable,
 } from "@opentui/core"
 import { useRenderer } from "@opentui/react"
 import { useMemo, type ReactNode } from "react"
@@ -13,9 +14,10 @@ import type {
     IToolResultMessage,
 } from "@/agent"
 import type { ICompactionCheckpoint } from "@/sessions"
+import { colorDiffText } from "@/ui/sessions/colored-diff"
 import { normalizeMarkdownDiff } from "@/ui/sessions/markdown-diff"
-import { ProposedChanges } from "@/ui/sessions/ProposedChanges"
-import { ToolActivityLine } from "@/ui/sessions/ToolActivity"
+import { FileChangeDiff } from "@/ui/sessions/FileChangeDiff"
+import { ToolCallDisplay } from "@/ui/sessions/ToolCallDisplay"
 import { syntax, theme } from "@/ui/terminal/theme"
 
 const MARKDOWN_TABLE_OPTIONS = {
@@ -54,12 +56,16 @@ function MarkdownBody(props: {
     const renderNode = useMemo(
         () => createMarkdownCodeBlockRenderer({
             diff: (token, context) => {
-                if (props.streaming && !isClosedFencedBlock(token.raw)) {
-                    return context.defaultRender()
+                const diff = props.streaming && !isClosedFencedBlock(token.raw)
+                    ? undefined
+                    : normalizeMarkdownDiff(token.text)
+                if (!diff) {
+                    return new TextRenderable(renderer, {
+                        content: colorDiffText(token.text),
+                        width: "100%",
+                        wrapMode: "word",
+                    })
                 }
-
-                const diff = normalizeMarkdownDiff(token.text)
-                if (!diff) return context.defaultRender()
 
                 return new DiffRenderable(renderer, {
                     diff,
@@ -142,7 +148,7 @@ function AssistantCard(props: {
                             ? "running" as const
                             : "pending" as const
                         : undefined
-                    return <ToolActivityLine
+                    return <ToolCallDisplay
                         key={content.toolCallId}
                         call={content}
                         {...(result === undefined ? {} : { result })}
@@ -181,9 +187,10 @@ export function Transcript(props: ITranscriptProps): ReactNode {
                 projection,
                 runningToolCallIds,
             )
-            : <ProposedChanges
+            : <FileChangeDiff
                 key={item.proposal.id}
-                proposal={item.proposal}
+                diff={item.proposal.diff}
+                path={item.proposal.path}
             />),
         [
             props.messages,
@@ -312,7 +319,7 @@ function renderDurableMessage(
         case "toolResult":
             return projection.matchedToolResultMessageIds.has(message.id)
                 ? null
-                : <ToolActivityLine key={message.id} result={message} />
+                : <ToolCallDisplay key={message.id} result={message} />
     }
 }
 

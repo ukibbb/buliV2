@@ -1076,7 +1076,10 @@ test("replaces a completed streaming diff block with the diff viewer", async () 
         expect(diffRenderables(setup.renderer.root)).toHaveLength(0)
         expect(codeRenderables(setup.renderer.root).some(
             (renderable) => renderable.filetype === "diff",
-        )).toBe(true)
+        )).toBe(false)
+        const spans = setup.captureSpans().lines.flatMap((line) => line.spans)
+        expect(spans.find((span) => span.text.includes("-const answer = 1"))?.fg.equals(RGBA.fromHex(theme.red))).toBe(true)
+        expect(spans.find((span) => span.text.includes("+const answer = 2"))?.fg.equals(RGBA.fromHex(theme.green))).toBe(true)
 
         act(() => {
             finishDiff?.()
@@ -1310,7 +1313,7 @@ test.each(["proposal", "markdown"] as const)(
     },
 )
 
-test("falls back to code for a structurally malformed completed diff", async () => {
+test("colors text for a structurally malformed completed diff", async () => {
     const patch = [
         "--- a/example.ts",
         "+++ b/example.ts",
@@ -1338,7 +1341,10 @@ test("falls back to code for a structurally malformed completed diff", async () 
         expect(diffRenderables(setup.renderer.root)).toHaveLength(0)
         expect(codeRenderables(setup.renderer.root).some(
             (renderable) => renderable.filetype === "diff",
-        )).toBe(true)
+        )).toBe(false)
+        const spans = setup.captureSpans().lines.flatMap((line) => line.spans)
+        expect(spans.find((span) => span.text.includes("@@ -1 +1 @@"))?.fg.equals(RGBA.fromHex(theme.amber))).toBe(true)
+        expect(setup.captureCharFrame()).toContain("line without a diff prefix")
         expect(setup.captureCharFrame()).not.toContain("Error parsing diff")
     } finally {
         act(() => {
@@ -1688,11 +1694,12 @@ test("styles rich Markdown and renders code without line numbers", async () => {
             "typescript",
             "python",
             "bash",
-            "diff",
         ])
         expect(fencedCode.every((renderable) => renderable.syntaxStyle === syntax))
             .toBe(true)
 
+        expect(spans.find((span) => span.text.includes("-before"))?.fg.equals(RGBA.fromHex(theme.red))).toBe(true)
+        expect(spans.find((span) => span.text.includes("+after"))?.fg.equals(RGBA.fromHex(theme.green))).toBe(true)
         expect(lineNumberRenderables(setup.renderer.root)).toHaveLength(0)
     } finally {
         act(() => {

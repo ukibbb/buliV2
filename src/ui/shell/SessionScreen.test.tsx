@@ -1,5 +1,6 @@
 import {
   type CliRenderer,
+  CodeRenderable,
   DiffRenderable,
   type KeyEvent,
   MarkdownRenderable,
@@ -459,6 +460,100 @@ test("shows proposed changes in transcript order while keeping the prompt active
   }
 })
 
+test("preserves Unicode diff text and colors when resizing and scrolling the session", async () => {
+  const wideWidth = 80
+  const narrowWidth = 36
+  const terminalHeight = 32
+  const changedLines = 100
+  const unicodeText = "zażółć 🐍 日本語 abcdefghijklmnopqrstuvwxyz words wrapping on a narrow screen"
+  const removedLine = `const value0 = "${unicodeText}";`
+  const addedLine = `const value0 = "${unicodeText} changed";`
+  const laterMessage = "Message after the Unicode diff"
+  const harness = createSessionHarness(sessionSnapshot({
+    messages: [{ ...transcriptMessages(1)[0]!, content: laterMessage, createdAt: 2 }],
+    fileChangeProposals: [{
+      id: "unicode-proposal",
+      sessionId: SESSION_ID,
+      runId: "run-history",
+      toolCallId: "edit-unicode",
+      operation: "edit",
+      path: "example.ts",
+      diff: [
+        "--- a/example.ts",
+        "+++ b/example.ts",
+        `@@ -1,${changedLines} +1,${changedLines} @@`,
+        ...Array.from({ length: changedLines }, (_, index) => [
+          `-const value${index} = "${unicodeText}";`,
+          `+const value${index} = "${unicodeText} changed";`,
+        ]).flat(),
+        "",
+      ].join("\n"),
+      status: "applied",
+      createdAt: 1,
+    }],
+  }))
+  const setup = await testRender(sessionElement(harness), {
+    width: wideWidth,
+    height: terminalHeight,
+  })
+
+  const render = async () => {
+    await act(async () => {
+      await setup.renderOnce()
+      await Promise.all(codeRenderables(setup.renderer.root).map(
+        (code) => code.highlightingDone,
+      ))
+      await setup.renderOnce()
+    })
+  }
+
+  try {
+    await render()
+    const transcript = scrollBoxRenderable(setup.renderer.root)
+    const diff = findDiffRenderable(transcript)
+    if (!diff) throw new Error("Expected the Unicode file diff")
+    expect(diff.filetype).toBe("typescript")
+    act(() => transcript.scrollTo(0))
+    await render()
+    const wideFrame = setup.captureCharFrame()
+    const wideSpans = setup.captureSpans()
+
+    for (const width of [wideWidth, narrowWidth, wideWidth]) {
+      act(() => setup.resize(width, terminalHeight))
+      await render()
+      act(() => transcript.scrollTo(0))
+      await render()
+      const frame = setup.captureCharFrame()
+      const spans = setup.captureSpans()
+      for (const [line, background] of [
+        [removedLine, diff.removedBg],
+        [addedLine, diff.addedBg],
+      ] as const) {
+        const coloredText = spans.lines.flatMap((row) => row.spans)
+          .filter((span) => span.bg.equals(background))
+          .map((span) => span.text).join("")
+        expect(coloredText.replace(/\s/g, "")).toContain(line.replace(/\s/g, ""))
+      }
+      expect(codeRenderables(diff).some((code) => code.plainText.includes(removedLine))).toBe(true)
+      if (width === wideWidth) {
+        expect(frame).toBe(wideFrame)
+        expect(spans).toEqual(wideSpans)
+      }
+
+      act(() => transcript.scrollTo(maximumScrollTop(transcript)))
+      await render()
+      expect(setup.captureCharFrame().replace(/\s/g, "")).toContain(laterMessage.replace(/\s/g, ""))
+      act(() => transcript.scrollTo(0))
+      await render()
+      expect(setup.captureCharFrame()).toBe(frame)
+      expect(setup.captureSpans()).toEqual(spans)
+    }
+  } finally {
+    harness.controller.dispose()
+    act(() => setup.renderer.destroy())
+  }
+})
+
 test("notifies only for long runs completed while the terminal is blurred", async () => {
   let currentTime = 0
   const harness = createSessionHarness(sessionSnapshot({
@@ -604,6 +699,13 @@ function markdownRenderables(root: Renderable): MarkdownRenderable[] {
   return root.getChildren().flatMap((child) => [
     ...(child instanceof MarkdownRenderable ? [child] : []),
     ...markdownRenderables(child),
+  ])
+}
+
+function codeRenderables(root: Renderable): CodeRenderable[] {
+  return root.getChildren().flatMap((child) => [
+    ...(child instanceof CodeRenderable ? [child] : []),
+    ...codeRenderables(child),
   ])
 }
 

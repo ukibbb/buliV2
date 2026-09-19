@@ -1,5 +1,6 @@
 import {
     createContext,
+    useCallback,
     useContext,
     useSyncExternalStore,
     type ReactNode,
@@ -30,6 +31,19 @@ export function useBuliUiController(): BuliUiController {
         throw new Error("Buli UI controller not available")
     }
     return controller
+}
+
+/** Subscribes to navigation without rerendering for draft or menu changes. */
+export function useBuliNavigationSnapshot(): Pick<IBuliUiSnapshot, "route" | "authenticationMode"> {
+    const controller = useBuliUiController()
+    const getRoute = useCallback(() => controller.getSnapshot().route, [controller])
+    const getAuthenticationMode = useCallback(
+        () => controller.getSnapshot().authenticationMode,
+        [controller],
+    )
+    const route = useSyncExternalStore(controller.subscribe, getRoute)
+    const authenticationMode = useSyncExternalStore(controller.subscribe, getAuthenticationMode)
+    return { route, authenticationMode }
 }
 
 /** Subscribes a component to application UI state. */

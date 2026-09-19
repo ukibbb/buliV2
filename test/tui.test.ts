@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -29,7 +29,11 @@ import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
 import { BuliTui } from "@/ui/shell/BuliTui"
 import { COMPLETION_NOTIFICATION_MIN_DURATION_MS } from "@/ui/shell/SessionCompletionNotifier"
 import { BuliUiController } from "@/ui/ui-controller"
-import { BuliUiControllerProvider } from "@/ui/context/ui-controller-context"
+import {
+  BuliUiControllerProvider,
+  useBuliNavigationSnapshot,
+  useBuliUiSnapshot,
+} from "@/ui/context/ui-controller-context"
 import { glyphs } from "@/ui/terminal/theme"
 
 const WORKSPACE_ROOT = "/workspace"
@@ -208,6 +212,138 @@ function buliElementWithController(
     }),
   })
 }
+
+test("navigation subscribers ignore draft and menu updates but observe route and authentication changes", async () => {
+  const { application } = fakeApplication()
+  const controller = new BuliUiController({ application })
+  const navigationRenders: ReturnType<typeof useBuliNavigationSnapshot>[] = []
+  const draftText = "Draft zażółć 🐍 日本語"
+  const firstSessionRoute = { type: "session", sessionId: "first-session" } as const
+  const secondSessionRoute = { type: "session", sessionId: "second-session" } as const
+
+  function NavigationProbe() {
+    navigationRenders.push(useBuliNavigationSnapshot())
+    return null
+  }
+
+  function DraftProbe() {
+    const ui = useBuliUiSnapshot()
+    return createElement("text", null, ui.input)
+  }
+
+  const setup = await testRender(
+    createElement(BuliUiControllerProvider, {
+      controller,
+      children: createElement(
+        "box",
+        null,
+        createElement(NavigationProbe),
+        createElement(DraftProbe),
+      ),
+    }),
+    { width: 80, height: 24 },
+  )
+  const updateAndRender = async (update: () => void | Promise<void>) => {
+    await act(async () => { await update() })
+    await act(async () => { await setup.renderOnce() })
+  }
+
+  try {
+    await act(async () => { await setup.renderOnce() })
+    expect(navigationRenders.at(-1)).toEqual({
+      route: { type: "home" },
+      authenticationMode: null,
+    })
+    const initialRenderCount = navigationRenders.length
+
+    await updateAndRender(() => controller.updateInput(draftText))
+    expect(setup.captureCharFrame()).toContain(draftText)
+    expect(navigationRenders).toHaveLength(initialRenderCount)
+
+    await updateAndRender(() => controller.updateInput("/"))
+    const menu = controller.getSnapshot().menu
+    expect(menu?.mode).toBe("commands")
+    expect(navigationRenders).toHaveLength(initialRenderCount)
+
+    await updateAndRender(() => controller.moveMenuSelection(1))
+    expect(controller.getSnapshot().menu?.selectedIndex).not.toBe(menu?.selectedIndex)
+    expect(navigationRenders).toHaveLength(initialRenderCount)
+
+    await updateAndRender(() => controller.updateInput(draftText))
+    expect(setup.captureCharFrame()).toContain(draftText)
+    expect(navigationRenders).toHaveLength(initialRenderCount)
+
+    const transitions = [
+      {
+        update: () => controller.activateSession(firstSessionRoute.sessionId),
+        expected: { route: firstSessionRoute, authenticationMode: null },
+      },
+      {
+        update: () => controller.activateSession(secondSessionRoute.sessionId),
+        expected: { route: secondSessionRoute, authenticationMode: null },
+      },
+      {
+        update: () => controller.openAuthentication("login"),
+        expected: { route: secondSessionRoute, authenticationMode: "login" },
+      },
+      {
+        update: () => controller.openAuthentication("logout"),
+        expected: { route: secondSessionRoute, authenticationMode: "logout" },
+      },
+      {
+        update: () => controller.closeAuthentication(),
+        expected: { route: secondSessionRoute, authenticationMode: null },
+      },
+      {
+        update: () => controller.goHome(),
+        expected: { route: { type: "home" }, authenticationMode: null },
+      },
+    ] as const
+    for (const { update, expected } of transitions) {
+      const previousRenderCount = navigationRenders.length
+      await updateAndRender(update)
+      expect(navigationRenders.length).toBeGreaterThan(previousRenderCount)
+      expect(navigationRenders.at(-1)).toEqual(expected)
+      expect(setup.captureCharFrame()).toContain(draftText)
+    }
+  } finally {
+    act(() => { setup.renderer.destroy() })
+    controller.dispose()
+  }
+})
+
+test("typing through BuliTui does not reread unchanged session state", async () => {
+  const { application } = fakeApplication()
+  const controller = new BuliUiController({ application })
+  const sessionId = "typing-session"
+  await controller.activateSession(sessionId)
+  const setup = await testRender(buliElementWithController(application, controller), {
+    width: 80, height: 24,
+  })
+  const snapshotReads = spyOn(application.openSession(sessionId), "getSnapshot")
+
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+      await setup.waitForVisualIdle()
+    })
+    const textarea = textareaRenderable(setup.renderer.root)
+    snapshotReads.mockClear()
+
+    await act(async () => { setup.mockInput.pressKey("x") })
+    await act(async () => { await setup.renderOnce() })
+
+    expect(controller.getSnapshot().input).toBe("x")
+    expect(textarea.plainText).toBe("x")
+    expect(textareaRenderable(setup.renderer.root)).toBe(textarea)
+    expect(setup.captureCharFrame()).toContain("Start conversation")
+    expect(snapshotReads).not.toHaveBeenCalled()
+  } finally {
+    act(() => { setup.renderer.destroy() })
+    snapshotReads.mockRestore()
+    controller.dispose()
+  }
+})
 
 test("provides the runtime above Buli", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "buli-tui-"))

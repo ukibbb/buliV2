@@ -5,7 +5,7 @@ import {
 } from "@/ui/context/application-context"
 import {
     useBuliUiController,
-    useBuliUiSnapshot,
+    useBuliNavigationSnapshot,
 } from "@/ui/context/ui-controller-context"
 import { buliKeyboardShortcuts } from "@/ui/keyboard-shortcuts"
 import { Home } from "@/ui/shell/Home"
@@ -25,7 +25,7 @@ interface IBuliTuiProps {
 export function BuliTui(props: IBuliTuiProps) {
     const controller = useBuliUiController()
     const runtime = useBuliRuntime()
-    const ui = useBuliUiSnapshot()
+    const ui = useBuliNavigationSnapshot()
     const renderer = useRenderer()
     const { width, height } = useTerminalDimensions()
 

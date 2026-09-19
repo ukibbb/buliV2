@@ -17,6 +17,7 @@ import type { ICompactionCheckpoint } from "@/sessions"
 import { colorDiffText } from "@/ui/sessions/colored-diff"
 import { normalizeMarkdownDiff } from "@/ui/sessions/markdown-diff"
 import { FileChangeDiff } from "@/ui/sessions/FileChangeDiff"
+import "@/ui/sessions/MeasuredTranscriptBox"
 import { ToolCallDisplay } from "@/ui/sessions/ToolCallDisplay"
 import { syntax, theme } from "@/ui/terminal/theme"
 
@@ -250,9 +251,9 @@ export function Transcript(props: ITranscriptProps): ReactNode {
         ? checkpointHistory
         : [...checkpointHistory, liveAssistant]
     return (
-        <box width="100%" flexDirection="column">
+        <measuredTranscriptBox width="100%" flexDirection="column">
             {renderedMessages}
-        </box>
+        </measuredTranscriptBox>
     )
 }
 

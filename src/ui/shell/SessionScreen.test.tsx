@@ -10,6 +10,7 @@ import {
   ScrollBoxRenderable,
   TextareaRenderable,
 } from "@opentui/core"
+import { ManualClock } from "@opentui/core/testing"
 import { testRender } from "@opentui/react/test-utils"
 import { expect, test } from "bun:test"
 import { act } from "react"
@@ -26,7 +27,8 @@ import {
 } from "@/ui/shell/SessionCompletionNotifier"
 import { SessionScreen } from "@/ui/shell/SessionScreen"
 import { BuliUiController } from "@/ui/ui-controller"
-import type { IUserMessage } from "@/agent"
+import type { IAssistantMessage, IUserMessage } from "@/agent"
+import { MeasuredTranscriptBox } from "@/ui/sessions/MeasuredTranscriptBox"
 import type { ICompactionCheckpoint, ISessionSnapshot } from "@/sessions"
 import { theme } from "@/ui/terminal/theme"
 
@@ -120,6 +122,7 @@ function createSessionHarness(initialSnapshot: ISessionSnapshot) {
     application,
     controller,
     getSnapshot: () => snapshot,
+    getSessionListenerCount: () => sessionListeners.size,
     setSnapshot(nextSnapshot: ISessionSnapshot): void {
       snapshot = nextSnapshot
       for (const listener of [...sessionListeners]) listener()
@@ -551,6 +554,155 @@ test("preserves Unicode diff text and colors when resizing and scrolling the ses
   } finally {
     harness.controller.dispose()
     act(() => setup.renderer.destroy())
+  }
+})
+
+test("remeasures hidden Unicode diff and code history without scrolling to it", async () => {
+  const wideWidth = 100
+  const narrowWidth = 36
+  const terminalHeight = 30
+  const historyLength = 40
+  const changedLines = 100
+  const maxSettlingFrames = 60
+  const requiredQuietFrames = 3
+  const unicodeText = "zażółć 🐍 日本語 abcdefghijklmnopqrstuvwxyz words wrapping on a narrow screen"
+  const codeMessage: IAssistantMessage = {
+    id: "offscreen-code",
+    sessionId: SESSION_ID,
+    runId: "run-history",
+    createdAt: 1,
+    role: "assistant",
+    stopReason: "stop",
+    content: [{
+      type: "text",
+      text: [
+        "```typescript",
+        ...Array.from({ length: changedLines }, (_, index) => `const line${index} = "${unicodeText}";`),
+        "```",
+      ].join("\n"),
+    }],
+  }
+  const snapshot = sessionSnapshot({
+    messages: [codeMessage, ...transcriptMessages(historyLength).map((message, index) => ({
+      ...message,
+      createdAt: index + 3,
+    }))],
+    fileChangeProposals: [{
+      id: "offscreen-diff",
+      sessionId: SESSION_ID,
+      runId: "run-history",
+      toolCallId: "offscreen-edit",
+      operation: "edit",
+      path: "example.ts",
+      status: "applied",
+      createdAt: 2,
+      diff: [
+        "--- a/example.ts",
+        "+++ b/example.ts",
+        `@@ -1,${changedLines} +1,${changedLines} @@`,
+        ...Array.from({ length: changedLines }, (_, index) => [
+          `-const value${index} = "${unicodeText}";`,
+          `+const value${index} = "${unicodeText} changed";`,
+        ]).flat(),
+        "",
+      ].join("\n"),
+    }],
+  })
+  const harness = createSessionHarness(snapshot)
+  const setup = await testRender(sessionElement(harness), {
+    width: wideWidth,
+    height: terminalHeight,
+    clock: new ManualClock(),
+  })
+  const transcript = scrollBoxRenderable(setup.renderer.root)
+  const capture = () => ({
+    characters: setup.captureCharFrame(),
+    spans: setup.captureSpans(),
+    height: transcript.scrollHeight,
+    top: transcript.scrollTop,
+    maximumTop: maximumScrollTop(transcript),
+    code: codeRenderables(transcript).map((code) => ({
+      width: code.width,
+      height: code.height,
+      lines: code.virtualLineCount,
+      text: code.plainText,
+    })),
+  })
+  const settle = async () => {
+    let previousSignature: string | undefined
+    let quietFrames = 0
+    for (let frame = 0; frame < maxSettlingFrames; frame += 1) {
+      await act(async () => {
+        await Promise.all(codeRenderables(transcript).map((code) => code.highlightingDone))
+        const previousFrame = setup.renderer.frameId
+        await setup.renderOnce()
+        expect(setup.renderer.frameId).toBe(previousFrame + 1)
+      })
+      const signature = JSON.stringify(capture())
+      quietFrames = signature === previousSignature ? quietFrames + 1 : 0
+      if (quietFrames >= requiredQuietFrames) return
+      previousSignature = signature
+    }
+    throw new Error("Session transcript did not settle within the bounded frame limit")
+  }
+
+  try {
+    await settle()
+    const commonBox = transcript.getChildren()[0]
+    expect(commonBox).toBeInstanceOf(MeasuredTranscriptBox)
+    expect(commonBox?.getChildren()).toHaveLength(historyLength + 2)
+    const codes = codeRenderables(transcript)
+    const diff = findDiffRenderable(transcript)
+    if (!diff) throw new Error("Expected offscreen Unicode diff")
+    expect(diff.filetype).toBe("typescript")
+    expect(diff.screenY + diff.height).toBeLessThanOrEqual(transcript.viewport.screenY)
+    const initial = capture()
+    expect(initial.top).toBe(initial.maximumTop)
+
+    for (const width of [narrowWidth, wideWidth]) {
+      act(() => setup.resize(width, terminalHeight))
+      await settle()
+      expect(diff.screenY + diff.height).toBeLessThanOrEqual(transcript.viewport.screenY)
+      const currentCodes = codeRenderables(transcript)
+      expect(currentCodes).toHaveLength(codes.length)
+      codes.forEach((code, index) => expect(currentCodes[index]).toBe(code))
+      const hidden = capture()
+      expect(hidden.top).toBe(hidden.maximumTop)
+      if (width === narrowWidth) expect(hidden.height).toBeGreaterThan(initial.height)
+      else expect(hidden).toEqual(initial)
+
+      act(() => transcript.scrollTo(0))
+      await settle()
+      expect(capture().height).toBe(hidden.height)
+      expect(capture().code).toEqual(hidden.code)
+      act(() => transcript.scrollTo(maximumScrollTop(transcript)))
+      await settle()
+      expect(capture()).toEqual(hidden)
+    }
+
+    await act(async () => harness.setSnapshot({
+      ...snapshot,
+      messages: [{
+        ...codeMessage,
+        content: [...codeMessage.content, { type: "reasoning", text: unicodeText.repeat(historyLength) }],
+      }, ...snapshot.messages.slice(1)],
+    }))
+    await settle()
+    const grown = capture()
+    expect(grown.height).toBeGreaterThan(initial.height)
+    act(() => transcript.scrollTo(0))
+    await settle()
+    expect(capture().height).toBe(grown.height)
+    act(() => transcript.scrollTo(maximumScrollTop(transcript)))
+    await settle()
+    await act(async () => harness.setSnapshot(snapshot))
+    await settle()
+    expect(capture()).toEqual(initial)
+  } finally {
+    act(() => setup.renderer.destroy())
+    harness.controller.dispose()
+    expect(harness.getSessionListenerCount()).toBe(0)
+    expect(setup.renderer.getLifecyclePasses().size).toBe(0)
   }
 })
 

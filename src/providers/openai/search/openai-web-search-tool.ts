@@ -6,7 +6,6 @@ import {
     type TAgentMessage,
     type IAgentTool,
 } from "@/agent"
-import { OPENAI_PROVIDER_ID } from "@/providers/openai/auth/openai-auth"
 import type { TOpenAiCodexSearch } from "@/providers/openai/transport/codex-fetch"
 
 const SEARCH_MAX_OUTPUT_TOKENS = 8_000
@@ -103,8 +102,13 @@ const WEB_SEARCH_INPUT_SCHEMA = Type.Unsafe<Record<string, unknown>>({
     additionalProperties: false,
 })
 
-export interface IOpenAiWebSearchToolOptions {
+export interface IOpenAiSearchBackend {
+    readonly modelId: string
     readonly search: TOpenAiCodexSearch
+}
+
+export interface IOpenAiWebSearchToolOptions {
+    readonly resolveBackend: (signal: AbortSignal) => Promise<IOpenAiSearchBackend>
 }
 
 /** Creates the host-owned standalone web search tool backed by ChatGPT OAuth. */
@@ -118,21 +122,23 @@ export function createOpenAiWebSearchTool(
         requiresConversationContext: true,
         execute: async (input, context) => {
             assertSearchInput(input)
-            const modelProfile = context.modelProfile
-            if (modelProfile?.providerId !== OPENAI_PROVIDER_ID) {
-                throw new Error("Web search requires an active OpenAI model")
-            }
-            if (!context.sessionId.trim() || !modelProfile.modelId.trim()) {
-                throw new Error("Web search requires an active session and model")
+            if (!context.sessionId.trim()) {
+                throw new Error("Web search requires an active session")
             }
             if (!context.messages) {
                 throw new Error("Web search requires conversation context")
             }
 
+            context.signal.throwIfAborted()
+            const backend = await options.resolveBackend(context.signal)
+            context.signal.throwIfAborted()
+            if (!backend.modelId.trim()) {
+                throw new Error("Web search requires a backend model")
+            }
             const recentInput = recentSearchInput(context.messages)
             const request = {
                 id: context.sessionId,
-                model: modelProfile.modelId,
+                model: backend.modelId,
                 ...(recentInput.length === 0 ? {} : { input: recentInput }),
                 commands: structuredClone(input),
                 settings: {
@@ -141,11 +147,8 @@ export function createOpenAiWebSearchTool(
                 },
                 max_output_tokens: SEARCH_MAX_OUTPUT_TOKENS,
             }
-            const response = await options.search(request, {
+            const response = await backend.search(request, {
                 signal: context.signal,
-                ...(context.providerAccountId === undefined
-                    ? {}
-                    : { expectedAccountId: context.providerAccountId }),
             })
             return `${EXTERNAL_CONTENT_WARNING}\n\n${response.output}`
         },

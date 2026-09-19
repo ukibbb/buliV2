@@ -41,7 +41,9 @@ export function createFdPathSearcher(
 ): TBuliPathSearcher {
     const searchPath = options.searchPath ?? process.env.PATH ?? ""
     const pathExt = options.pathExt ?? process.env.PATHEXT
+
     const canonicalWorkspace = realpath(resolve(workspaceRoot))
+
     let executableResolution: Promise<string> | undefined
 
     return async (query, signal) => {

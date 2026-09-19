@@ -26,7 +26,9 @@ test("exposes the standalone web commands and sends bounded conversation context
       results: [{ hostOnlyMetadata: true }],
     }
   }
-  const tool = createOpenAiWebSearchTool({ search })
+  const tool = createOpenAiWebSearchTool({
+    resolveBackend: async () => ({ modelId: "gpt-5.6-sol", search }),
+  })
   const controller = new AbortController()
   const messages: readonly TAgentMessage[] = [
     userMessage("Old user", 1),
@@ -81,7 +83,7 @@ test("exposes the standalone web commands and sends bounded conversation context
       + "Search result with https://example.com/source",
   )
   expect(signals).toEqual([controller.signal])
-  expect(expectedAccountIds).toEqual(["account-web"])
+  expect(expectedAccountIds).toEqual([undefined])
   expect(requests).toEqual([{
     id: "session-web",
     model: "gpt-5.6-sol",
@@ -103,13 +105,19 @@ test("exposes the standalone web commands and sends bounded conversation context
   }])
 })
 
-test("rejects invalid commands and model context before starting search", async () => {
+test("rejects invalid commands before resolving the backend", async () => {
   let searchCalls = 0
   const search = async (): Promise<IOpenAiCodexSearchResponse> => {
     searchCalls += 1
     return { output: "unexpected" }
   }
-  const tool = createOpenAiWebSearchTool({ search })
+  let resolutions = 0
+  const tool = createOpenAiWebSearchTool({
+    resolveBackend: async () => {
+      resolutions += 1
+      return { modelId: "search-model", search }
+    },
+  })
   const fourQueries = Array.from({ length: 4 }, (_, index) => ({
     q: `query ${index}`,
   }))
@@ -124,12 +132,54 @@ test("rejects invalid commands and model context before starting search", async 
     search_query: [...fourQueries, { q: "fifth query" }],
     response_length: "long",
   }, context())).rejects.toThrow("Invalid web_search input")
-  await expect(tool.execute({
-    search_query: [{ q: "query" }],
-  }, context({
-    modelProfile: { providerId: "other", modelId: "other-model" },
-  }))).rejects.toThrow("requires an active OpenAI model")
+  expect(resolutions).toBe(0)
+  expect(searchCalls).toBe(0)
+})
 
+test("Kimi can call search without forwarding its model or account", async () => {
+  const signal = new AbortController().signal
+  const tool = createOpenAiWebSearchTool({
+    resolveBackend: async (receivedSignal) => {
+      expect(receivedSignal).toBe(signal)
+      return {
+        modelId: "openai-search-model",
+        search: async (request, options) => {
+          expect(request).toMatchObject({ model: "openai-search-model" })
+          expect(options).toEqual({ signal })
+          return { output: "Found" }
+        },
+      }
+    },
+  })
+  expect(await tool.execute({ search_query: [{ q: "query" }] }, context({
+    modelProfile: { providerId: "kimi-coding", modelId: "kimi-for-coding" },
+    providerAccountId: "kimi-account",
+    signal,
+  }))).toContain("Found")
+})
+
+test("backend errors propagate and cancellation prevents search", async () => {
+  const failure = new Error("OpenAI is not connected")
+  const unavailable = createOpenAiWebSearchTool({
+    resolveBackend: async () => { throw failure },
+  })
+  await expect(unavailable.execute({ search_query: [{ q: "query" }] }, context()))
+    .rejects.toBe(failure)
+
+  const controller = new AbortController()
+  const reason = new Error("Cancelled")
+  let searchCalls = 0
+  const cancelled = createOpenAiWebSearchTool({
+    resolveBackend: async () => {
+      controller.abort(reason)
+      return {
+        modelId: "search-model",
+        search: async () => { searchCalls += 1; return { output: "unexpected" } },
+      }
+    },
+  })
+  await expect(cancelled.execute({ search_query: [{ q: "query" }] }, context({ signal: controller.signal })))
+    .rejects.toBe(reason)
   expect(searchCalls).toBe(0)
 })
 

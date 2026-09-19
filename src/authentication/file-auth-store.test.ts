@@ -56,7 +56,8 @@ test("writes private files atomically and cleans up siblings", async () => {
 
     expect((await stat(dirname(path))).mode & 0o777).toBe(0o700)
     expect((await stat(path)).mode & 0o777).toBe(0o600)
-    expect(await readdir(dirname(path))).toEqual(["auth.json"])
+    expect((await stat(`${path}.lock`)).mode & 0o777).toBe(0o600)
+    expect((await readdir(dirname(path))).sort()).toEqual(["auth.json", "auth.json.lock"])
   })
 })
 
@@ -250,6 +251,52 @@ test("rejects unsafe provider IDs and invalid credential fields", async () => {
       type: "api_key",
       key: "",
     })).rejects.toThrow("Invalid API key credential")
+  })
+})
+
+test("serializes stores and preserves updates from different providers", async () => {
+  await withAuthPath(async (path) => {
+    const first = new FileAuthStore(path)
+    const second = new FileAuthStore(path)
+    await Promise.all([
+      first.set("openai", oauthCredential("access")),
+      second.set("kimi-coding", apiKeyCredential("synthetic-kimi")),
+    ])
+    expect(await first.get("openai")).toEqual(oauthCredential("access"))
+    expect(await first.get("kimi-coding")).toEqual(apiKeyCredential("synthetic-kimi"))
+  })
+})
+
+test("cancels a waiting mutation and releases the lock after an update throws", async () => {
+  await withAuthPath(async (path) => {
+    const store = new FileAuthStore(path)
+    const entered = Promise.withResolvers<void>()
+    const finish = Promise.withResolvers<void>()
+    const failure = new Error("synthetic update failure")
+    const holder = store.modify("openai", async () => {
+      entered.resolve()
+      await finish.promise
+      throw failure
+    })
+    const holderResult = holder.catch((error: unknown) => error)
+    await entered.promise
+    try {
+      const controller = new AbortController()
+      const waiting = new FileAuthStore(path).set(
+        "kimi-coding", apiKeyCredential("cancelled"), controller.signal,
+      )
+      const reason = new Error("cancel waiting")
+      const result = waiting.catch((error: unknown) => error)
+      await Bun.sleep(50)
+      controller.abort(reason)
+      expect(await result).toBe(reason)
+      expect(await store.get("kimi-coding")).toBeUndefined()
+    } finally {
+      finish.resolve()
+      expect(await holderResult).toBe(failure)
+    }
+    await store.set("kimi-coding", apiKeyCredential("after-error"))
+    expect(await store.get("kimi-coding")).toEqual(apiKeyCredential("after-error"))
   })
 })
 

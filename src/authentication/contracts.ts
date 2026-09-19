@@ -36,7 +36,7 @@ export type TAuthEvent =
     }
 
 export interface IAuthPrompt {
-    readonly type: "manual-callback"
+    readonly type: "manual-callback" | "secret"
     readonly message: string
     readonly placeholder: string
     readonly signal: AbortSignal

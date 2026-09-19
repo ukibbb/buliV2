@@ -10,6 +10,8 @@ import {
 import { basename, dirname, join } from "node:path"
 import { homedir } from "node:os"
 
+import { withAuthFileLock } from "@/authentication/auth-file-lock"
+
 import type {
     IAuthStore,
     TAuthCredential,
@@ -263,14 +265,16 @@ export class FileAuthStore implements IAuthStore {
         validateProviderId(providerId)
         const next = parseCredential(providerId, credential)
 
-        const source = await readAuthObject(this.path, signal)
-        source[providerId] = next
-        setOperationRevision(
-            source,
-            providerId,
-            nextOperationRevision(source, providerId),
-        )
-        await writeAuthObject(this.path, source, signal)
+        await withAuthFileLock(this.path, signal, async (path) => {
+            const source = await readAuthObject(path, signal)
+            source[providerId] = next
+            setOperationRevision(
+                source,
+                providerId,
+                nextOperationRevision(source, providerId),
+            )
+            await writeAuthObject(path, source, signal)
+        })
     }
 
     async remove(
@@ -280,16 +284,18 @@ export class FileAuthStore implements IAuthStore {
         signal?.throwIfAborted()
         validateProviderId(providerId)
 
-        const source = await readAuthObject(this.path, signal)
-        const existed = Object.hasOwn(source, providerId)
-        delete source[providerId]
-        setOperationRevision(
-            source,
-            providerId,
-            nextOperationRevision(source, providerId),
-        )
-        await writeAuthObject(this.path, source, signal)
-        return existed
+        return withAuthFileLock(this.path, signal, async (path) => {
+            const source = await readAuthObject(path, signal)
+            const existed = Object.hasOwn(source, providerId)
+            delete source[providerId]
+            setOperationRevision(
+                source,
+                providerId,
+                nextOperationRevision(source, providerId),
+            )
+            await writeAuthObject(path, source, signal)
+            return existed
+        })
     }
 
     async modify(
@@ -302,32 +308,35 @@ export class FileAuthStore implements IAuthStore {
         signal?.throwIfAborted()
         validateProviderId(providerId)
 
-        const source = await readAuthObject(this.path, signal)
-        let current: TAuthCredential | undefined
-        let malformed = false
-        if (Object.hasOwn(source, providerId)) {
-            try {
-                current = parseCredential(providerId, source[providerId])
-            } catch {
-                malformed = true
-                current = undefined
+        return withAuthFileLock(this.path, signal, async (path) => {
+            const source = await readAuthObject(path, signal)
+            let current: TAuthCredential | undefined
+            let malformed = false
+            if (Object.hasOwn(source, providerId)) {
+                try {
+                    current = parseCredential(providerId, source[providerId])
+                } catch {
+                    malformed = true
+                    current = undefined
+                }
             }
-        }
-        const before = current === undefined
-            ? undefined
-            : copyCredential(current)
+            const before = current === undefined
+                ? undefined
+                : copyCredential(current)
 
-        signal?.throwIfAborted()
-        const candidate = await update(current)
-        const next = candidate === undefined
-            ? undefined
-            : parseCredential(providerId, candidate)
+            signal?.throwIfAborted()
+            const candidate = await update(current)
+            signal?.throwIfAborted()
+            const next = candidate === undefined
+                ? undefined
+                : parseCredential(providerId, candidate)
 
-        if (!malformed && credentialsEqual(before, next)) return next
-        if (next === undefined) delete source[providerId]
-        else source[providerId] = next
-        await writeAuthObject(this.path, source, signal)
-        return next
+            if (!malformed && credentialsEqual(before, next)) return next
+            if (next === undefined) delete source[providerId]
+            else source[providerId] = next
+            await writeAuthObject(path, source, signal)
+            return next
+        })
     }
 
     async beginOperation(
@@ -337,11 +346,13 @@ export class FileAuthStore implements IAuthStore {
         signal?.throwIfAborted()
         validateProviderId(providerId)
 
-        const source = await readAuthObject(this.path, signal)
-        const operation = nextOperationRevision(source, providerId)
-        setOperationRevision(source, providerId, operation)
-        await writeAuthObject(this.path, source, signal)
-        return operation
+        return withAuthFileLock(this.path, signal, async (path) => {
+            const source = await readAuthObject(path, signal)
+            const operation = nextOperationRevision(source, providerId)
+            setOperationRevision(source, providerId, operation)
+            await writeAuthObject(path, source, signal)
+            return operation
+        })
     }
 
     async commitOperation(
@@ -357,11 +368,13 @@ export class FileAuthStore implements IAuthStore {
         }
         const next = parseCredential(providerId, credential)
 
-        const source = await readAuthObject(this.path, signal)
-        if (operationRevision(source, providerId) !== operation) return false
-        source[providerId] = next
-        await writeAuthObject(this.path, source, signal)
-        return true
+        return withAuthFileLock(this.path, signal, async (path) => {
+            const source = await readAuthObject(path, signal)
+            if (operationRevision(source, providerId) !== operation) return false
+            source[providerId] = next
+            await writeAuthObject(path, source, signal)
+            return true
+        })
     }
 }
 

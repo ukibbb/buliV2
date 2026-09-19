@@ -481,7 +481,7 @@ test("lowers direct assistant and text-only toolResult messages", async () => {
   expect(events).toContainEqual({
     type: "finish",
     reason: "stop",
-    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, cacheReadTokens: 0, reasoningTokens: 0 },
   })
   expect(capturedRequests).toHaveLength(1)
   const request = capturedRequests[0]
@@ -987,7 +987,7 @@ test("emits every tool call from one provider response for the host loop", async
   expect(events.at(-1)).toEqual({
     type: "finish",
     reason: "tool-calls",
-    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, cacheReadTokens: 0, reasoningTokens: 0 },
   })
 })
 
@@ -1028,13 +1028,10 @@ test("does not execute an OpenAI tool call from an output-limited response", asy
   )
 
   expect(executions).toBe(0)
-  expect(requests).toBe(2)
-  expect(result.messages.find((message) => message.role === "toolResult"))
-    .toMatchObject({
-      toolName: "dangerous_action",
-      isError: true,
-      content: expect.stringContaining("output token limit"),
-    })
+  expect(requests).toBe(1)
+  expect(result.messages.some((message) => message.role === "toolResult")).toBe(false)
+  expect(result.messages.filter((message) => message.role === "assistant"))
+    .toEqual([expect.objectContaining({ stopReason: "length", content: [] })])
 })
 
 test("forwards cancellation to the OpenAI request", async () => {

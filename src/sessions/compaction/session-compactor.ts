@@ -9,7 +9,7 @@ import {
     assertCheckpointAnchor,
     type ICompactionCheckpoint,
 } from "@/sessions/compaction/checkpoint"
-import { ESTIMATED_BYTES_PER_TOKEN } from "@/sessions/compaction/context-budget"
+import { ESTIMATED_BYTES_PER_TOKEN, type IContextEstimationPolicy } from "@/sessions/compaction/context-budget"
 
 const COMPACTION_MAX_OUTPUT_HEADROOM_TOKENS = 16_384
 const COMPACTION_UNKNOWN_CONTEXT_INPUT_TOKENS = 64_000
@@ -46,7 +46,9 @@ export interface ICompactSessionMessagesOptions {
     readonly sessionId: string
     readonly messages: readonly TAgentMessage[]
     readonly previousCheckpoint?: ICompactionCheckpoint
-    readonly runConfiguration: IAgentRunConfiguration
+    readonly runConfiguration: IAgentRunConfiguration & {
+        readonly estimationPolicy?: IContextEstimationPolicy
+    }
     /** Allows an automatic pass to shrink an existing checkpoint at the same anchor. */
     readonly allowSummaryRecompression?: boolean
     readonly reason: ICompactionCheckpoint["reason"]
@@ -225,6 +227,7 @@ async function summarizeCompactionHistory(
         promptContent,
         contextSummary,
         options.runConfiguration.modelProfile?.contextWindowTokens,
+        options.runConfiguration.estimationPolicy,
     )
     const summaryPrompt: TAgentMessage = {
         id: `${checkpointId}-prompt`,
@@ -293,18 +296,22 @@ async function summarizeCompactionHistory(
 
 function compactionInputTargetTokens(
     contextWindowTokens: number | undefined,
+    policy?: IContextEstimationPolicy,
 ): number {
     if (contextWindowTokens === undefined) {
         return COMPACTION_UNKNOWN_CONTEXT_INPUT_TOKENS
     }
     return Math.max(
         0,
-        contextWindowTokens - compactionOutputHeadroomTokens(contextWindowTokens),
+        contextWindowTokens - compactionOutputHeadroomTokens(contextWindowTokens, policy),
     )
 }
 
-function compactionOutputHeadroomTokens(contextWindowTokens: number): number {
-    return Math.min(
+function compactionOutputHeadroomTokens(
+    contextWindowTokens: number,
+    policy?: IContextEstimationPolicy,
+): number {
+    return policy?.outputReserveTokens ?? Math.min(
         COMPACTION_MAX_OUTPUT_HEADROOM_TOKENS,
         Math.floor(contextWindowTokens / 4),
     )
@@ -314,6 +321,7 @@ function assertCompactionSummaryInputFits(
     promptContent: string,
     contextSummary: string | undefined,
     contextWindowTokens: number | undefined,
+    policy?: IContextEstimationPolicy,
 ): void {
     // Do not serially rewrite a growing checkpoint. A future oversized-history
     // fallback should use bounded map-reduce or retain a recent context tail.
@@ -321,10 +329,10 @@ function assertCompactionSummaryInputFits(
         promptContent,
         contextSummary,
     )
-    if (estimatedInputTokens <= compactionInputTargetTokens(contextWindowTokens)) {
+    if (estimatedInputTokens <= compactionInputTargetTokens(contextWindowTokens, policy)) {
         return
     }
-    throw compactionInputError(estimatedInputTokens, contextWindowTokens)
+    throw compactionInputError(estimatedInputTokens, contextWindowTokens, policy)
 }
 
 function estimateCompactionInputTokens(
@@ -346,11 +354,12 @@ function estimateCompactionInputTokens(
 function compactionInputError(
     estimatedInputTokens: number,
     contextWindowTokens: number | undefined,
+    policy?: IContextEstimationPolicy,
 ): Error {
-    const inputTarget = compactionInputTargetTokens(contextWindowTokens)
+    const inputTarget = compactionInputTargetTokens(contextWindowTokens, policy)
     const outputHeadroom = contextWindowTokens === undefined
         ? undefined
-        : compactionOutputHeadroomTokens(contextWindowTokens)
+        : compactionOutputHeadroomTokens(contextWindowTokens, policy)
     return new Error(
         "Compaction summary input does not fit the summarizer model context in one request: "
         + `estimated ${estimatedInputTokens} input tokens exceeds the safe `

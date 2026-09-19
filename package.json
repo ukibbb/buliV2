@@ -22,6 +22,8 @@
     "npm:pack": "npm pack ./npm"
   },
   "dependencies": {
+    "@ai-sdk/deepseek": "3.0.44",
+    "@ai-sdk/moonshotai": "3.0.45",
     "@ai-sdk/openai": "^4.0.16",
     "@opentui/core": "0.5.10",
     "@opentui/react": "0.5.10",

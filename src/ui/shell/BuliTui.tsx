@@ -63,9 +63,8 @@ export function BuliTui(props: IBuliTuiProps) {
                     mode={ui.authenticationMode}
                     authentication={props.authentication}
                     onClose={(outcome) => {
-                        const mode = ui.authenticationMode
                         controller.closeAuthentication()
-                        if (mode === "login" && outcome === "success") {
+                        if (outcome === "success") {
                             void runtime.refreshModels().catch(() => { })
                         }
                     }}

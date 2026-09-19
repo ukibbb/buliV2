@@ -58,6 +58,7 @@ const CATALOG_OTHER: IBuliModelRuntimeConfig = {
   id: "other",
   name: "Other",
   model,
+  modelProfile: { providerId: "test", modelId: "other" },
   reasoningEfforts: ["medium", "high"],
   defaultReasoningEffort: "medium",
 }
@@ -806,6 +807,7 @@ test("application runtime replaces models atomically and reconciles selection", 
       id: "initial",
       name: "Initial",
       model,
+      modelProfile: { providerId: "openai", modelId: "initial" },
       reasoningEfforts: ["low"],
       defaultReasoningEffort: "low",
     }],
@@ -1009,7 +1011,7 @@ test.each([
   })
   expect(runtime.getSnapshot().modelCatalog).toEqual({
     status: "ready",
-    message: `Model "base::fast" was not returned in the model catalog for your signed-in ChatGPT account. Availability may depend on your plan or account permissions. Using "${selected}" instead.`,
+    message: `Model "base::fast" was not returned in the model catalog. Availability may depend on your plan or account permissions. Using "${selected}" instead.`,
   })
   const fallback = runtime.getSnapshot()
   expect(() => runtime.selectModel("missing")).toThrow("Unknown model")
@@ -1055,7 +1057,7 @@ test.each([
     reasoningEffort: selectedEffort,
   })
   if (modelId === "vanishing") {
-    expect(runtime.getSnapshot().modelCatalog?.message).toBe('Model "vanishing" was not returned in the model catalog for your signed-in ChatGPT account. Availability may depend on your plan or account permissions. Using "base::fast" instead.')
+    expect(runtime.getSnapshot().modelCatalog?.message).toBe('Model "vanishing" was not returned in the model catalog. Availability may depend on your plan or account permissions. Using "base::fast" instead.')
   } else {
     expect(runtime.getSnapshot().modelCatalog).toEqual({ status: "ready" })
   }
@@ -1179,7 +1181,7 @@ test("later refreshes preserve selection, reconcile removed Fast to base, and do
   })
   expect(runtime.getSnapshot().modelCatalog).toEqual({
     status: "ready",
-    message: 'Model "base::fast" was not returned in the model catalog for your signed-in ChatGPT account. Availability may depend on your plan or account permissions. Using "base" instead.',
+    message: 'Model "base::fast" was not returned in the model catalog. Availability may depend on your plan or account permissions. Using "base" instead.',
   })
   registrations = CATALOG_MODELS
   await runtime.refreshModels()
@@ -1189,7 +1191,7 @@ test("later refreshes preserve selection, reconcile removed Fast to base, and do
   await runtime.refreshModels()
   expect(runtime.getSnapshot().selection.modelId).toBe("other")
   expect(runtime.getSnapshot().modelCatalog?.message).toBe(
-    'Model "base" was not returned in the model catalog for your signed-in ChatGPT account. Availability may depend on your plan or account permissions. Using "other" instead.',
+    'Model "base" was not returned in the model catalog. Availability may depend on your plan or account permissions. Using "other" instead.',
   )
   await runtime.dispose()
 })
@@ -1551,6 +1553,7 @@ test("a joined refresh caller can cancel without aborting the shared load", asyn
       model,
       reasoningEfforts: ["medium"],
       defaultReasoningEffort: "medium",
+      modelProfile: { providerId: "test", modelId: "initial" },
     }],
     selection: { modelId: "initial", reasoningEffort: "medium" },
     loadModels: async () => {
@@ -1561,6 +1564,7 @@ test("a joined refresh caller can cancel without aborting the shared load", asyn
         id: "loaded",
         name: "Loaded",
         model,
+        modelProfile: { providerId: "test", modelId: "loaded" },
         reasoningEfforts: ["high"],
         defaultReasoningEffort: "high",
       }]

@@ -1,16 +1,9 @@
 import { createOpenAI } from "@ai-sdk/openai"
 import {
     APICallError,
-    isStepCount,
-    jsonSchema,
-    streamText,
-    tool,
     type AssistantContent,
-    type JSONSchema7,
-    type LanguageModelUsage,
     type ModelMessage,
     type ToolContent,
-    type ToolSet,
     type UserContent,
 } from "ai"
 
@@ -19,8 +12,6 @@ import type {
     IAgentModel,
     TAgentModelEvent,
     IAgentModelRequest,
-    IAgentToolDescriptor,
-    IModelUsage,
 } from "@/agent"
 import {
     isModelContextOverflowError,
@@ -32,6 +23,8 @@ import {
     OPENAI_CODEX_RESPONSES_URL,
     OPENAI_OAUTH_DUMMY_API_KEY,
 } from "@/providers/openai/constants"
+
+import { streamAiSdkTurn } from "@/providers/shared/ai-sdk-agent-model"
 
 export { DEFAULT_OPENAI_MODEL_ID } from "@/providers/openai/constants"
 
@@ -56,17 +49,6 @@ export interface IOpenAiAgentModelOptions {
     readonly supportsReasoning?: boolean
 }
 
-// ?? please explain me this types line by line how it works
-// `typeof streamText<ToolSet>` pobiera typ funkcji `streamText` po podstawieniu
-// generycznego typu narzędzi `ToolSet`; nie wywołuje funkcji w runtime.
-// `ReturnType<...>` wyciąga typ wartości zwracanej przez tę funkcję.
-// `["stream"]` jest indexed-access type i wybiera typ pola `stream` z wyniku.
-// `extends AsyncIterable<infer Event>` sprawdza, czy stream jest iterowalny
-// asynchronicznie, a `infer Event` wyciąga typ jednego emitowanego elementu.
-// Jeśli warunek pasuje, wynikiem jest `Event`, w przeciwnym razie `never`.
-// Ostatecznie `AIStreamEvent` oznacza unię pojedynczych eventów streamu AI SDK.
-type AIStreamEvent = ReturnType<typeof streamText<ToolSet>>["stream"] extends
-    AsyncIterable<infer Event> ? Event : never
 // ?? this also
 // `AssistantContent` jest unią: zwykły `string` albo tablica części wiadomości.
 // `Exclude<AssistantContent, string>` usuwa z tej unii wariant `string`, więc
@@ -127,14 +109,12 @@ export class OpenAiAgentModel implements IAgentModel {
             apiKey: OPENAI_OAUTH_DUMMY_API_KEY,
             fetch: modelFetch,
         })
-        const result = streamText({
+        yield* streamAiSdkTurn(request, {
             model: provider.responses(this.modelId),
             messages: toModelMessages(
                 request.messages,
                 request.contextSummary,
             ),
-            tools: toAiTools(request.tools),
-            abortSignal: request.signal,
             providerOptions: {
                 openai: {
                     store: false,
@@ -154,20 +134,9 @@ export class OpenAiAgentModel implements IAgentModel {
                         : { reasoningSummary: "detailed" as const }),
                 },
             },
-            stopWhen: isStepCount(1),
-            maxRetries: 0,
-            // Errors are normalized below and surfaced through Buli's stream.
-            onError: () => { },
+            toolCallReasoning: { mode: "not-required" },
+            normalizeError: normalizeOpenAiModelError,
         })
-
-        try {
-            for await (const event of result.stream) {
-                const modelEvent = toAgentModelEvent(event)
-                if (modelEvent) yield modelEvent
-            }
-        } catch (error) {
-            throw normalizeOpenAiModelError(error)
-        }
     }
 }
 
@@ -204,21 +173,6 @@ function withServiceTier(
         }))
     }
     return Object.assign(run, { preconnect: fetcher.preconnect })
-}
-
-function toAiTools(
-    descriptors: readonly IAgentToolDescriptor[],
-): ToolSet {
-    return Object.fromEntries(descriptors.map((descriptor) => [
-        descriptor.name,
-        tool({
-            description: descriptor.description,
-            inputSchema: jsonSchema<Record<string, unknown>>(
-                descriptor.inputSchema as JSONSchema7,
-            ),
-            outputSchema: jsonSchema<string>({ type: "string" }),
-        }),
-    ])) as ToolSet
 }
 
 function toModelMessages(
@@ -288,75 +242,6 @@ function toModelMessages(
         role: "assistant",
         content: `Cumulative operational checkpoint:\n${contextSummary}`,
     }, ...projected]
-}
-
-function toAgentModelEvent(
-    event: AIStreamEvent,
-): TAgentModelEvent | undefined {
-    switch (event.type) {
-        case "text-start":
-            return { type: "text-start", id: event.id }
-        case "text-delta":
-            return { type: "text-delta", id: event.id, delta: event.text }
-        case "text-end":
-            return { type: "text-end", id: event.id }
-        case "reasoning-start":
-            return { type: "reasoning-start", id: event.id }
-        case "reasoning-delta":
-            return { type: "reasoning-delta", id: event.id, delta: event.text }
-        case "reasoning-end":
-            return { type: "reasoning-end", id: event.id }
-        case "tool-call":
-            return {
-                type: "tool-call",
-                toolCallId: event.toolCallId,
-                toolName: event.toolName,
-                input: toRecord(event.input),
-            }
-        case "finish": {
-            const usage = toModelUsage(event.totalUsage)
-            return {
-                type: "finish",
-                // Control flow must use the SDK-normalized reason. Provider-specific
-                // values such as `max_output_tokens` are diagnostic, not protocol.
-                reason: event.finishReason,
-                ...(usage === undefined ? {} : { usage }),
-            }
-        }
-        case "abort":
-            return {
-                type: "abort",
-                ...(event.reason ? { reason: event.reason } : {}),
-            }
-        case "error":
-            return { type: "error", error: normalizeOpenAiModelError(event.error) }
-        default:
-            return undefined
-    }
-}
-
-function toModelUsage(usage: LanguageModelUsage): IModelUsage | undefined {
-    const result: IModelUsage = {
-        ...(usage.inputTokens === undefined
-            ? {}
-            : { inputTokens: usage.inputTokens }),
-        ...(usage.outputTokens === undefined
-            ? {}
-            : { outputTokens: usage.outputTokens }),
-        ...(usage.totalTokens === undefined
-            ? {}
-            : { totalTokens: usage.totalTokens }),
-        ...(!usage.inputTokenDetails.cacheReadTokens
-            ? {}
-            : { cacheReadTokens: usage.inputTokenDetails.cacheReadTokens }),
-        ...(!usage.inputTokenDetails.cacheWriteTokens
-            ? {}
-            : { cacheWriteTokens: usage.inputTokenDetails.cacheWriteTokens }),
-        ...(!usage.outputTokenDetails.reasoningTokens
-            ? {}
-            : { reasoningTokens: usage.outputTokenDetails.reasoningTokens }),
-    }
-    return Object.keys(result).length === 0 ? undefined : result
 }
 
 function normalizeOpenAiModelError(error: unknown): unknown {
@@ -440,11 +325,4 @@ function safeJson(value: unknown): string | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null && !Array.isArray(value)
-}
-
-function toRecord(value: unknown): Record<string, unknown> {
-    if (value === null || Array.isArray(value) || typeof value !== "object") {
-        throw new TypeError("Tool input must be an object")
-    }
-    return structuredClone(value as Record<string, unknown>)
 }

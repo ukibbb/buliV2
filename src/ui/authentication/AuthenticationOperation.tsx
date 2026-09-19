@@ -10,6 +10,7 @@ import type {
     TAuthenticationFlowState,
 } from "@/ui/authentication/authentication-flow-controller"
 import { theme } from "@/ui/terminal/theme"
+import { SecretInput } from "@/ui/authentication/SecretInput"
 
 type TAuthenticationOperationState = Extract<
     TAuthenticationFlowState,
@@ -48,7 +49,13 @@ export function AuthenticationOperation(
                     <box flexDirection="column" gap={1}>
                         <text>{state.prompt.message}</text>
                         <box border={["bottom"]} borderColor={theme.textMuted}>
-                            <input
+                            {state.prompt.presentation === "secret" ? (
+                                <SecretInput
+                                    key={state.prompt.id}
+                                    placeholder={state.prompt.placeholder}
+                                    onSubmit={controller.submitPrompt}
+                                />
+                            ) : <input
                                 key={state.prompt.id}
                                 ref={promptInputRef}
                                 focused
@@ -64,7 +71,7 @@ export function AuthenticationOperation(
                                         promptInputRef.current?.value ?? "",
                                     )
                                 }}
-                            />
+                            />}
                         </box>
                         <text fg={theme.textMuted} selectable={false}>
                             enter submit  esc cancel

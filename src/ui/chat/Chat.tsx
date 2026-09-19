@@ -36,10 +36,10 @@ function ChatView(props: IChatProps) {
         (model) => model.id === application.selection.modelId,
     )
     const catalog = application.modelCatalog
-    const catalogReady = catalog === undefined || catalog.status === "ready"
+    const catalogReady = application.selectedModelAvailable ?? (catalog === undefined || catalog.status === "ready")
     const selectedModelName = catalogReady
         ? selectedModel?.name ?? application.selection.modelId
-        : catalog.status === "loading" ? "Loading models" : "Model unavailable"
+        : catalog?.status === "loading" ? "Loading models" : "Model unavailable"
     const catalogMessage = catalog?.message
         ?? (catalog?.status === "loading" ? "Loading available account models..." : undefined)
 
@@ -70,6 +70,11 @@ function ChatView(props: IChatProps) {
                 minWidth={0}
                 wrapMode="word"
             >{catalogMessage}</text> : null}
+            {application.providerCatalogs?.filter((provider) => provider.status === "error").map((provider) => (
+                <text key={provider.providerId} fg={theme.amber} wrapMode="word">
+                    {provider.message}{provider.stale ? " Using the previous catalog." : ""}
+                </text>
+            ))}
             <ChatStatus
                 isRunning={props.isRunning}
                 isCompacting={props.isCompacting}

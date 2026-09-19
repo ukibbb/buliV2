@@ -119,6 +119,34 @@ test("disposed controller cannot start a hidden authentication operation", async
   expect(controller.getSnapshot().type).toBe("methods")
 })
 
+test("secret presentation is neutral and submitted values never enter snapshots", async () => {
+  const values: string[] = []
+  const snapshots: string[] = []
+  const controller = createController(authenticationService({
+    listProviders: async () => [PROVIDER],
+    login: async (providerId, _methodId, interaction) => {
+      values.push(await interaction.prompt({
+        type: "secret", message: "Secret", placeholder: "Value", signal: interaction.signal,
+      }))
+      return { providerId, connected: true }
+    },
+  }))
+  controller.subscribe(() => snapshots.push(JSON.stringify(controller.getSnapshot())))
+  controller.start()
+  await Promise.resolve()
+  controller.selectProvider("openai")
+  controller.selectMethod("browser")
+  const state = controller.getSnapshot()
+  expect(state.type === "login" && state.prompt?.presentation).toBe("secret")
+  controller.submitPrompt("synthetic-private-value")
+  controller.submitPrompt("ignored-second-submit")
+  await Promise.resolve()
+  await Promise.resolve()
+  expect(values).toEqual(["synthetic-private-value"])
+  expect(snapshots.join("\n")).not.toContain("synthetic-private-value")
+  controller.dispose()
+})
+
 function createController(
   authentication: IAuthenticationService,
   onClose: (outcome: TAuthenticationOutcome) => void = () => {},

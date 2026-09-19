@@ -13,21 +13,13 @@ import {
 } from "@/app/bootstrap/create-authentication"
 import { loadWorkspaceInstructions } from "@/app/bootstrap/load-workspace-instructions"
 import { createFdPathSearcher } from "@/app/path-search/fd-path-search"
-import type { IBuliModelSelection } from "@/app/contracts"
+import { createInjectedModelComposition } from "@/app/bootstrap/model-composition"
+import { createProviderModelComposition } from "@/app/bootstrap/create-provider-model-composition"
+import type { IKimiModelCatalog } from "@/providers/kimi"
+import type { IDeepSeekModelCatalog } from "@/providers/deepseek"
 import type { IBuliApplication } from "@/app/contracts"
-import {
-    BuliApplicationRuntime,
-    type IBuliModelRuntimeConfig
-} from "@/app/runtime"
-import {
-    DEFAULT_OPENAI_MODEL_ID,
-    DEFAULT_OPENAI_REASONING_EFFORTS,
-    OPENAI_PROVIDER_ID,
-    OpenAiAgentModel,
-    createOpenAiModelCatalog,
-    createOpenAiWebSearchTool,
-    type IOpenAiModelCatalog,
-} from "@/providers/openai"
+import { BuliApplicationRuntime } from "@/app/runtime"
+import type { IOpenAiModelCatalog } from "@/providers/openai"
 import {
     defaultSessionDirectoryPath,
     type ISessionManager,
@@ -91,6 +83,8 @@ export interface IBuliApplicationOptions {
     // SDK serialization without reading credentials or contacting an account.
     readonly authentication?: IAuthenticationComposition
     readonly modelCatalog?: IOpenAiModelCatalog
+    readonly kimiModelCatalog?: IKimiModelCatalog
+    readonly deepseekModelCatalog?: IDeepSeekModelCatalog
 }
 
 /** Composes provider, tools, persistence, sessions, and the UI boundary. */
@@ -121,47 +115,24 @@ export async function createBuliApplication(
         manager = options.manager ?? new WorkspaceSessionManager({
             directoryPath: defaultSessionDirectoryPath(workspaceRoot),
         })
-        const model: IAgentModel = options.model ?? new OpenAiAgentModel({
-            auth: auth.openAi,
-        })
-        const modelCatalog = options.modelCatalog
-            ?? createOpenAiModelCatalog({ auth: auth.openAi })
-        const defaultReasoningEffort = options.model === undefined
-            ? DEFAULT_OPENAI_REASONING_EFFORTS[0]
-            : "medium"
-        // This base registration is provisional for Codex startup, not a grant to
-        // call Fast or use a public API context limit. Discovery supplies the real
-        // account-bound adapters, capabilities, limits and initial selection.
-        const models: readonly IBuliModelRuntimeConfig[] = [{
-            id: DEFAULT_OPENAI_MODEL_ID,
-            name: options.model === undefined ? "GPT-6 Astra" : "Injected model",
-            model,
-            ...(options.model === undefined
-                ? {
-                    modelProfile: {
-                        providerId: OPENAI_PROVIDER_ID,
-                        modelId: DEFAULT_OPENAI_MODEL_ID,
-                    },
-                }
-                : {}),
-            reasoningEfforts: options.model === undefined
-                ? DEFAULT_OPENAI_REASONING_EFFORTS
-                : ["none", "low", "medium", "high", "xhigh", "max"],
-            defaultReasoningEffort,
-        }]
-        const selection: IBuliModelSelection = {
-            modelId: DEFAULT_OPENAI_MODEL_ID,
-            reasoningEffort: defaultReasoningEffort,
-        }
+        const modelComposition = options.model === undefined
+            ? createProviderModelComposition({
+                auth,
+                ...(options.modelCatalog === undefined
+                    ? {}
+                    : { openAiCatalog: options.modelCatalog }),
+                ...(options.kimiModelCatalog === undefined ? {} : { kimiCatalog: options.kimiModelCatalog }),
+                ...(options.deepseekModelCatalog === undefined ? {} : { deepseekCatalog: options.deepseekModelCatalog }),
+                includeWebSearch: options.tools === undefined,
+            })
+            : createInjectedModelComposition(options.model)
         const buli = createBuliAgentDefinition({
             workspaceRoot,
             toolOutputStore,
             ...defaultToolExecutablePaths(),
         }, {
             ...(options.tools === undefined ? {} : { tools: options.tools }),
-            additionalTools: options.tools === undefined && options.model === undefined
-                ? [createOpenAiWebSearchTool({ search: auth.openAi.search })]
-                : [],
+            additionalTools: modelComposition.additionalTools,
         })
 
         const applicationRuntime = new BuliApplicationRuntime({
@@ -169,49 +140,11 @@ export async function createBuliApplication(
             manager,
             agents: [buli],
             defaultAgentId: buli.id,
-            models,
-            selection,
+            models: modelComposition.models,
+            selection: modelComposition.selection,
             searchPaths: defaultPathSearcher(workspaceRoot),
             toolOutputStore,
-            ...(options.model === undefined
-                ? {
-                    preferredModelIds: [`${DEFAULT_OPENAI_MODEL_ID}::fast`, DEFAULT_OPENAI_MODEL_ID],
-                    loadModels: async (signal: AbortSignal) => (
-                        await modelCatalog.load(signal)
-                    ).map((entry): IBuliModelRuntimeConfig => ({
-                        id: entry.id,
-                        name: entry.name,
-                        model: new OpenAiAgentModel({
-                            auth: auth.openAi,
-                            modelId: entry.modelId,
-                            expectedAccountId: entry.accountId,
-                            ...(entry.supportsReasoning === undefined
-                                ? {}
-                                : { supportsReasoning: entry.supportsReasoning }),
-                            ...(entry.serviceTier === undefined
-                                ? {}
-                                : { serviceTier: entry.serviceTier }),
-                        }),
-                        modelProfile: {
-                            providerId: OPENAI_PROVIDER_ID,
-                            modelId: entry.modelId,
-                            ...(entry.contextWindowTokens === undefined
-                                ? {}
-                                : {
-                                    contextWindowTokens:
-                                        entry.contextWindowTokens,
-                                }),
-                        },
-                        providerAccountId: entry.accountId,
-                        ...(entry.serviceTier === undefined
-                            ? {}
-                            : { fallbackSelectionId: entry.modelId }),
-                        reasoningEfforts: entry.reasoningEfforts,
-                        defaultReasoningEffort:
-                            entry.defaultReasoningEffort,
-                    })),
-                }
-                : {}),
+            ...(modelComposition.discovery ?? {}),
         })
         runtime = applicationRuntime
 
@@ -249,7 +182,7 @@ export async function createBuliApplication(
         }
         if (options.signal.aborted) disposeOnAbort()
 
-        if (options.model === undefined && !options.signal.aborted) {
+        if (modelComposition.discovery !== undefined && !options.signal.aborted) {
             // Resolve account availability before exposing the first prompt editor:
             // otherwise its first run could silently capture Standard instead of
             // the preferred Fast adapter. The runtime records discovery failures

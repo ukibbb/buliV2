@@ -96,6 +96,61 @@ test("does not count reasoning or failed and aborted assistant content", () => {
   )
 })
 
+test("preserves reasoning only when requested by the estimation policy", () => {
+  const visible = assistant("visible", [{ type: "text", text: "Answer" }])
+  const reasoning = assistant("reasoning", [
+    ...visible.content,
+    { type: "reasoning", text: "R".repeat(10_000) },
+  ])
+  const preserve = { reasoningHistory: "preserve" } as const
+  const omit = { reasoningHistory: "omit" } as const
+  const input = { systemPrompt: "System", messages: [reasoning], tools: [] }
+
+  expect(estimateMessagesInputTokens([reasoning], omit)).toBe(
+    estimateMessagesInputTokens([visible]),
+  )
+  expect(estimateMessagesInputTokens([reasoning], preserve)).toBeGreaterThan(
+    estimateMessagesInputTokens([reasoning], omit) + 4_000,
+  )
+  expect(estimateContextInputTokens({ ...input, estimationPolicy: preserve })).toBeGreaterThan(
+    estimateContextInputTokens(input) + 4_000,
+  )
+  expect(estimateContextUsage({ ...input, estimationPolicy: preserve }).shouldCompact).toBe(false)
+  expect(estimateMessagesInputTokens([
+    { ...reasoning, stopReason: "error" },
+    { ...reasoning, stopReason: "aborted" },
+  ], preserve)).toBe(estimateMessagesInputTokens([], preserve))
+})
+
+test("includes preserved reasoning after the usage anchor without adding cache counters", () => {
+  const policy = { reasoningHistory: "preserve" } as const
+  const measured = {
+    ...assistant("measured", [{ type: "reasoning" as const, text: "R".repeat(10_000) }]),
+    usage: { inputTokens: 50_000, cacheReadTokens: 40_000, cacheWriteTokens: 1_000 },
+  }
+  const appended = user("appended", "Continue")
+  const input = {
+    systemPrompt: "System",
+    messages: [measured, appended],
+    tools: [],
+    estimationPolicy: policy,
+  }
+  const expected = measured.usage.inputTokens
+    + estimateMessagesInputTokens(input.messages, policy) * ESTIMATED_BYTES_PER_TOKEN
+    + estimateContextInputTokens({ ...input, messages: [] }) * ESTIMATED_BYTES_PER_TOKEN
+  const usage = estimateContextUsage(input, 100_000)
+
+  expect(usage.estimatedInputTokens).toBe(expected)
+  expect(usage.compactionInputTokens).toBe(expected)
+  expect(usage.estimatedInputTokens).toBeGreaterThan(
+    estimateContextUsage({ ...input, estimationPolicy: { reasoningHistory: "omit" } }).estimatedInputTokens,
+  )
+  expect(estimateContextUsage({
+    ...input,
+    messages: [{ ...measured, usage: { inputTokens: 50_000 } }, appended],
+  }, 100_000)).toEqual(usage)
+})
+
 test("adds a conservative token estimate for direct image inputs", () => {
   const plain = user("plain", "Inspect image")
   const withImage: TAgentMessage = {

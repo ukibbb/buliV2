@@ -5,6 +5,8 @@ import { join } from "node:path"
 import { setImmediate } from "node:timers/promises"
 
 import type { IAgentModelRequest } from "@/agent"
+import { DEEPSEEK_MODEL_DEFINITIONS } from "@/providers/deepseek/model/deepseek-model-definitions"
+import type { IDeepSeekCatalogModel } from "@/providers/deepseek/model/deepseek-model-catalog"
 import {
   createBuliApplication,
   type IBuliApplicationOptions,
@@ -21,6 +23,7 @@ import {
   MODELS_DEV_API_URL,
   OPENAI_CODEX_MODELS_URL,
   OPENAI_CODEX_RESPONSES_URL,
+  OPENAI_CODEX_SEARCH_URL,
 } from "@/providers/openai/constants"
 import { InMemorySessionManager } from "@/sessions"
 import {
@@ -153,7 +156,7 @@ test.each(["Fast", "Standard"] as const)(
       expect(runtime.getSnapshot().modelCatalog).toEqual({
         status: "ready",
         ...(mode === "Fast" ? {} : {
-          message: 'Model "gpt-6-astra::fast" was not returned in the model catalog for your signed-in ChatGPT account. Availability may depend on your plan or account permissions. Using "gpt-6-astra" instead.',
+          message: 'Model "gpt-6-astra::fast" was not returned in the model catalog. Availability may depend on your plan or account permissions. Using "gpt-6-astra" instead.',
         }),
       })
 
@@ -293,12 +296,14 @@ test.each(["missing authentication", "catalog HTTP 503"] as const)(
       if (failure === "missing authentication") await fixture.store.remove("openai")
       else fixture.accountResponse.mockReturnValueOnce(new Response("offline", { status: 503 }))
       const { runtime, authentication } = await fixture.start()
-      const message = failure === "missing authentication"
-        ? "OpenAI is not connected"
-        : "OpenAI Codex model catalog returned HTTP 503"
       expect(runtime.getSnapshot().modelCatalog).toMatchObject({
         status: "error",
-        message: expect.stringContaining(message),
+        message: expect.stringContaining("Selected model unavailable"),
+      })
+      expect(runtime.getSnapshot().providerCatalogs?.[0]).toMatchObject({
+        providerId: "openai",
+        status: failure === "missing authentication" ? "disconnected" : "error",
+        stale: false,
       })
       expect(runtime.getSnapshot().models).toEqual([])
       const [provider] = await authentication.listProviders()
@@ -308,7 +313,7 @@ test.each(["missing authentication", "catalog HTTP 503"] as const)(
       })
       expect(provider?.methods).toHaveLength(2)
       expect(runtime.listSessions()).toEqual([])
-      expect(() => runtime.submitPrompt({ text: "Not yet" })).toThrow("Model catalog unavailable")
+      expect(() => runtime.submitPrompt({ text: "Not yet" })).toThrow("Selected model unavailable")
 
       const statuses: (string | undefined)[] = []
       const unsubscribe = runtime.subscribe(() => {
@@ -323,7 +328,7 @@ test.each(["missing authentication", "catalog HTTP 503"] as const)(
       void retry.catch(() => {})
       expect(runtime.getSnapshot().modelCatalog).toEqual({ status: "loading" })
       expect(runtime.getSnapshot().models).toEqual([])
-      expect(() => runtime.submitPrompt({ text: "Still not ready" })).toThrow("Model catalog is loading")
+      expect(() => runtime.submitPrompt({ text: "Still not ready" })).toThrow("Selected model unavailable")
       expect(fixture.manager.createSession).not.toHaveBeenCalled()
       expect(fixture.manager.appendMessage).not.toHaveBeenCalled()
       expect(fixture.manager.getAllMessages()).toEqual([])
@@ -331,7 +336,7 @@ test.each(["missing authentication", "catalog HTTP 503"] as const)(
 
       retryResponse.resolve(Response.json({ models: [CODEX_ASTRA_REFERENCE] }))
       await retry
-      expect(fixture.modelCatalog.load).toHaveBeenCalledTimes(2)
+      expect(fixture.modelCatalog.load).toHaveBeenCalledTimes(failure === "missing authentication" ? 1 : 2)
       expect(statuses).toEqual(["loading", "ready"])
       unsubscribe()
       expect(runtime.getSnapshot().modelCatalog).toEqual({ status: "ready" })
@@ -413,6 +418,163 @@ test("root abort during discovery rejects only after owned resources finish roll
   }
 })
 
+test("Kimi-only startup exposes manual selection without calling OpenAI discovery", async () => {
+  const fixture = await applicationFixture()
+  try {
+    await fixture.store.remove("openai")
+    await fixture.store.set("kimi-coding", { type: "api_key", key: "synthetic-kimi" })
+    const load = mock(async () => [{
+      modelId: "kimi-for-coding" as const,
+      name: "Kimi Code",
+      reasoningEfforts: ["low", "high", "max"] as const,
+      defaultReasoningEffort: "max" as const,
+      provenance: {
+        availability: "api-listed-not-inference-verified" as const,
+        reasoning: "https://www.kimi.com/code/docs/en/kimi-code/models.html" as const,
+      },
+    }])
+    const { runtime } = await fixture.start({ kimiModelCatalog: { load } })
+    expect(load).toHaveBeenCalledTimes(1)
+    expect(fixture.modelCatalog.load).not.toHaveBeenCalled()
+    expect(runtime.getSnapshot().models.map((model) => model.id)).toEqual(["kimi-coding/kimi-for-coding"])
+    expect(runtime.getSnapshot().selectedModelAvailable).toBe(false)
+    expect(() => runtime.submitPrompt({ text: "Blocked" })).toThrow("Selected model unavailable")
+    runtime.selectModel("kimi-coding/kimi-for-coding")
+    expect(runtime.getSnapshot().selectedModelAvailable).toBe(true)
+    await fixture.store.remove("kimi-coding")
+    await runtime.refreshModels()
+    expect(runtime.getSnapshot().models).toEqual([])
+    expect(runtime.getSnapshot().selectedModelAvailable).toBe(false)
+    expect(load).toHaveBeenCalledTimes(1)
+    expect(fixture.modelRequests).toEqual([])
+  } finally { await fixture.dispose() }
+})
+
+function deepseekCatalogEntry(): IDeepSeekCatalogModel {
+  const definition = DEEPSEEK_MODEL_DEFINITIONS["deepseek-flash"]
+  return { ...definition, provenance: { ...definition.provenance, availability: "api-listed-not-inference-verified" } }
+}
+
+function deepseekStream(search: boolean): Response {
+  const delta = search
+    ? { reasoning_content: "Need search", tool_calls: [{ index: 0, id: "search-1", type: "function", function: {
+      name: "web_search", arguments: JSON.stringify({ search_query: [{ q: "synthetic query" }] }),
+    } }] }
+    : { reasoning_content: "Completed analysis", content: "Synthetic summary and answer" }
+  return new Response(`data: ${JSON.stringify({
+    id: "deepseek-response", object: "chat.completion.chunk", created: 1, model: "deepseek-flash",
+    choices: [{ index: 0, delta, finish_reason: search ? "tool_calls" : "stop" }],
+  })}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } })
+}
+
+for (const removal of ["logout", "empty catalog"] as const) {
+  test(`DeepSeek-only startup requires manual selection and blocks new runs after ${removal}`, async () => {
+    const fixture = await applicationFixture()
+    try {
+      await fixture.store.remove("openai")
+      await fixture.store.set("deepseek", { type: "api_key", key: "synthetic-deepseek" })
+      let entries: readonly IDeepSeekCatalogModel[] = [deepseekCatalogEntry()]
+      const load = mock(async () => entries)
+      const { runtime } = await fixture.start({ deepseekModelCatalog: { load } })
+      expect(fixture.modelCatalog.load).not.toHaveBeenCalled()
+      expect(runtime.getSnapshot().models.map(model => model.id)).toEqual(["deepseek/deepseek-flash"])
+      expect(runtime.getSnapshot().selectedModelAvailable).toBe(false)
+      expect(() => runtime.submitPrompt({ text: "Blocked" })).toThrow("Selected model unavailable")
+      runtime.selectModel("deepseek/deepseek-flash")
+      const run = runtime.submitPrompt({ text: "Hello" })
+      await run.runFinished
+      expect(fixture.manager.getMessages(run.sessionId).at(-1)).toMatchObject({ stopReason: "stop" })
+      expect(runtime.openSession(run.sessionId).getSnapshot().contextUsage?.compactionThresholdTokens).toBe(655_360)
+      expect(fixture.deepseekRequests).toHaveLength(1)
+      if (removal === "logout") await fixture.authentication.deepseek.logout(fixture.controller.signal)
+      else entries = []
+      await runtime.refreshModels()
+      expect(runtime.getSnapshot().models).toEqual([])
+      expect(runtime.getSnapshot().selection.modelId).toBe("deepseek/deepseek-flash")
+      expect(runtime.getSnapshot().selectedModelAvailable).toBe(false)
+      expect(() => runtime.submitPrompt({ text: "Blocked again" })).toThrow("Selected model unavailable")
+      expect(load).toHaveBeenCalledTimes(removal === "logout" ? 1 : 2)
+      expect(fixture.deepseekRequests).toHaveLength(1)
+    } finally { await fixture.dispose() }
+  })
+}
+
+test("OpenAI and Kimi discovery failures do not block DeepSeek conversation", async () => {
+  const fixture = await applicationFixture()
+  try {
+    await fixture.store.set("deepseek", { type: "api_key", key: "synthetic-deepseek" })
+    await fixture.store.set("kimi-coding", { type: "api_key", key: "synthetic-kimi" })
+    const failing = { load: mock(async (): Promise<never> => { throw new Error("Synthetic catalog error") }) }
+    const { runtime } = await fixture.start({
+      modelCatalog: failing, kimiModelCatalog: failing,
+      deepseekModelCatalog: { load: async () => [deepseekCatalogEntry()] },
+    })
+    expect(failing.load).toHaveBeenCalledTimes(2)
+    expect(runtime.getSnapshot().providerCatalogs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ providerId: "openai", status: "error" }),
+      expect.objectContaining({ providerId: "kimi-coding", status: "error" }),
+      expect.objectContaining({ providerId: "deepseek", status: "ready" }),
+    ]))
+    runtime.selectModel("deepseek/deepseek-flash")
+    const run = runtime.submitPrompt({ text: "Hello" })
+    await run.runFinished
+    expect(fixture.manager.getMessages(run.sessionId).at(-1)).toMatchObject({ stopReason: "stop" })
+    expect(fixture.deepseekRequests).toHaveLength(1)
+    expect(fixture.modelRequests).toEqual([])
+  } finally { await fixture.dispose() }
+})
+
+test("bootstrap carries DeepSeek reserve through session telemetry and manual summarization", async () => {
+  const fixture = await applicationFixture()
+  try {
+    await fixture.store.remove("openai")
+    await fixture.store.set("deepseek", { type: "api_key", key: "synthetic-deepseek" })
+    const { runtime } = await fixture.start({ deepseekModelCatalog: { load: async () => [deepseekCatalogEntry()] } })
+    runtime.selectModel("deepseek/deepseek-flash")
+    for (const size of [1_400_000, 20_000]) {
+      const session = runtime.createSession({ agentId: runtime.getSnapshot().defaultAgentId, title: "Reserve test" })
+      fixture.manager.appendMessage({
+        id: `answer-${size}`, sessionId: session.id, runId: "old", role: "assistant", createdAt: 1,
+        model: { providerId: "deepseek", modelId: "deepseek-flash" }, stopReason: "stop",
+        content: [{ type: "text", text: "x".repeat(size) }],
+      })
+      expect(runtime.openSession(session.id).getSnapshot().contextUsage?.compactionThresholdTokens).toBe(655_360)
+      if (size === 1_400_000) {
+        await expect(runtime.compactSession(session.id)).rejects.toThrow("655360-token input budget with a 393216-token output headroom")
+        expect(fixture.deepseekRequests).toHaveLength(0)
+      } else {
+        expect(await runtime.compactSession(session.id)).toMatchObject({ summary: "Synthetic summary and answer" })
+        expect(fixture.deepseekRequests).toHaveLength(1)
+        const body = await fixture.deepseekRequests[0]!.clone().json()
+        expect(body).not.toHaveProperty("max_tokens")
+      }
+    }
+  } finally { await fixture.dispose() }
+})
+
+test("DeepSeek tool execution uses independent OpenAI web search credentials", async () => {
+  const fixture = await applicationFixture()
+  try {
+    await fixture.store.set("deepseek", { type: "api_key", key: "synthetic-deepseek" })
+    fixture.deepseekResponse.mockImplementation(() => deepseekStream(fixture.deepseekRequests.length === 1))
+    const { runtime } = await fixture.start({ deepseekModelCatalog: { load: async () => [deepseekCatalogEntry()] } }, true)
+    runtime.selectModel("deepseek/deepseek-flash")
+    const run = runtime.submitPrompt({ text: "Search for synthetic query" })
+    await run.runFinished
+    expect(fixture.searchRequests).toHaveLength(1)
+    expect(fixture.searchRequests[0]!.headers.get("authorization")).toBe("Bearer synthetic-access-token")
+    expect(fixture.deepseekRequests).toHaveLength(2)
+    for (const request of fixture.deepseekRequests) {
+      expect(request.headers.get("authorization")).toBe("Bearer synthetic-deepseek")
+    }
+    expect(fixture.modelRequests).toEqual([])
+    expect(fixture.manager.getMessages(run.sessionId)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: "toolResult", toolName: "web_search", isError: false, content: expect.stringContaining("Synthetic search result") }),
+    ]))
+    expect(fixture.manager.getMessages(run.sessionId).at(-1)).toMatchObject({ stopReason: "stop" })
+  } finally { await fixture.dispose() }
+})
+
 async function applicationFixture() {
   const workspace = await mkdtemp(join(tmpdir(), "buli-application-"))
   const controller = new AbortController()
@@ -425,6 +587,9 @@ async function applicationFixture() {
   })
   const accountRequests: Request[] = []
   const modelRequests: Request[] = []
+  const deepseekRequests: Request[] = []
+  const searchRequests: Request[] = []
+  const deepseekResponse = mock((_request: Request): Response => deepseekStream(false))
   const publicRequests: Array<{ request: Request; init: RequestInit | undefined }> = []
   const unexpectedUrls: string[] = []
   const accountResponse = mock((_request: Request): Response | Promise<Response> => (
@@ -435,6 +600,14 @@ async function applicationFixture() {
     now: () => 100,
     fetch: fetchImplementation(async (...args) => {
       const request = new Request(...args)
+      if (request.url === "https://api.deepseek.com/chat/completions" && request.method === "POST") {
+        deepseekRequests.push(request)
+        return deepseekResponse(request)
+      }
+      if (request.url === OPENAI_CODEX_SEARCH_URL && request.method === "POST") {
+        searchRequests.push(request)
+        return Response.json({ output: "Synthetic search result" })
+      }
       if (request.url === OPENAI_CODEX_MODELS_URL && request.method === "GET") {
         accountRequests.push(request)
         return accountResponse(request)
@@ -470,7 +643,8 @@ async function applicationFixture() {
   return {
     workspace, controller, store, manager, authentication, modelCatalog,
     accountResponse, accountRequests, modelRequests, publicRequests,
-    start(options: Pick<IBuliApplicationOptions, "model" | "modelCatalog"> = {}) {
+    deepseekRequests, deepseekResponse, searchRequests,
+    start(options: Pick<IBuliApplicationOptions, "model" | "modelCatalog" | "kimiModelCatalog" | "deepseekModelCatalog"> = {}, includeDefaultTools = false) {
       if (startupTask) throw new Error("Fixture already started")
       startupTask = createBuliApplication({
         signal: controller.signal,
@@ -480,7 +654,7 @@ async function applicationFixture() {
         modelCatalog,
         // Preserve the original neutral-model test's default tool composition;
         // HTTP-focused cases need only model traffic, never executable sidecars.
-        ...(options.model === undefined ? { tools: [] } : {}),
+        ...(options.model === undefined && !includeDefaultTools ? { tools: [] } : {}),
         ...options,
       })
       void startupTask.catch(() => {})

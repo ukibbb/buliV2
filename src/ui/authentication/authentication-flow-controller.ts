@@ -55,6 +55,7 @@ export interface IAuthPromptView {
     // Każdy prompt dostaje nowe ID, aby widok mógł zamontować pusty input
     // bez przekazywania imperatywnego InputRenderable do kontrolera.
     readonly id: number
+    readonly presentation: "text" | "secret"
     readonly message: string
     readonly placeholder: string
 }
@@ -375,6 +376,7 @@ export class AuthenticationFlowController {
                     ...current,
                     prompt: {
                         id: ++this.nextPromptId,
+                        presentation: request.type === "secret" ? "secret" : "text",
                         message: request.message,
                         placeholder: request.placeholder,
                     },

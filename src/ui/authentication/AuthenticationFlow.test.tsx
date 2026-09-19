@@ -410,6 +410,62 @@ test("scrolls authentication choices inside a short card", async () => {
   }
 })
 
+test("secret prompts mask typing and paste, clear on cancellation and submit only once", async () => {
+  const inputs: string[] = []
+  const authentication: IAuthenticationService = {
+    listProviders: async () => [LOGIN_PROVIDER],
+    login: async (providerId, _method, interaction) => {
+      inputs.push(await interaction.prompt({
+        type: "secret", message: "Enter secret:", placeholder: "Private value",
+        signal: interaction.signal,
+      }))
+      return { providerId, connected: true }
+    },
+    logout: async () => false,
+    dispose: async () => {},
+  }
+  const setup = await renderAuthenticationFlow(<AuthenticationFlow
+    mode="login" authentication={authentication} onClose={() => {}} openUrl={() => {}}
+  />)
+  try {
+    await setup.waitForFrame((frame) => frame.includes("Select a provider"))
+    await pressKey(setup, "\r")
+    await pressKey(setup, "\r")
+    await setup.waitForFrame((frame) => frame.includes("Enter secret:"))
+    await act(async () => {
+      await setup.mockInput.typeText("synthetic-secret")
+      await setup.renderOnce()
+    })
+    const masked = await setup.waitForFrame((frame) => frame.includes("****************"))
+    expect(masked).not.toContain("synthetic-secret")
+    expect(masked).toContain("****************")
+    expect(() => inputRenderable(setup.renderer.root)).toThrow()
+    await pressKey(setup, "\u001b")
+    await setup.waitForFrame((frame) => frame.includes("Select a login method"))
+    await pressKey(setup, "\r")
+    await setup.waitForFrame((frame) => frame.includes("Private value"))
+    await act(async () => {
+      setup.renderer.keyInput.processPaste(new TextEncoder().encode("pasted-secret"))
+      await setup.renderOnce()
+    })
+    await setup.waitForFrame((frame) => frame.includes("*************"))
+    expect(setup.captureCharFrame()).not.toContain("pasted-secret")
+    await pressKey(setup, "\u007f")
+    await pressKey(setup, "\u0015")
+    await setup.waitForFrame((frame) => frame.includes("Private value"))
+    await act(async () => {
+      setup.renderer.keyInput.processPaste(new TextEncoder().encode("final-secret"))
+      await setup.renderOnce()
+    })
+    await pressKey(setup, "\r")
+    await setup.waitForFrame((frame) => frame.includes("Sign-in complete"))
+    expect(inputs).toEqual(["final-secret"])
+    expect(setup.captureCharFrame()).not.toContain("final-secret")
+  } finally {
+    act(() => setup.renderer.destroy())
+  }
+})
+
 async function pressKey(
   setup: Awaited<ReturnType<typeof testRender>>,
   input: string,

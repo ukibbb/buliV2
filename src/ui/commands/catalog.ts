@@ -24,6 +24,9 @@ export const BULI_COMMANDS: readonly TBuliCommand[] = [
                 refreshError = commandErrorMessage(error)
             }
             const snapshot = application.getSnapshot()
+            const providerErrors = snapshot.providerCatalogs?.filter((provider) => provider.status === "error")
+                .map((provider) => `${provider.message ?? provider.providerId}${provider.stale ? " Using the previous catalog." : ""}`).join(" ")
+            refreshError ??= providerErrors || undefined
 
             return {
                 items: snapshot.models.map((model) => ({

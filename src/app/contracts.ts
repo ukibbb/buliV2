@@ -58,11 +58,20 @@ export interface IBuliModelDisplayInfo {
     readonly reasoningEfforts: readonly TReasoningEffort[]
 }
 
+export interface IBuliProviderCatalogStatus {
+    readonly providerId: string
+    readonly status: "ready" | "disconnected" | "error"
+    readonly stale: boolean
+    readonly message?: string
+}
+
 export interface IBuliApplicationSnapshot {
     readonly agents: readonly IBuliAgentDisplayInfo[]
     readonly defaultAgentId: string
     readonly models: readonly IBuliModelDisplayInfo[]
     readonly selection: IBuliModelSelection
+    readonly providerCatalogs?: readonly IBuliProviderCatalogStatus[]
+    readonly selectedModelAvailable?: boolean
     // Present only when initial catalog discovery is required. Loading/error
     // hides provisional models and blocks generation; a ready message is advisory.
     // Until ready, selection may reference a provisional ID absent from models.

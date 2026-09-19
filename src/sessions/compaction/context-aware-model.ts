@@ -8,6 +8,7 @@ import {
 import {
     estimateContextUsage,
     type IContextUsage,
+    type IContextEstimationPolicy,
 } from "@/sessions/compaction/context-budget"
 
 const MAX_COMPACTION_PASSES = 64
@@ -15,6 +16,7 @@ const MAX_COMPACTION_PASSES = 64
 export interface IContextAwareModelOptions {
     readonly model: IAgentModel
     readonly modelProfile?: IModelProfile
+    readonly estimationPolicy?: IContextEstimationPolicy
     readonly contextWindowTokens: number | undefined
     readonly projectRequest: (
         originalRequest: IAgentModelRequest,
@@ -118,6 +120,7 @@ async function compactPreflightRequest(
             request,
             options.contextWindowTokens,
             options.modelProfile,
+            options.estimationPolicy,
         )
         options.publishContextUsage(usage)
         if (!usage.shouldCompact || options.contextWindowTokens === undefined) {
@@ -145,6 +148,7 @@ async function compactOverflowRequest(
             request,
             options.contextWindowTokens,
             options.modelProfile,
+            options.estimationPolicy,
         )
         options.publishContextUsage(usage)
         if (!usage.shouldCompact || options.contextWindowTokens === undefined) {
@@ -172,6 +176,7 @@ function estimateRequestUsage(
     request: IAgentModelRequest,
     contextWindowTokens: number | undefined,
     modelProfile?: IModelProfile,
+    estimationPolicy?: IContextEstimationPolicy,
 ): IContextUsage {
     return estimateContextUsage({
         systemPrompt: request.systemPrompt,
@@ -181,6 +186,7 @@ function estimateRequestUsage(
         messages: request.messages,
         tools: request.tools,
         ...(modelProfile === undefined ? {} : { modelProfile }),
+        ...(estimationPolicy === undefined ? {} : { estimationPolicy }),
     }, contextWindowTokens)
 }
 

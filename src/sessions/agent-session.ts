@@ -4,7 +4,6 @@ import {
     type TAgentMessage,
     type IAgentModelRequest,
     type IAgentRunConfiguration,
-    type TAgentRunConfigurationResolver,
     type IAgentRunHandle,
     type IAgentState,
     type IRuntimeAgentTool,
@@ -18,6 +17,7 @@ import type { ICompactionCheckpoint } from "@/sessions/compaction/checkpoint"
 import {
     estimateContextUsage,
     type IContextUsage,
+    type IContextEstimationPolicy,
 } from "@/sessions/compaction/context-budget"
 import {
     createContextAwareModel,
@@ -33,12 +33,18 @@ import {
 } from "@/sessions/snapshot"
 const DEFAULT_DISPOSE_TIMEOUT_MS = 5_000
 
+export interface IAgentSessionRunConfiguration extends IAgentRunConfiguration {
+    readonly estimationPolicy?: IContextEstimationPolicy
+}
+
+type TSessionRunConfigurationResolver = () => IAgentSessionRunConfiguration
+
 interface IAgentSessionOptions {
     readonly agentId: string
     readonly sessionId: string
     readonly manager: ISessionManager
     readonly systemPrompt: string
-    readonly resolveRunConfiguration: TAgentRunConfigurationResolver
+    readonly resolveRunConfiguration: TSessionRunConfigurationResolver
     readonly tools: readonly IRuntimeAgentTool[]
     readonly now?: () => number
     readonly generateId?: () => string
@@ -62,7 +68,7 @@ export class AgentSession {
     private readonly listeners = new Set<TSessionListener>()
     private readonly unsubscribeAgent: () => void
     private readonly disposeTimeoutMs: number
-    private readonly resolveRunConfiguration: TAgentRunConfigurationResolver
+    private readonly resolveRunConfiguration: TSessionRunConfigurationResolver
     private readonly systemPrompt: string
     private readonly tools: readonly IRuntimeAgentTool[]
     private readonly now: () => number
@@ -85,6 +91,7 @@ export class AgentSession {
     private contextUsage: IContextUsage | undefined
     private currentContextWindowTokens: number | undefined
     private currentModelProfile: IModelProfile | undefined
+    private currentEstimationPolicy: IContextEstimationPolicy | undefined
     private contextUsageRefreshPending = false
     private disposed = false
     private disposeTask: Promise<void> | undefined
@@ -185,11 +192,11 @@ export class AgentSession {
 
     private refreshContextUsageFromRunConfiguration(): void {
         try {
-            const runConfiguration = this.resolveRunConfiguration()
-            this.setCurrentModelProfile(runConfiguration.modelProfile)
+            this.setCurrentContextConfiguration(this.captureRunConfiguration())
         } catch {
             this.currentContextWindowTokens = undefined
             this.currentModelProfile = undefined
+            this.currentEstimationPolicy = undefined
         }
         this.updateContextUsageFromDurableHistory()
     }
@@ -314,11 +321,24 @@ export class AgentSession {
         }
     }
 
+    private captureRunConfiguration(): IAgentSessionRunConfiguration {
+        const configuration = this.resolveRunConfiguration()
+        return {
+            ...configuration,
+            ...(configuration.modelProfile === undefined ? {} : {
+                modelProfile: structuredClone(configuration.modelProfile),
+            }),
+            ...(configuration.estimationPolicy === undefined ? {} : {
+                estimationPolicy: { ...configuration.estimationPolicy },
+            }),
+        }
+    }
+
     private resolveConversationRunConfiguration(): IAgentRunConfiguration {
-        const runConfiguration = this.resolveRunConfiguration()
+        const runConfiguration = this.captureRunConfiguration()
         const contextWindowTokens =
             runConfiguration.modelProfile?.contextWindowTokens
-        this.setCurrentModelProfile(runConfiguration.modelProfile)
+        this.setCurrentContextConfiguration(runConfiguration)
 
         return {
             ...runConfiguration,
@@ -328,6 +348,9 @@ export class AgentSession {
                     ? {}
                     : { modelProfile: runConfiguration.modelProfile }),
                 contextWindowTokens,
+                ...(runConfiguration.estimationPolicy === undefined ? {} : {
+                    estimationPolicy: runConfiguration.estimationPolicy,
+                }),
                 projectRequest: (request) => this.reprojectRequest(request),
                 compactAndReproject: (request) =>
                     this.compactAndReproject(request, runConfiguration),
@@ -342,7 +365,7 @@ export class AgentSession {
 
     private async compactAndReproject(
         originalRequest: IAgentModelRequest,
-        runConfiguration: IAgentRunConfiguration,
+        runConfiguration: IAgentSessionRunConfiguration,
     ): Promise<IAgentModelRequest | undefined> {
         const checkpoint = await (this.compactionTask ?? this.startCompaction(
             "automatic",
@@ -381,7 +404,7 @@ export class AgentSession {
         reason: ICompactionCheckpoint["reason"],
         sourceSignal?: AbortSignal,
         originalRequest?: IAgentModelRequest,
-        activeRunConfiguration?: IAgentRunConfiguration,
+        activeRunConfiguration?: IAgentSessionRunConfiguration,
     ): Promise<ICompactionCheckpoint | undefined> {
         if (this.disposed) throw new Error("AgentSession is disposed")
         if (this.persistenceError !== undefined) {
@@ -432,13 +455,13 @@ export class AgentSession {
         reason: ICompactionCheckpoint["reason"],
         controller: AbortController,
         originalRequest?: IAgentModelRequest,
-        activeRunConfiguration?: IAgentRunConfiguration,
+        activeRunConfiguration?: IAgentSessionRunConfiguration,
     ): Promise<ICompactionCheckpoint | undefined> {
         const previousCheckpoint = this.manager.getCompactionCheckpoint(this.id)
         const runConfiguration = activeRunConfiguration
-            ?? this.resolveRunConfiguration()
+            ?? this.captureRunConfiguration()
         if (!this.agent.state.isRunning) {
-            this.setCurrentModelProfile(runConfiguration.modelProfile)
+            this.setCurrentContextConfiguration(runConfiguration)
         }
         const messages = this.manager.getMessages(this.id)
         const checkpoint = await compactSessionMessages({
@@ -465,10 +488,12 @@ export class AgentSession {
                 messages,
                 previousCheckpoint,
                 runConfiguration.modelProfile,
+                runConfiguration.estimationPolicy,
             )
             : estimatedRequestInputTokens(
                 this.reprojectRequest(originalRequest, previousCheckpoint),
                 runConfiguration.modelProfile,
+                runConfiguration.estimationPolicy,
             )
         const afterTokens = originalRequest === undefined
             ? estimatedProjectionInputTokens(
@@ -477,10 +502,12 @@ export class AgentSession {
                 messages,
                 checkpoint,
                 runConfiguration.modelProfile,
+                runConfiguration.estimationPolicy,
             )
             : estimatedRequestInputTokens(
                 this.reprojectRequest(originalRequest, checkpoint),
                 runConfiguration.modelProfile,
+                runConfiguration.estimationPolicy,
             )
         if (afterTokens >= beforeTokens) {
             return undefined
@@ -501,11 +528,11 @@ export class AgentSession {
         messages: readonly TAgentMessage[],
     ): void {
         try {
-            const runConfiguration = this.resolveRunConfiguration()
-            this.setCurrentModelProfile(runConfiguration.modelProfile)
+            this.setCurrentContextConfiguration(this.captureRunConfiguration())
         } catch {
             this.currentContextWindowTokens = undefined
             this.currentModelProfile = undefined
+            this.currentEstimationPolicy = undefined
         }
         this.contextUsage = this.estimateProjectedContext(messages)
     }
@@ -533,10 +560,17 @@ export class AgentSession {
             ...(this.currentModelProfile === undefined
                 ? {}
                 : { modelProfile: this.currentModelProfile }),
+            ...(this.currentEstimationPolicy === undefined ? {} : {
+                estimationPolicy: this.currentEstimationPolicy,
+            }),
         }, this.currentContextWindowTokens)
     }
 
-    private setCurrentModelProfile(modelProfile: IModelProfile | undefined): void {
+    private setCurrentContextConfiguration(configuration: IAgentSessionRunConfiguration): void {
+        const { modelProfile, estimationPolicy } = configuration
+        this.currentEstimationPolicy = estimationPolicy === undefined
+            ? undefined
+            : { ...estimationPolicy }
         this.currentModelProfile = modelProfile === undefined
             ? undefined
             : structuredClone(modelProfile)
@@ -652,6 +686,7 @@ export class AgentSession {
 function estimatedRequestInputTokens(
     request: IAgentModelRequest,
     modelProfile?: IModelProfile,
+    estimationPolicy?: IContextEstimationPolicy,
 ): number {
     return estimateContextUsage({
         systemPrompt: request.systemPrompt,
@@ -661,6 +696,7 @@ function estimatedRequestInputTokens(
         messages: request.messages,
         tools: request.tools,
         ...(modelProfile === undefined ? {} : { modelProfile }),
+        ...(estimationPolicy === undefined ? {} : { estimationPolicy }),
     }).estimatedInputTokens
 }
 
@@ -670,6 +706,7 @@ function estimatedProjectionInputTokens(
     messages: readonly TAgentMessage[],
     checkpoint: ICompactionCheckpoint | undefined,
     modelProfile?: IModelProfile,
+    estimationPolicy?: IContextEstimationPolicy,
 ): number {
     const projection = projectAgentContext(messages, checkpoint)
     return estimateContextUsage({
@@ -680,6 +717,7 @@ function estimatedProjectionInputTokens(
         messages: projection.messages,
         tools,
         ...(modelProfile === undefined ? {} : { modelProfile }),
+        ...(estimationPolicy === undefined ? {} : { estimationPolicy }),
     }).estimatedInputTokens
 }
 

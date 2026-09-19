@@ -1,5 +1,5 @@
 /** Public sessions feature API for application composition and consumers. */
-export { AgentSession } from "@/sessions/agent-session"
+export { AgentSession, type IAgentSessionRunConfiguration } from "@/sessions/agent-session"
 export {
     assertCheckpointAnchor,
     type ICompactionCheckpoint,
@@ -20,6 +20,7 @@ export {
     estimateContextUsage,
     estimateMessagesInputTokens,
     type IContextInput,
+    type IContextEstimationPolicy,
     type IContextUsage,
     shouldCompactContext,
 } from "@/sessions/compaction/context-budget"

@@ -10,6 +10,7 @@ import type {
     IBuliApplicationSnapshot,
     IBuliModelDisplayInfo,
     IBuliModelSelection,
+    IBuliProviderCatalogStatus,
     IBuliPathSuggestion,
     TBuliPathSearcher,
     IBuliPromptInput,
@@ -20,6 +21,7 @@ import type {
 import { generateRandomId } from "@/common/ids"
 import {
     AgentSession,
+    type IContextEstimationPolicy,
     type ISessionInfo,
     type ISessionManager,
     type ISessionSnapshot,
@@ -31,10 +33,17 @@ type TBuliRuntimeSubscribe = () => void
 export interface IBuliModelRuntimeConfig extends IBuliModelDisplayInfo {
     readonly model: IAgentModel
     readonly modelProfile?: IModelProfile
+    readonly estimationPolicy?: IContextEstimationPolicy
     readonly providerAccountId?: string
     readonly fallbackSelectionId?: string
     readonly defaultReasoningEffort: TReasoningEffort
 }
+
+export type TProviderCatalogResult =
+    | { readonly providerId: string; readonly status: "ready"; readonly models: readonly IBuliModelRuntimeConfig[] }
+    | { readonly providerId: string; readonly status: "disconnected" | "error"; readonly message: string }
+
+export type TProviderCatalogLoader = (signal: AbortSignal) => Promise<readonly TProviderCatalogResult[]>
 
 export type TBuliModelRegistrationLoader = (
     signal: AbortSignal,
@@ -51,6 +60,7 @@ export interface IBuliRuntimeOptions {
     readonly models: readonly IBuliModelRuntimeConfig[]
     readonly selection: IBuliModelSelection
     readonly loadModels?: TBuliModelRegistrationLoader
+    readonly loadProviderCatalogs?: TProviderCatalogLoader
     // Opts into discovery-gated startup (requires loadModels). This in-memory
     // priority order applies only to the first successful catalog and is not persisted.
     readonly preferredModelIds?: readonly string[]
@@ -71,6 +81,11 @@ export class BuliApplicationRuntime implements IBuliApplication {
     private readonly defaultAgentId: string
     private models: readonly IBuliModelRuntimeConfig[]
     private readonly loadModels: TBuliModelRegistrationLoader | undefined
+    private readonly loadProviderCatalogs: TProviderCatalogLoader | undefined
+    private providerCatalogs: readonly IBuliProviderCatalogStatus[] = []
+    private providerModels = new Map<string, readonly IBuliModelRuntimeConfig[]>()
+    private initialProviderDiscovery = true
+    private selectedRegistration: IBuliModelRuntimeConfig | undefined
     private readonly preferredModelIds: readonly string[] | undefined
     private readonly pathSearcher: TBuliPathSearcher | undefined
     private readonly now: () => number
@@ -114,7 +129,9 @@ export class BuliApplicationRuntime implements IBuliApplication {
         this.defaultAgentId = options.defaultAgentId
         this.models = copyModelRegistrations(options.models)
         this.loadModels = options.loadModels
-        if (options.preferredModelIds !== undefined && !this.loadModels) {
+        this.loadProviderCatalogs = options.loadProviderCatalogs
+        if (this.loadModels && this.loadProviderCatalogs) throw new Error("Use only one catalog loader")
+        if (options.preferredModelIds !== undefined && !this.loadModels && !this.loadProviderCatalogs) {
             throw new Error("preferredModelIds requires loadModels")
         }
         this.preferredModelIds = options.preferredModelIds === undefined
@@ -130,7 +147,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
         this.toolOutputStore = options.toolOutputStore
 
         this.resolveAgent(this.defaultAgentId)
-        this.resolveSelectedModel()
+        this.selectedRegistration = this.resolveSelectedModel()
         this.snapshot = this.createSnapshot()
     }
 
@@ -323,7 +340,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
             return Promise.reject(new Error("Buli runtime is disposed"))
         }
         if (signal?.aborted) return Promise.reject(signal.reason)
-        if (!this.loadModels) return Promise.resolve()
+        if (!this.loadModels && !this.loadProviderCatalogs) return Promise.resolve()
         if (this.modelRefreshTask) {
             return waitWithSignal(this.modelRefreshTask, signal)
         }
@@ -354,6 +371,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
         // Zatrzymaj zmianę, jeśli runtime został już zamknięty.
 
         const registration = this.resolveModel(modelId)
+        if (this.loadProviderCatalogs && !this.providerModels.size) throw new Error("Model discovery is required")
         this.setSelection({
             // Zbuduj pełną następną selekcję i przekaż ją do wspólnej walidacji.
             ...this.selection,
@@ -437,7 +455,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
         field: keyof IBuliModelSelection,
     ): void {
         // Odbierz kompletną kandydacką selekcję modelu i reasoning effort.
-        this.resolveSelectedModel(selection)
+        const selectedRegistration = this.resolveSelectedModel(selection)
         // Sprawdź model oraz effort przed zmianą jakiegokolwiek stanu runtime.
 
         if (field === "modelId") this.modelManuallySelected = true
@@ -455,6 +473,11 @@ export class BuliApplicationRuntime implements IBuliApplication {
         }
 
         this.selection = { ...selection }
+        this.selectedRegistration = selectedRegistration
+        if (this.loadProviderCatalogs) {
+            this.initialProviderDiscovery = false
+            this.modelCatalog = { status: "ready" }
+        }
         // Zapisz bezpieczną kopię nowej globalnej selekcji.
         // A valid manual choice acknowledges a non-blocking catalog notice, even
         // when the chosen value is unchanged. It cannot bypass initial readiness.
@@ -492,9 +515,9 @@ export class BuliApplicationRuntime implements IBuliApplication {
             id: registration.id,
             name: registration.name,
         }))
-        const visibleModels = modelCatalog && modelCatalog.status !== "ready"
-            ? []
-            : modelsSource
+        const visibleModels = this.loadProviderCatalogs
+            ? (this.providerModels.size ? modelsSource : [])
+            : modelCatalog && modelCatalog.status !== "ready" ? [] : modelsSource
         const models = visibleModels.map(
             (registration: IBuliModelRuntimeConfig) => Object.freeze({
                 id: registration.id,
@@ -510,13 +533,84 @@ export class BuliApplicationRuntime implements IBuliApplication {
             defaultAgentId: this.defaultAgentId,
             models: Object.freeze(models),
             selection: Object.freeze({ ...selection }),
+            ...(this.loadProviderCatalogs ? {
+                providerCatalogs: Object.freeze(this.providerCatalogs.map((status) => Object.freeze({ ...status }))),
+                selectedModelAvailable: this.providerModels.size > 0 && modelsSource.some((model) => model.id === selection.modelId),
+            } : {}),
             ...(modelCatalog === undefined
                 ? {}
                 : { modelCatalog: Object.freeze({ ...modelCatalog }) }),
         })
     }
 
+    private async refreshProviderCatalogs(signal?: AbortSignal): Promise<void> {
+        const load = this.loadProviderCatalogs
+        if (!load) return
+        const operationSignal = signal ? AbortSignal.any([signal, this.lifetime.signal]) : this.lifetime.signal
+        operationSignal.throwIfAborted()
+        const results = await load(operationSignal)
+        operationSignal.throwIfAborted()
+        if (this.disposed) throw new Error("Buli runtime is disposed")
+        const next = new Map(this.providerModels)
+        const statuses: IBuliProviderCatalogStatus[] = []
+        const seen = new Set<string>()
+        for (const result of results) {
+            if (!result.providerId.trim() || seen.has(result.providerId)) throw new Error("Invalid provider catalog ID")
+            seen.add(result.providerId)
+            if (result.status === "ready") {
+                const models = result.models.length ? copyModelRegistrations(result.models) : []
+                if (models.some((model) => model.modelProfile?.providerId !== result.providerId)) {
+                    throw new Error("Provider catalog contains a foreign model")
+                }
+                next.set(result.providerId, models)
+            } else if (result.status === "disconnected") {
+                next.delete(result.providerId)
+            }
+            statuses.push({
+                providerId: result.providerId,
+                status: result.status,
+                stale: result.status === "error" && (next.get(result.providerId)?.length ?? 0) > 0,
+                ...(result.status === "ready" ? {} : { message: result.message }),
+            })
+        }
+        for (const id of next.keys()) if (!seen.has(id)) next.delete(id)
+        const combined = [...next.values()].flat()
+        const models = combined.length ? copyModelRegistrations(combined) : []
+        const previous = this.selectedRegistration
+        const current = models.find((model) => model.id === this.selection.modelId)
+        if (current && previous && current.modelProfile?.providerId !== previous.modelProfile?.providerId) {
+            throw new Error("Automatic provider switching is disabled: selected model changed provider")
+        }
+        const hasCandidate = current || (previous && models.some((model) => sameKnownProvider(previous, model)))
+        let selection = this.selection
+        if (hasCandidate) {
+            selection = reconcileSelection(models, selection, previous,
+                this.initialProviderDiscovery && !this.modelManuallySelected ? this.preferredModelIds : undefined,
+                this.initialProviderDiscovery ? this.manuallySelectedReasoningEffort : selection.reasoningEffort)
+        }
+        const requestedId = this.initialProviderDiscovery && !this.modelManuallySelected
+            ? this.preferredModelIds?.[0] ?? this.selection.modelId : this.selection.modelId
+        this.providerModels = next
+        this.providerCatalogs = statuses
+        this.models = models
+        this.selection = selection
+        if (hasCandidate) {
+            this.selectedRegistration = models.find((model) => model.id === selection.modelId)
+            this.initialProviderDiscovery = false
+        }
+        this.modelCatalog = hasCandidate ? {
+            status: "ready",
+            ...(requestedId === selection.modelId ? {} : {
+                message: `Model "${requestedId}" was not returned in the model catalog. Availability may depend on your plan or account permissions. Using "${selection.modelId}" instead.`,
+            }),
+        } : { status: "error", message: "Selected model unavailable. Sign in or select an available model with /model." }
+        this.snapshot = this.createSnapshot()
+        for (const session of this.sessions.values()) session.refreshContextUsage()
+        this.notifyListeners()
+    }
+
     private async refreshModelsInternal(signal?: AbortSignal): Promise<void> {
+        if (this.loadProviderCatalogs) return this.refreshProviderCatalogs(signal)
         const loadModels = this.loadModels
         if (!loadModels) return
         const refreshSignal = signal
@@ -542,7 +636,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
             const selection = reconcileSelection(
                 registrations,
                 this.selection,
-                previousRegistration?.fallbackSelectionId,
+                previousRegistration,
                 initialDiscovery && !manualModelAvailable
                     ? this.preferredModelIds
                     : undefined,
@@ -557,7 +651,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
                 this.modelCatalog === undefined ? undefined : {
                     status: "ready",
                     ...(requestedModelId === selection.modelId ? {} : {
-                        message: `Model "${requestedModelId}" was not returned in the model catalog for your signed-in ChatGPT account. Availability may depend on your plan or account permissions. Using "${selection.modelId}" instead.`,
+                        message: `Model "${requestedModelId}" was not returned in the model catalog. Availability may depend on your plan or account permissions. Using "${selection.modelId}" instead.`,
                     }),
                 }
             const snapshot = this.createSnapshot(registrations, selection, modelCatalog)
@@ -676,6 +770,9 @@ export class BuliApplicationRuntime implements IBuliApplication {
 
                 return {
                     model: registration.model,
+                    ...(registration.estimationPolicy === undefined ? {} : {
+                        estimationPolicy: { ...registration.estimationPolicy },
+                    }),
                     ...(registration.modelProfile === undefined
                         ? {}
                         : {
@@ -707,6 +804,12 @@ export class BuliApplicationRuntime implements IBuliApplication {
     }
 
     private assertModelCatalogReady(): void {
+        if (this.loadProviderCatalogs) {
+            if (!this.providerModels.size || !this.models.some((model) => model.id === this.selection.modelId)) {
+                throw new Error("Selected model unavailable. Sign in or select an available model with /model.")
+            }
+            return
+        }
         if (this.modelCatalog && this.modelCatalog.status !== "ready") {
             throw new Error(this.modelCatalog.message
                 ?? "Model catalog is loading. Wait for discovery before generating.")
@@ -767,6 +870,22 @@ function copyModelRegistrations(
         }
         ids.add(registration.id)
 
+        if (registration.estimationPolicy !== undefined
+            && registration.estimationPolicy?.reasoningHistory !== "omit"
+            && registration.estimationPolicy?.reasoningHistory !== "preserve") {
+            throw new Error(`Invalid context estimation policy: ${registration.id}`)
+        }
+
+        const outputReserve = registration.estimationPolicy?.outputReserveTokens
+        const contextWindow = registration.modelProfile?.contextWindowTokens
+        if (outputReserve !== undefined && (
+            !Number.isSafeInteger(outputReserve)
+            || outputReserve <= 0
+            || (contextWindow !== undefined && outputReserve >= contextWindow)
+        )) {
+            throw new Error(`Invalid context output reserve: ${registration.id}`)
+        }
+
         const reasoningEfforts = [...registration.reasoningEfforts]
         if (reasoningEfforts.length === 0) {
             throw new Error(`Model has no reasoning efforts: ${registration.id}`)
@@ -783,6 +902,9 @@ function copyModelRegistrations(
         return {
             ...registration,
             reasoningEfforts,
+            ...(registration.estimationPolicy === undefined ? {} : {
+                estimationPolicy: { ...registration.estimationPolicy },
+            }),
             ...(registration.modelProfile === undefined
                 ? {}
                 : { modelProfile: structuredClone(registration.modelProfile) }),
@@ -797,26 +919,47 @@ function copyModelRegistrations(
                 `Unknown model fallback: ${registration.fallbackSelectionId}`,
             )
         }
+        if (registration.fallbackSelectionId !== undefined) {
+            const fallback = copied.find((model) => model.id === registration.fallbackSelectionId)
+            if (!fallback || !sameKnownProvider(registration, fallback)) {
+                throw new Error("Model fallback requires the same known provider")
+            }
+        }
     }
     return copied
+}
+
+function sameKnownProvider(
+    previous: IBuliModelRuntimeConfig,
+    candidate: IBuliModelRuntimeConfig,
+): boolean {
+    const providerId = previous.modelProfile?.providerId
+    return providerId !== undefined && providerId.trim().length > 0
+        && candidate.modelProfile?.providerId === providerId
 }
 
 function reconcileSelection(
     registrations: readonly IBuliModelRuntimeConfig[],
     selection: IBuliModelSelection,
-    fallbackSelectionId?: string,
+    previousRegistration: IBuliModelRuntimeConfig | undefined,
     preferredModelIds?: readonly string[],
     reasoningEffort?: TReasoningEffort,
 ): IBuliModelSelection {
-    const preferred = preferredModelIds?.map((id) => registrations.find(
+    const current = registrations.find((model) => model.id === selection.modelId)
+    if (current && previousRegistration
+        && current.modelProfile?.providerId !== previousRegistration.modelProfile?.providerId) {
+        throw new Error("Automatic provider switching is disabled: selected model changed provider")
+    }
+    const candidates = previousRegistration === undefined ? [] : registrations.filter(
+        (model) => sameKnownProvider(previousRegistration, model),
+    )
+    const preferred = preferredModelIds?.map((id) => candidates.find(
         (model) => model.id === id,
     )).find((model) => model !== undefined)
-    const registration = preferred ?? registrations.find(
-        (model) => model.id === selection.modelId,
-    ) ?? registrations.find(
-        (model) => model.id === fallbackSelectionId,
-    ) ?? registrations[0]
-    if (!registration) throw new Error("At least one model must be registered")
+    const registration = preferred ?? current ?? candidates.find(
+        (model) => model.id === previousRegistration?.fallbackSelectionId,
+    ) ?? candidates[0]
+    if (!registration) throw new Error("Automatic provider switching is disabled: no model from the same known provider is available")
 
     return {
         modelId: registration.id,

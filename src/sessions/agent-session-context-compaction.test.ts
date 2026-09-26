@@ -836,6 +836,9 @@ test("AgentSession aborts preflight compaction without saving a checkpoint", asy
   let checkpointSaves = 0
   const manager: ISessionManager = {
     createSession: memory.createSession,
+    getActiveBranchId: memory.getActiveBranchId,
+    createBranch: memory.createBranch,
+    returnToParentBranch: memory.returnToParentBranch,
     getSessionInfo: memory.getSessionInfo,
     listSessions: memory.listSessions,
     getMessages: memory.getMessages,

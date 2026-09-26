@@ -2,6 +2,7 @@ import type {
     IFileChangeProposalRecord,
     TAgentMessage,
 } from "@/agent"
+import type { ISessionBranchData } from "@/sessions/branches"
 import type { ICompactionCheckpoint } from "@/sessions/compaction/checkpoint"
 
 /** Lightweight session metadata used by navigation and persistence indexes. */
@@ -13,8 +14,18 @@ export interface ISessionInfo {
     readonly updatedAt: number
 }
 
+export interface ISessionArchive {
+    readonly info: ISessionInfo
+    readonly activeBranchId: string
+    readonly branches: readonly ISessionBranchData[]
+    readonly fileChangeProposals: readonly IFileChangeProposalRecord[]
+}
+
 /** Defines storage operations required by live and persisted sessions. */
 export interface ISessionManager {
+    readonly getActiveBranchId: (sessionId: string) => string
+    readonly createBranch: (sessionId: string, branchId: string) => void
+    readonly returnToParentBranch: (sessionId: string) => void
     readonly createSession: (info: ISessionInfo) => void
     /** Acquires session ownership and reloads history; failure retains other ownership. */
     readonly openSession?: (sessionId: string) => void

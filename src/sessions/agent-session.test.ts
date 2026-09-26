@@ -529,6 +529,9 @@ test("AgentSession restores steering to the queue when persistence fails", async
   const persistenceFailure = new Error("Failed to persist steering")
   const manager: ISessionManager = {
     createSession: memory.createSession,
+    getActiveBranchId: memory.getActiveBranchId,
+    createBranch: memory.createBranch,
+    returnToParentBranch: memory.returnToParentBranch,
     getSessionInfo: memory.getSessionInfo,
     listSessions: memory.listSessions,
     getMessages: memory.getMessages,
@@ -603,6 +606,9 @@ test("AgentSession restores follow-up to the queue when persistence fails", asyn
   const persistenceFailure = new Error("Failed to persist follow-up")
   const manager: ISessionManager = {
     createSession: memory.createSession,
+    getActiveBranchId: memory.getActiveBranchId,
+    createBranch: memory.createBranch,
+    returnToParentBranch: memory.returnToParentBranch,
     getSessionInfo: memory.getSessionInfo,
     listSessions: memory.listSessions,
     getMessages: memory.getMessages,
@@ -677,6 +683,9 @@ test("AgentSession rejects acceptance without invoking the provider or diverging
   const persistenceFailure = new Error("Disk write failed")
   const manager: ISessionManager = {
     createSession: memory.createSession,
+    getActiveBranchId: memory.getActiveBranchId,
+    createBranch: memory.createBranch,
+    returnToParentBranch: memory.returnToParentBranch,
     getSessionInfo: memory.getSessionInfo,
     listSessions: memory.listSessions,
     getMessages: memory.getMessages,
@@ -1174,6 +1183,7 @@ function sessionSnapshotWithCheckpoint(
   compactionCheckpoint: NonNullable<ISessionSnapshot["compactionCheckpoint"]>,
 ): ISessionSnapshot {
   return {
+    activeBranchId: "main",
     messages: [],
     fileChangeProposals: [],
     pendingSteeringMessages: [],

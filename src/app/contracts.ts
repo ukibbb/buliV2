@@ -113,6 +113,8 @@ export interface IBuliApplication
         query: string,
         signal?: AbortSignal,
     ) => Promise<readonly IBuliPathSuggestion[]>
+    readonly createBranch: (sessionId: string) => string
+    readonly returnToParentBranch: (sessionId: string) => void
     readonly compactSession: (
         sessionId: string,
     ) => Promise<ICompactionCheckpoint | undefined>

@@ -2,6 +2,7 @@ import { MacOSScrollAccel, type ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard } from "@opentui/react"
 import { useMemo, useRef, type ReactNode } from "react"
 
+import { MAIN_BRANCH_ID } from "@/sessions"
 import { Chat } from "@/ui/chat/Chat"
 import { useSession } from "@/ui/context/application-context"
 import { Transcript } from "@/ui/sessions"
@@ -60,6 +61,11 @@ export function SessionScreen(props: ISessionScreenProps): ReactNode {
       minHeight={0}
       flexDirection="column"
     >
+      {session.activeBranchId !== MAIN_BRANCH_ID ? (
+        <text fg={theme.amber} wrapMode="word">
+          {`Side branch ${session.activeBranchId} · read-only · /return to parent`}
+        </text>
+      ) : null}
       <scrollbox
         id="session-transcript"
         ref={transcriptScrollRef}

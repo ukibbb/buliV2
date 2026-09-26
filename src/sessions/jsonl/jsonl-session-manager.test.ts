@@ -35,7 +35,7 @@ afterEach(() => {
   managers.clear()
 })
 
-test("stages cloned metadata and writes exact version 2 envelopes on first append", async () => {
+test("stages cloned metadata and writes exact envelopes on first append", async () => {
   const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-"))
   const filePath = join(directory, "nested", "sessions.jsonl")
 
@@ -164,7 +164,7 @@ test("round-trips selected paths and direct image attachments", async () => {
   }
 })
 
-test("round-trips old and new tool result records without a version migration", async () => {
+test("round-trips plain and structured tool result records", async () => {
   const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-outcomes-"))
   const filePath = join(directory, "sessions.jsonl")
 
@@ -271,7 +271,6 @@ test("does not persist an AgentSession until its first non-blank prompt", async 
     expect(persisted[0]).toEqual(sessionRecord(info))
     expect(persisted[1]).toMatchObject({
       recordType: "message",
-      version: 2,
       message: {
         role: "user",
         source: "prompt",
@@ -281,7 +280,6 @@ test("does not persist an AgentSession until its first non-blank prompt", async 
     })
     expect(persisted[2]).toMatchObject({
       recordType: "message",
-      version: 2,
       message: { role: "assistant", runId: run.runId },
     })
 
@@ -365,20 +363,20 @@ test("rejects message-only logs without session metadata", async () => {
   }
 })
 
-test("accepts only exact version 2 envelopes and reports invalid earlier lines", async () => {
+test("accepts only exact envelopes and reports invalid earlier lines", async () => {
   const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-"))
   const filePath = join(directory, "sessions.jsonl")
 
   try {
     const validMetadata = JSON.stringify(sessionRecord(sessionInfo()))
     const validMessage = JSON.stringify(messageRecord(userMessage("Question")))
-    const versionOneMetadata = JSON.stringify({
+    const metadataWithExtraField = JSON.stringify({
       ...sessionRecord(sessionInfo()),
-      version: 1,
+      extra: true,
     })
     await writeFile(
       filePath,
-      `${validMetadata}\n${versionOneMetadata}\n${validMessage}\n`,
+      `${validMetadata}\n${metadataWithExtraField}\n${validMessage}\n`,
       "utf8",
     )
 
@@ -395,13 +393,13 @@ test("accepts only exact version 2 envelopes and reports invalid earlier lines",
       "Invalid session JSONL record on line 2",
     )
 
-    const versionOneMessage = {
+    const messageWithExtraField = {
       ...messageRecord(userMessage("Question")),
-      version: 1,
+      extra: true,
     }
     await writeFile(
       filePath,
-      serializeRecords([sessionRecord(sessionInfo()), versionOneMessage]),
+      serializeRecords([sessionRecord(sessionInfo()), messageWithExtraField]),
       "utf8",
     )
     expect(() => jsonlManager(filePath)).toThrow(
@@ -421,7 +419,7 @@ test("accepts only exact version 2 envelopes and reports invalid earlier lines",
   }
 })
 
-test("rejects malformed version 2 message payloads", async () => {
+test("rejects malformed message payloads", async () => {
   const directory = await mkdtemp(join(tmpdir(), "buli-jsonl-"))
   const filePath = join(directory, "sessions.jsonl")
 
@@ -471,7 +469,7 @@ test("rejects malformed version 2 message payloads", async () => {
         filePath,
         serializeRecords([
           sessionRecord(sessionInfo()),
-          { recordType: "message", version: 2, message },
+          { recordType: "message", branchId: "main", message },
         ]),
         "utf8",
       )
@@ -808,6 +806,7 @@ test("delete removes persisted metadata and messages without affecting other ses
     expect(await jsonlRecords(filePath)).toEqual([
       sessionRecord(persistedSecondInfo),
       messageRecord(secondMessage),
+      { recordType: "branchSelection", sessionId: "session-2", branchId: "main" },
     ])
 
     manager.dispose()
@@ -831,7 +830,6 @@ test("derives one stable global log path per canonical workspace", async () => {
     expect(firstPath).not.toBe(defaultSessionFilePath(second))
     expect(dirname(firstPath)).toBe(join(homedir(), ".buli", "sessions"))
     expect(firstPath).toMatch(/[a-f0-9]{64}\.jsonl$/)
-    expect(firstPath).not.toContain(".v2")
   } finally {
     await Promise.all([
       rm(first, { recursive: true, force: true }),
@@ -973,11 +971,11 @@ test("recovers stale checkpoints using the last valid summary and every later me
       sessionRecord(sessionInfo()),
       messageRecord(first),
       messageRecord(answer),
-      { recordType: "compaction", version: 2, checkpoint: valid },
+      { recordType: "compaction", branchId: "main", checkpoint: valid },
       messageRecord(later),
       messageRecord(laterAnswer),
-      { recordType: "compaction", version: 2, checkpoint: stale },
-      { recordType: "compaction", version: 2, checkpoint: {
+      { recordType: "compaction", branchId: "main", checkpoint: stale },
+      { recordType: "compaction", branchId: "main", checkpoint: {
         ...stale, id: "missing-anchor", throughMessageId: "missing",
       } },
       sessionRecord(sessionInfo("session-2")),
@@ -1029,7 +1027,7 @@ test("uses full history when no checkpoint has a valid anchor", async () => {
     const contents = serializeRecords([
       sessionRecord(sessionInfo()),
       ...messages.map(messageRecord),
-      { recordType: "compaction", version: 2, checkpoint: compactionCheckpoint({
+      { recordType: "compaction", branchId: "main", checkpoint: compactionCheckpoint({
         compactedMessageCount: 1,
       }) },
     ])
@@ -1057,7 +1055,7 @@ test("rejects malformed checkpoint records with a path and cause, releasing the 
     ] as const) {
       const contents = serializeRecords([
         sessionRecord(sessionInfo()),
-        { recordType: "compaction", version: 2, checkpoint },
+        { recordType: "compaction", branchId: "main", checkpoint },
       ])
       await writeFile(filePath, contents)
       expect(() => jsonlManager(filePath)).toThrow(
@@ -1088,7 +1086,7 @@ test("validates checkpoint positions against replaced messages rather than raw r
       messageRecord(userMessage("Original question", { createdAt: 10 })),
       messageRecord(replacement),
       messageRecord(answer),
-      { recordType: "compaction", version: 2, checkpoint },
+      { recordType: "compaction", branchId: "main", checkpoint },
     ]))
     const restored = jsonlManager(filePath)
     expect(restored.getMessages("session-1")).toEqual([replacement, answer])
@@ -1118,10 +1116,10 @@ test("rechecks checkpoint tool sequences after later message replacements", asyn
       sessionRecord(sessionInfo()),
       messageRecord(userMessage("Question")),
       messageRecord(assistantMessage("Answer", { completed: true })),
-      { recordType: "compaction", version: 2, checkpoint: previous },
+      { recordType: "compaction", branchId: "main", checkpoint: previous },
       messageRecord(toolCall),
       messageRecord(result),
-      { recordType: "compaction", version: 2, checkpoint: compactionCheckpoint({
+      { recordType: "compaction", branchId: "main", checkpoint: compactionCheckpoint({
         id: "latest", compactedMessageCount: 4, throughMessageId: result.id,
       }) },
       messageRecord({ ...toolCall, content: [], stopReason: "error" }),
@@ -1150,8 +1148,8 @@ test("replays the latest historical proposal state and preserves it when rewriti
 
     await writeFile(filePath, serializeRecords([
       sessionRecord(sessionInfo()),
-      { recordType: "fileChangeProposal", version: 2, proposal: pending },
-      { recordType: "fileChangeProposal", version: 2, proposal: applied },
+      { recordType: "fileChangeProposal", proposal: pending },
+      { recordType: "fileChangeProposal", proposal: applied },
       sessionRecord(sessionInfo("session-2")),
     ]))
     const manager = jsonlManager(filePath)
@@ -1166,7 +1164,7 @@ test("replays the latest historical proposal state and preserves it when rewriti
     expect((await jsonlRecords(filePath)).filter((record) => (
       record as { recordType?: string }
     ).recordType === "fileChangeProposal")).toEqual([
-      { recordType: "fileChangeProposal", version: 2, proposal: applied },
+      { recordType: "fileChangeProposal", proposal: applied },
     ])
     manager.dispose()
     expect(jsonlManager(filePath).getFileChangeProposals("session-1"))
@@ -1183,7 +1181,7 @@ test("preserves a restored pending proposal without appending expiration records
   try {
     await writeFile(filePath, serializeRecords([
       sessionRecord(sessionInfo()),
-      { recordType: "fileChangeProposal", version: 2, proposal: fileChangeProposal() },
+      { recordType: "fileChangeProposal", proposal: fileChangeProposal() },
     ]))
 
     const restored = jsonlManager(filePath)
@@ -1354,10 +1352,10 @@ test("session export preserves only the selected session's replayed state withou
       messageRecord(question),
       messageRecord(assistantMessage("Earlier answer", { completed: true })),
       messageRecord(answer),
-      { recordType: "fileChangeProposal", version: 2, proposal: pendingProposal },
-      { recordType: "fileChangeProposal", version: 2, proposal: appliedProposal },
-      { recordType: "compaction", version: 2, checkpoint },
-      { recordType: "compaction", version: 2, checkpoint: latestCheckpoint },
+      { recordType: "fileChangeProposal", proposal: pendingProposal },
+      { recordType: "fileChangeProposal", proposal: appliedProposal },
+      { recordType: "compaction", branchId: "main", checkpoint },
+      { recordType: "compaction", branchId: "main", checkpoint: latestCheckpoint },
       sessionRecord(sessionInfo("session-2")),
       messageRecord(userMessage("Other conversation", { sessionId: "session-2", id: "other-user" })),
     ])
@@ -1369,8 +1367,10 @@ test("session export preserves only the selected session's replayed state withou
       sessionRecord(expectedInfo),
       messageRecord(question),
       messageRecord(answer),
-      { recordType: "fileChangeProposal", version: 2, proposal: appliedProposal },
-      { recordType: "compaction", version: 2, checkpoint: latestCheckpoint },
+      { recordType: "compaction", branchId: "main", checkpoint },
+      { recordType: "compaction", branchId: "main", checkpoint: latestCheckpoint },
+      { recordType: "fileChangeProposal", proposal: appliedProposal },
+      { recordType: "branchSelection", sessionId: info.id, branchId: "main" },
     ]))
     expect(() => reader!.exportSession("missing")).toThrow("Session does not exist: missing")
     expect(await readFile(filePath, "utf8")).toBe(contents)
@@ -1408,24 +1408,22 @@ function serializeRecords(records: readonly unknown[]): string {
 
 function sessionRecord(info: ISessionInfo): {
   readonly recordType: "session"
-  readonly version: 2
   readonly session: ISessionInfo
 } {
   return {
     recordType: "session",
-    version: 2,
     session: structuredClone(info),
   }
 }
 
 function messageRecord(message: TAgentMessage): {
   readonly recordType: "message"
-  readonly version: 2
+  readonly branchId: string
   readonly message: TAgentMessage
 } {
   return {
     recordType: "message",
-    version: 2,
+    branchId: "main",
     message: structuredClone(message),
   }
 }

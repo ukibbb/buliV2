@@ -131,6 +131,26 @@ export const BULI_COMMANDS: readonly TBuliCommand[] = [
     },
     {
         kind: "action",
+        name: "branch",
+        description: "Start a read-only side conversation",
+        handler: (args, { application, sessionId }) => {
+            if (!sessionId) throw new Error("Branching requires an active session")
+            if (args.trim()) throw new Error("Use /branch without arguments")
+            application.createBranch(sessionId)
+        },
+    },
+    {
+        kind: "action",
+        name: "return",
+        description: "Return to the parent without transferring side messages",
+        handler: (args, { application, sessionId }) => {
+            if (!sessionId) throw new Error("Returning requires an active session")
+            if (args.trim()) throw new Error("Use /return without arguments")
+            application.returnToParentBranch(sessionId)
+        },
+    },
+    {
+        kind: "action",
         name: "compact",
         description: "Summarize older context without deleting history",
         handler: async (_args, context) => {
@@ -139,21 +159,6 @@ export const BULI_COMMANDS: readonly TBuliCommand[] = [
             }
             await context.application.compactSession(context.sessionId)
         },
-    },
-    {
-        kind: "prompt",
-        name: "grill",
-        description: "Clarify a plan one question at a time",
-    },
-    {
-        kind: "prompt",
-        name: "teach",
-        description: "Learn and practise a topic in conversation",
-    },
-    {
-        kind: "prompt",
-        name: "review",
-        description: "Review changes for bugs, requirements, readability, and maintainability",
     },
 ]
 

@@ -7,6 +7,7 @@ import {
 import { Type, type Static } from "typebox"
 
 import { defineAgentTool, type IAgentTool } from "@/agent/tool"
+import { ToolAccess } from "@/agent/tool-policy"
 import {
     withFileMutationQueue,
 } from "@/agent/tools/shared/file-mutation"
@@ -117,6 +118,7 @@ export function createEditTool(
 ): IAgentTool<typeof EDIT_INPUT_SCHEMA, "edit"> {
     return defineAgentTool({
         name: "edit",
+        access: ToolAccess.MayMutate,
         description:
             "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
         inputSchema: EDIT_INPUT_SCHEMA,

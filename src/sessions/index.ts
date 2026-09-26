@@ -1,4 +1,5 @@
 /** Public sessions feature API for application composition and consumers. */
+export { MAIN_BRANCH_ID } from "@/sessions/branches"
 export { AgentSession, type IAgentSessionRunConfiguration } from "@/sessions/agent-session"
 export {
     assertCheckpointAnchor,

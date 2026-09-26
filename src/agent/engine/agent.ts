@@ -284,6 +284,31 @@ export class Agent {
         }
     }
 
+    replaceContext(
+        messages: readonly TAgentMessage[],
+        tools: readonly IRuntimeAgentTool[],
+    ): void {
+        if (this.activeRun) {
+            throw new Error("Cannot replace context while Agent is running")
+        }
+        if (this.steeringQueue.length > 0 || this.followUpQueue.length > 0) {
+            throw new Error("Restore queued messages before replacing context")
+        }
+
+        const nextState: IAgentState = {
+            ...this.stateValue,
+            messages: structuredClone(messages),
+            tools: [...tools],
+            isRunning: false,
+            activeRunId: undefined,
+            streamingMessage: undefined,
+            pendingToolCallIds: new Set(),
+            errorMessage: undefined,
+            lastRunReason: undefined,
+        }
+        this.stateValue = nextState
+    }
+
     private async executeRun(
         activeRun: IActiveAgentRun,
         prompt: IUserMessage,

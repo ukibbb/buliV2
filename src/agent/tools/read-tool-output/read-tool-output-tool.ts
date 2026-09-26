@@ -1,3 +1,4 @@
+import { ToolAccess } from "@/agent/tool-policy"
 import { Type } from "typebox"
 import type { IAgentToolDeclaration } from "@/agent/definition"
 
@@ -75,6 +76,7 @@ export function createReadToolOutputTool(
 ): IAgentTool<typeof TOOL_OUTPUT_INPUT_SCHEMA, "tool_output"> {
     return defineAgentTool({
         name: "tool_output",
+        access: ToolAccess.ReadOnly,
         description: "Read an exact page from a large tool result retained for the active Buli application. Continue with the returned byte offset; use base64 for non-UTF-8 output. Output IDs expire when the application closes.",
         inputSchema: TOOL_OUTPUT_INPUT_SCHEMA,
         execute: async (input, context) => {

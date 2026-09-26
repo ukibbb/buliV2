@@ -11,6 +11,7 @@ import type { IContextUsage } from "@/sessions/compaction/context-budget"
 
 /** Immutable read model published by one live agent session. */
 export interface ISessionSnapshot {
+    readonly activeBranchId: string
     readonly messages: readonly TAgentMessage[]
     readonly fileChangeProposals: readonly IFileChangeProposalRecord[]
     readonly pendingSteeringMessages: readonly IUserMessage[]
@@ -42,6 +43,7 @@ export function freezeSessionSnapshot(
     // Branch source identity is the immutable-state boundary: unchanged values
     // reuse their frozen public copy while every publication gets a new shell.
     const frozen: ISessionSnapshot = Object.freeze({
+        activeBranchId: snapshot.activeBranchId,
         messages: freezeBranch(
             snapshot.messages,
             previousSource?.messages,

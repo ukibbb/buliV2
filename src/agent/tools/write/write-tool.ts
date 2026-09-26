@@ -1,3 +1,4 @@
+import { ToolAccess } from "@/agent/tool-policy"
 import { Buffer } from "node:buffer"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
@@ -24,6 +25,7 @@ export function createWriteTool(
 ): IAgentTool<typeof WRITE_INPUT_SCHEMA, "write"> {
     return defineAgentTool({
         name: "write",
+        access: ToolAccess.MayMutate,
         description:
             "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
         inputSchema: WRITE_INPUT_SCHEMA,

@@ -65,6 +65,29 @@ const CATALOG_OTHER: IBuliModelRuntimeConfig = {
 // An unrelated first entry proves priority/fallback selection is not list order.
 const CATALOG_MODELS = [CATALOG_OTHER, CATALOG_BASE, CATALOG_FAST]
 
+test("runtime branch commands publish branch snapshots without calling the model", async () => {
+  let requests = 0
+  const runtime = runtimeWith({ async *stream() { requests++; yield { type: "finish", reason: "stop" } } })
+  try {
+    const info = runtime.createSession({ agentId: TEST_AGENT_ID, title: "Branches" })
+    const source = runtime.openSession(info.id)
+    expect(source.getSnapshot().activeBranchId).toBe("main")
+    const first = runtime.createBranch(info.id)
+    expect(source.getSnapshot().activeBranchId).toBe(first)
+    expect(Object.isFrozen(source.getSnapshot())).toBe(true)
+    runtime.createBranch(info.id)
+    runtime.returnToParentBranch(info.id)
+    expect(source.getSnapshot().activeBranchId).toBe(first)
+    await runtime.closeSession(info.id)
+    expect(runtime.openSession(info.id).getSnapshot().activeBranchId).toBe(first)
+    runtime.returnToParentBranch(info.id)
+    expect(runtime.openSession(info.id).getSnapshot().activeBranchId).toBe("main")
+    expect(requests).toBe(0)
+  } finally { await runtime.dispose() }
+  expect(() => runtime.createBranch("any")).toThrow("disposed")
+  expect(() => runtime.returnToParentBranch("any")).toThrow("disposed")
+})
+
 function runtimeWithPreferredModels(
   options: Partial<IBuliRuntimeOptions> = {},
 ): BuliApplicationRuntime {
@@ -1850,6 +1873,9 @@ test("submitPrompt rolls back a new session when its first prompt is not persist
   const cleanupOperations: string[] = []
   const manager: ISessionManager = {
     createSession: memory.createSession,
+    getActiveBranchId: memory.getActiveBranchId,
+    createBranch: memory.createBranch,
+    returnToParentBranch: memory.returnToParentBranch,
     getSessionInfo: memory.getSessionInfo,
     listSessions: memory.listSessions,
     getMessages: memory.getMessages,
@@ -1952,6 +1978,9 @@ test("new-session runFinished waits for rollback before exposing failure", async
   const persistenceFailure = new Error("Disk write failed")
   const manager: ISessionManager = {
     createSession: memory.createSession,
+    getActiveBranchId: memory.getActiveBranchId,
+    createBranch: memory.createBranch,
+    returnToParentBranch: memory.returnToParentBranch,
     getSessionInfo: memory.getSessionInfo,
     listSessions: memory.listSessions,
     getMessages: memory.getMessages,

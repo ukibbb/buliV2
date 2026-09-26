@@ -1,3 +1,4 @@
+import { ToolAccess } from "@/agent/tool-policy"
 import { Buffer } from "node:buffer"
 import { readFile } from "node:fs/promises"
 import { Type } from "typebox"
@@ -43,6 +44,7 @@ export function createReadTool(
 ): IAgentTool<typeof READ_INPUT_SCHEMA, "read"> {
     return defineAgentTool({
         name: "read",
+        access: ToolAccess.ReadOnly,
         description: `Read the contents of a text file. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
         inputSchema: READ_INPUT_SCHEMA,
         selfTruncatesOutput: true,

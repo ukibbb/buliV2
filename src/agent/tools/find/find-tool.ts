@@ -1,3 +1,4 @@
+import { ToolAccess } from "@/agent/tool-policy"
 import { spawn } from "node:child_process"
 import * as path from "node:path"
 import { createInterface } from "node:readline"
@@ -57,6 +58,7 @@ export function createFindTool(
 ): IAgentTool<typeof FIND_INPUT_SCHEMA, "find"> {
     return defineAgentTool({
         name: "find",
+        access: ToolAccess.ReadOnly,
         description: `Search for files by glob pattern. Returns matching file paths relative to the search directory. Respects ignore rules unless includeIgnored is true. Output is truncated to ${DEFAULT_LIMIT} results or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first).`,
         inputSchema: FIND_INPUT_SCHEMA,
         selfTruncatesOutput: true,

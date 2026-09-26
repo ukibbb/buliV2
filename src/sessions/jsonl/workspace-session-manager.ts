@@ -132,6 +132,22 @@ export class WorkspaceSessionManager implements ISessionManager {
         this.advancePresentationRevision(checkpoint.sessionId)
     }
 
+    readonly getActiveBranchId = (sessionId: string): string => {
+        return this.requireOpenSession(sessionId).getActiveBranchId(sessionId)
+    }
+
+    readonly createBranch = (sessionId: string, branchId: string): void => {
+        this.requireOpenSession(sessionId).createBranch(sessionId, branchId)
+        this.stagedSessionIds.delete(sessionId)
+        this.advancePresentationRevision(sessionId)
+    }
+
+    readonly returnToParentBranch = (sessionId: string): void => {
+        this.requireOpenSession(sessionId).returnToParentBranch(sessionId)
+        this.stagedSessionIds.delete(sessionId)
+        this.advancePresentationRevision(sessionId)
+    }
+
     readonly deleteSession = (sessionId: string): void => {
         const manager = this.requireOpenSession(sessionId)
         manager.deleteSession(sessionId)

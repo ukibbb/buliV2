@@ -639,6 +639,143 @@ test("selected path capability limit retains the newest prompt", async () => {
   expect(references.at(-1)?.path).toBe("/outside/current.ts")
 })
 
+test("replaceContext replaces history and tools used by the next run", async () => {
+  const requests: IAgentModelRequest[] = []
+  const executed: string[] = []
+  const makeTool = (name: string) => defineAgentTool({
+    name,
+    description: name,
+    inputSchema: { type: "object", additionalProperties: false },
+    async execute() {
+      executed.push(name)
+      return name
+    },
+  })
+  const oldTool = makeTool("old_tool")
+  const newTool = makeTool("new_tool")
+  const model: IAgentModel = {
+    async *stream(request) {
+      requests.push({
+        ...request,
+        messages: structuredClone(request.messages),
+        tools: structuredClone(request.tools),
+      })
+      if (requests.length === 1) {
+        yield { type: "tool-call", toolCallId: "old-call", toolName: oldTool.name, input: {} }
+        yield { type: "tool-call", toolCallId: "new-call", toolName: newTool.name, input: {} }
+        yield { type: "finish", reason: "tool-calls" }
+        return
+      }
+      yield { type: "finish", reason: "stop" }
+    },
+  }
+  const messages = [{
+    id: "inherited", sessionId: "session-1", runId: "previous-run",
+    role: "user" as const, source: "prompt" as const,
+    content: "Inherited history", createdAt: 1,
+  }]
+  const agent = new Agent({
+    sessionId: "session-1",
+    systemPrompt: "System",
+    resolveRunConfiguration: () => ({ model, reasoningEffort: "medium" }),
+    tools: [oldTool],
+    initialMessages: [{ ...messages[0]!, id: "old", content: "Old history" }],
+  })
+  const tools = [newTool]
+  agent.replaceContext(messages, tools)
+
+  expect(agent.state.messages).toEqual(messages)
+  expect(agent.state.messages).not.toBe(messages)
+  expect(agent.state.tools).toEqual([newTool])
+  messages[0]!.content = "Changed outside Agent"
+  tools.length = 0
+  expect(requests).toHaveLength(0)
+
+  await agent.prompt("Next question").runFinished
+
+  expect(requests[0]?.messages[0]).toMatchObject({ content: "Inherited history" })
+  expect(requests[0]?.messages).not.toContainEqual(
+    expect.objectContaining({ content: "Old history" }),
+  )
+  expect(requests.every((request) =>
+    request.tools.length === 1 && request.tools[0]?.name === newTool.name
+  )).toBe(true)
+  expect(executed).toEqual([newTool.name])
+})
+
+for (const queue of ["steer", "followUp"] as const) {
+  test(`replaceContext rejects active runs and pending ${queue} without changing state`, async () => {
+    const started = Promise.withResolvers<void>()
+    const agent = new Agent({
+      sessionId: "session-1",
+      systemPrompt: "System",
+      resolveRunConfiguration: () => ({
+        model: {
+          async *stream(request) {
+            started.resolve()
+            await new Promise<void>((resolve) => {
+              if (request.signal.aborted) return resolve()
+              request.signal.addEventListener("abort", () => resolve(), { once: true })
+            })
+            yield { type: "abort", reason: "Stopped" }
+          },
+        },
+        reasoningEffort: "medium",
+      }),
+      tools: [],
+    })
+    const run = agent.prompt("Question")
+    await run.initialPromptProcessed
+    await started.promise
+    const runningState = agent.state
+    expect(() => agent.replaceContext([], [])).toThrow(
+      "Cannot replace context while Agent is running",
+    )
+    expect(agent.state).toBe(runningState)
+    agent[queue]("Keep this input")
+    await Promise.all([agent.abort(), run.runFinished])
+
+    const idleState = agent.state
+    const revision = agent.queuedMessagesRevision
+    expect(() => agent.replaceContext([], [])).toThrow(
+      "Restore queued messages before replacing context",
+    )
+    expect(agent.state).toBe(idleState)
+    expect(agent.queuedMessagesRevision).toBe(revision)
+    const queued = queue === "steer"
+      ? agent.pendingSteeringMessages : agent.pendingFollowUpMessages
+    expect(queued.map((message) => message.content)).toEqual(["Keep this input"])
+
+    agent.clearQueuedMessages()
+    agent.replaceContext([], [])
+    expect(agent.state).toMatchObject({
+      messages: [], tools: [], isRunning: false,
+      activeRunId: undefined, streamingMessage: undefined,
+      errorMessage: undefined, lastRunReason: undefined,
+    })
+    expect(agent.state.pendingToolCallIds.size).toBe(0)
+  })
+}
+
+test("replaceContext preserves the previous state when cloning fails", () => {
+  const agent = new Agent({
+    sessionId: "session-1",
+    systemPrompt: "System",
+    resolveRunConfiguration: () => ({ model: completedModel(), reasoningEffort: "medium" }),
+    tools: [],
+  })
+  const previousState = agent.state
+  const messages = [{
+    id: "invalid", sessionId: "session-1", runId: "previous-run",
+    role: "user" as const, source: "prompt" as const,
+    content: "History", createdAt: 1,
+    nonCloneable: () => undefined,
+  }]
+
+  expect(() => agent.replaceContext(messages, [])).toThrow()
+  expect(agent.state).toBe(previousState)
+})
+
 function completedModel(): IAgentModel {
   return {
     async *stream() {

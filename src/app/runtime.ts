@@ -280,6 +280,16 @@ export class BuliApplicationRuntime implements IBuliApplication {
         }
     }
 
+    readonly createBranch = (sessionId: string): string => {
+        if (this.disposed) throw new Error("Buli runtime is disposed")
+        return this.getOrOpenAgentSession(sessionId).createBranch()
+    }
+
+    readonly returnToParentBranch = (sessionId: string): void => {
+        if (this.disposed) throw new Error("Buli runtime is disposed")
+        this.getOrOpenAgentSession(sessionId).returnToParentBranch()
+    }
+
     readonly compactSession = (
         sessionId: string,
     ): ReturnType<AgentSession["compact"]> => {

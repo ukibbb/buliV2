@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
+import * as fs from "node:fs"
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -127,7 +128,7 @@ test("failed conversation loads preserve other ownership and release the rejecte
         first.createSession(sessionInfo("current"))
 
         const wrongSessionRecord = JSON.stringify({
-            recordType: "session", version: 2, session: sessionInfo("wrong"),
+            recordType: "session", session: sessionInfo("wrong"),
         }) + "\n"
         for (const [contents, expectedError] of [
             ["not-json\n", "Invalid session JSONL record on line 1"],
@@ -162,7 +163,7 @@ test("workspace startup rejects malformed and mismatched conversation files with
         const filePath = join(directoryPath, fileName)
         const originalContents = await readFile(filePath, "utf8")
         const wrongSessionRecord = JSON.stringify({
-            recordType: "session", version: 2, session: sessionInfo("wrong"),
+            recordType: "session", session: sessionInfo("wrong"),
         }) + "\n"
         for (const [contents, expectedError] of [
             ["not-json\n", "Invalid session JSONL record on line 1"],
@@ -177,6 +178,60 @@ test("workspace startup rejects malformed and mismatched conversation files with
         const restored = openManager()
         restored.openSession("target")
         expect(restored.getMessages("target")).toEqual([original])
+    })
+})
+
+test("empty branches survive release and ownership handoff with navigation revisions", async () => {
+    await withWorkspace(async (_directory, openManager) => {
+        const first = openManager()
+        first.createSession(sessionInfo("s"))
+        const initial = first.getPresentationRevision("s")
+        first.createBranch("s", "side")
+        expect(first.getPresentationRevision("s")).toBeGreaterThan(initial)
+        const second = openManager()
+        expect(() => second.openSession("s")).toThrow("Unable to lock")
+        first.releaseSession("s")
+        expect(first.listSessions().map((info) => info.id)).toEqual(["s"])
+        expect(() => first.createBranch("s", "nested")).toThrow("not open")
+        expect(() => first.returnToParentBranch("s")).toThrow("not open")
+        expect(() => first.getActiveBranchId("s")).toThrow("not open")
+        second.openSession("s")
+        expect(second.getActiveBranchId("s")).toBe("side")
+        const revision = second.getPresentationRevision("s")
+        second.returnToParentBranch("s")
+        expect(second.getPresentationRevision("s")).toBeGreaterThan(revision)
+        const returned = second.getPresentationRevision("s")
+        expect(() => second.returnToParentBranch("s")).toThrow()
+        expect(second.getPresentationRevision("s")).toBe(returned)
+        second.releaseSession("s")
+        first.openSession("s")
+        expect(first.getActiveBranchId("s")).toBe("main")
+    })
+})
+
+test("workspace keeps staged status and revisions after failed branch writes", async () => {
+    await withWorkspace(async (_directory, openManager) => {
+        const manager = openManager()
+        manager.createSession(sessionInfo("s"))
+        const revision = manager.getPresentationRevision("s")
+        const rename = spyOn(fs, "renameSync").mockImplementation(() => { throw new Error("disk failure") })
+        try {
+            expect(() => manager.createBranch("s", "side")).toThrow("disk failure")
+        } finally { rename.mockRestore() }
+        expect(manager.getActiveBranchId("s")).toBe("main")
+        expect(manager.getPresentationRevision("s")).toBe(revision)
+        manager.releaseSession("s")
+        expect(manager.listSessions()).toEqual([])
+        manager.createSession(sessionInfo("s"))
+        manager.createBranch("s", "side")
+        const persistedRevision = manager.getPresentationRevision("s")
+        const append = spyOn(fs, "appendFileSync").mockImplementation(() => { throw new Error("disk failure") })
+        try {
+            expect(() => manager.createBranch("s", "nested")).toThrow("disk failure")
+            expect(() => manager.returnToParentBranch("s")).toThrow("disk failure")
+        } finally { append.mockRestore() }
+        expect(manager.getActiveBranchId("s")).toBe("side")
+        expect(manager.getPresentationRevision("s")).toBe(persistedRevision)
     })
 })
 

@@ -146,6 +146,8 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
         followUp: [],
       }
     },
+    createBranch: () => "side",
+    returnToParentBranch: () => undefined,
     compactSession: async (sessionId) => {
       compacted.push(sessionId)
       return options.compactSession?.(sessionId)
@@ -305,10 +307,9 @@ test("publishes all command suggestions from slash input", () => {
     "sessions",
     "login",
     "logout",
+    "branch",
+    "return",
     "compact",
-    "grill",
-    "teach",
-    "review",
   ])
   expect(notifications).toBe(1)
 })
@@ -864,273 +865,6 @@ test("login and logout commands activate authentication mode", async () => {
   expect(spy.prompts).toEqual([])
 })
 
-test.each([
-  { text: "/grill", sessionId: undefined },
-  { text: "/grill doprecyzuj plan logowania", sessionId: undefined },
-  { text: "/grill", sessionId: "session-1" },
-  { text: "/grill doprecyzuj plan logowania", sessionId: "session-1" },
-])("sends a grill prompt with its full text: %j", async ({ text, sessionId }) => {
-  const spy = applicationSpy()
-  const controller = new BuliUiController({ application: spy.application })
-  if (sessionId) controller.activateSession(sessionId)
-  controller.updateInput(text)
-
-  expect(await controller.submitInput(text)).toBe("consumed")
-
-  expect(spy.prompts).toEqual([
-    sessionId ? { sessionId, text } : { text },
-  ])
-  expect(spy.created).toHaveLength(sessionId ? 0 : 1)
-  expect(controller.getSnapshot()).toMatchObject({
-    route: { type: "session", sessionId: sessionId ?? "created-1" },
-    input: "",
-    inputError: null,
-  })
-})
-
-test("sends the full grill command when selected from a partial menu query", async () => {
-  const spy = applicationSpy()
-  const controller = new BuliUiController({ application: spy.application })
-  controller.updateInput("/gr")
-
-  expect(controller.getSnapshot().menu?.items.map((item) => item.id)).toEqual(["grill"])
-  await controller.activateSelectedMenuItem()
-
-  expect(spy.prompts).toEqual([{ text: "/grill" }])
-  expect(controller.getSnapshot()).toMatchObject({
-    route: { type: "session", sessionId: "created-1" },
-    input: "",
-    menu: null,
-    inputError: null,
-  })
-})
-
-test.each(["typed", "menu"] as const)("retains grill input after persistence failure: %s", async (entry) => {
-  const promptPersisted = Promise.withResolvers<void>()
-  const spy = applicationSpy({ promptPersisted: promptPersisted.promise })
-  const controller = new BuliUiController({ application: spy.application })
-  const input = entry === "typed" ? "/grill plan logowania" : "/gr"
-  controller.updateInput(input)
-  const submission = entry === "typed"
-    ? controller.submitInput(input)
-    : controller.activateSelectedMenuItem()
-
-  promptPersisted.reject(new Error("Cannot persist prompt"))
-  await submission
-
-  expect(spy.prompts).toEqual([{ text: entry === "typed" ? input : "/grill" }])
-  expect(controller.getSnapshot()).toMatchObject({
-    route: { type: "home" },
-    input,
-    inputError: "Cannot persist prompt",
-  })
-})
-
-test("preserves a new draft while a grill menu submission is pending", async () => {
-  const promptPersisted = Promise.withResolvers<void>()
-  const spy = applicationSpy({ promptPersisted: promptPersisted.promise })
-  const controller = new BuliUiController({ application: spy.application })
-  controller.updateInput("/gr")
-  const submission = controller.activateSelectedMenuItem()
-
-  controller.updateInput("Nowa wiadomość")
-  promptPersisted.resolve()
-  await submission
-
-  expect(spy.prompts).toEqual([{ text: "/grill" }])
-  expect(controller.getInputDraft()).toEqual({ text: "Nowa wiadomość" })
-})
-
-test.each(["typed", "menu"] as const)("blocks grill during compaction: %s", async (entry) => {
-  const spy = applicationSpy({ compactingSessionId: "session-1" })
-  const controller = new BuliUiController({ application: spy.application })
-  controller.activateSession("session-1")
-  const input = entry === "typed" ? "/grill plan logowania" : "/gr"
-  controller.updateInput(input)
-
-  if (entry === "typed") {
-    expect(await controller.submitInput(input)).toBe("retained")
-  } else {
-    await controller.activateSelectedMenuItem()
-  }
-
-  expect(spy.prompts).toEqual([])
-  expect(controller.getSnapshot()).toMatchObject({
-    input,
-    inputError: "Cannot submit input while compacting the session",
-  })
-})
-
-test.each(["auto", "followUp"] as const)("delivers grill to an active run: %s", async (delivery) => {
-  const spy = applicationSpy({ runningSessionId: "session-1" })
-  const controller = new BuliUiController({ application: spy.application })
-  controller.activateSession("session-1")
-  const text = "/grill doprecyzuj plan logowania"
-  controller.updateInput(text)
-
-  expect(await controller.submitInput(text, delivery)).toBe("consumed")
-
-  const expected = [{ sessionId: "session-1", text }]
-  expect(spy.steering).toEqual(delivery === "auto" ? expected : [])
-  expect(spy.followUps).toEqual(delivery === "followUp" ? expected : [])
-  expect(spy.prompts).toEqual([])
-  expect(controller.getSnapshot().input).toBe("")
-})
-
-test.each([
-  { text: "/teach", sessionId: undefined },
-  { text: "/teach wyjaśnij importy", sessionId: undefined },
-  { text: "/teach", sessionId: "session-1" },
-  { text: "/teach wyjaśnij importy", sessionId: "session-1" },
-])("sends a teach prompt with its full text: %j", async ({ text, sessionId }) => {
-  const spy = applicationSpy()
-  const controller = new BuliUiController({ application: spy.application })
-  if (sessionId) controller.activateSession(sessionId)
-  controller.updateInput(text)
-
-  expect(await controller.submitInput(text)).toBe("consumed")
-
-  expect(spy.prompts).toEqual([
-    sessionId ? { sessionId, text } : { text },
-  ])
-  expect(spy.created).toHaveLength(sessionId ? 0 : 1)
-  expect(controller.getSnapshot()).toMatchObject({
-    route: { type: "session", sessionId: sessionId ?? "created-1" },
-    input: "",
-    inputError: null,
-  })
-})
-
-test.each([
-  { text: "/review", sessionId: undefined },
-  { text: "/review zmiany względem main", sessionId: undefined },
-  { text: "/review", sessionId: "session-1" },
-  { text: "/review zmiany względem main", sessionId: "session-1" },
-])("sends a review prompt with its full text: %j", async ({ text, sessionId }) => {
-  const spy = applicationSpy()
-  const controller = new BuliUiController({ application: spy.application })
-  if (sessionId) controller.activateSession(sessionId)
-  controller.updateInput(text)
-
-  expect(await controller.submitInput(text)).toBe("consumed")
-
-  expect(spy.prompts).toEqual([
-    sessionId ? { sessionId, text } : { text },
-  ])
-  expect(spy.created).toHaveLength(sessionId ? 0 : 1)
-  expect(controller.getSnapshot()).toMatchObject({
-    route: { type: "session", sessionId: sessionId ?? "created-1" },
-    input: "",
-    inputError: null,
-  })
-})
-
-test("sends the full review command when selected from a partial menu query", async () => {
-  const spy = applicationSpy()
-  const controller = new BuliUiController({ application: spy.application })
-  controller.updateInput("/rev")
-
-  expect(controller.getSnapshot().menu?.items.map((item) => item.id)).toEqual(["review"])
-  await controller.activateSelectedMenuItem()
-
-  expect(spy.prompts).toEqual([{ text: "/review" }])
-  expect(controller.getSnapshot()).toMatchObject({
-    route: { type: "session", sessionId: "created-1" },
-    input: "",
-    menu: null,
-    inputError: null,
-  })
-})
-
-test("sends the full teach command when selected from a partial menu query", async () => {
-  const spy = applicationSpy()
-  const controller = new BuliUiController({ application: spy.application })
-  controller.updateInput("/te")
-
-  expect(controller.getSnapshot().menu?.items.map((item) => item.id)).toEqual(["teach"])
-  await controller.activateSelectedMenuItem()
-
-  expect(spy.prompts).toEqual([{ text: "/teach" }])
-  expect(controller.getSnapshot()).toMatchObject({
-    route: { type: "session", sessionId: "created-1" },
-    input: "",
-    menu: null,
-    inputError: null,
-  })
-})
-
-test.each(["typed", "menu"] as const)("retains teach input after persistence failure: %s", async (entry) => {
-  const promptPersisted = Promise.withResolvers<void>()
-  const spy = applicationSpy({ promptPersisted: promptPersisted.promise })
-  const controller = new BuliUiController({ application: spy.application })
-  const input = entry === "typed" ? "/teach wyjaśnij importy" : "/te"
-  controller.updateInput(input)
-  const submission = entry === "typed"
-    ? controller.submitInput(input)
-    : controller.activateSelectedMenuItem()
-
-  promptPersisted.reject(new Error("Cannot persist prompt"))
-  await submission
-
-  expect(spy.prompts).toEqual([{ text: entry === "typed" ? input : "/teach" }])
-  expect(controller.getSnapshot()).toMatchObject({
-    route: { type: "home" },
-    input,
-    inputError: "Cannot persist prompt",
-  })
-})
-
-test("preserves a new draft while a teach menu submission is pending", async () => {
-  const promptPersisted = Promise.withResolvers<void>()
-  const spy = applicationSpy({ promptPersisted: promptPersisted.promise })
-  const controller = new BuliUiController({ application: spy.application })
-  controller.updateInput("/te")
-  const submission = controller.activateSelectedMenuItem()
-
-  controller.updateInput("Nowa wiadomość")
-  promptPersisted.resolve()
-  await submission
-
-  expect(spy.prompts).toEqual([{ text: "/teach" }])
-  expect(controller.getInputDraft()).toEqual({ text: "Nowa wiadomość" })
-})
-
-test.each(["typed", "menu"] as const)("blocks teach during compaction: %s", async (entry) => {
-  const spy = applicationSpy({ compactingSessionId: "session-1" })
-  const controller = new BuliUiController({ application: spy.application })
-  controller.activateSession("session-1")
-  const input = entry === "typed" ? "/teach wyjaśnij importy" : "/te"
-  controller.updateInput(input)
-
-  if (entry === "typed") {
-    expect(await controller.submitInput(input)).toBe("retained")
-  } else {
-    await controller.activateSelectedMenuItem()
-  }
-
-  expect(spy.prompts).toEqual([])
-  expect(controller.getSnapshot()).toMatchObject({
-    input,
-    inputError: "Cannot submit input while compacting the session",
-  })
-})
-
-test.each(["auto", "followUp"] as const)("delivers teach to an active run: %s", async (delivery) => {
-  const spy = applicationSpy({ runningSessionId: "session-1" })
-  const controller = new BuliUiController({ application: spy.application })
-  controller.activateSession("session-1")
-  const text = "/teach wyjaśnij importy"
-  controller.updateInput(text)
-
-  expect(await controller.submitInput(text, delivery)).toBe("consumed")
-
-  const expected = [{ sessionId: "session-1", text }]
-  expect(spy.steering).toEqual(delivery === "auto" ? expected : [])
-  expect(spy.followUps).toEqual(delivery === "followUp" ? expected : [])
-  expect(spy.prompts).toEqual([])
-  expect(controller.getSnapshot().input).toBe("")
-})
-
 test("action commands reject arguments instead of sending a prompt", async () => {
   const spy = applicationSpy()
   const controller = new BuliUiController({ application: spy.application })
@@ -1231,6 +965,59 @@ test("blocks command-menu activation while the session is compacting", async () 
     },
   })
 })
+
+for (const command of ["branch", "return"] as const) {
+  for (const fromMenu of [false, true]) {
+    test(`${command} action targets active session without prompting (menu: ${fromMenu})`, async () => {
+      const spy = applicationSpy()
+      const calls: string[] = []
+      const application = {
+        ...spy.application,
+        createBranch: (id: string) => { calls.push(id); return "side" },
+        returnToParentBranch: (id: string) => { calls.push(id) },
+      }
+      const controller = new BuliUiController({ application })
+      await controller.activateSession("session-1")
+      if (fromMenu) {
+        controller.updateInput(`/${command}`)
+        await controller.activateSelectedMenuItem()
+      } else {
+        expect(await controller.submitInput(`/${command}`)).toBe("consumed")
+      }
+      expect(calls).toEqual(["session-1"])
+      expect(spy.prompts).toEqual([])
+      controller.dispose()
+    })
+  }
+  test(`${command} rejects missing session, arguments and reports application failures`, async () => {
+    const spy = applicationSpy()
+    let calls = 0
+    const fail = () => { calls++; throw new Error("Cannot switch branches while AgentSession is running") }
+    const controller = new BuliUiController({ application: {
+      ...spy.application, createBranch: fail, returnToParentBranch: fail,
+    } })
+    await controller.submitInput(`/${command}`)
+    expect(controller.getSnapshot().menu?.errorMessage).toContain("active session")
+    await controller.activateSession("session-1")
+    await controller.submitInput(`/${command} unexpected`)
+    expect(controller.getSnapshot().inputError).toContain("does not accept arguments")
+    expect(calls).toBe(0)
+    await controller.submitInput(`/${command}`)
+    expect(controller.getSnapshot().menu?.errorMessage).toContain("running")
+    expect(calls).toBe(1)
+    expect(spy.prompts).toEqual([])
+    controller.dispose()
+  })
+  test(`${command} is blocked while compacting`, async () => {
+    const spy = applicationSpy({ compactingSessionId: "session-1" })
+    const controller = new BuliUiController({ application: spy.application })
+    await controller.activateSession("session-1")
+    await controller.submitInput(`/${command}`)
+    expect(controller.getSnapshot().inputError).toContain("compacting")
+    expect(spy.prompts).toEqual([])
+    controller.dispose()
+  })
+}
 
 test("compact command targets the active session", async () => {
   const spy = applicationSpy()
@@ -1380,6 +1167,7 @@ function sessionSource(
   isCompacting = false,
 ) {
   const snapshot: ISessionSnapshot = {
+    activeBranchId: "main",
     messages: [],
     fileChangeProposals: [],
     pendingSteeringMessages: [],

@@ -197,6 +197,7 @@ test("grep uses the injected ripgrep executable and truncates lines to 500 chars
       summary: "1 match, limit reached",
     })
     expect(await readArguments(argsLog)).toEqual([
+      "--no-config",
       "--json",
       "--line-number",
       "--color=never",
@@ -222,6 +223,7 @@ test("grep uses the injected ripgrep executable and truncates lines to 500 chars
         includeIgnored,
       }, context())
       expect(await readArguments(argsLog)).toEqual([
+        "--no-config",
         "--json",
         "--line-number",
         "--color=never",

@@ -3,6 +3,7 @@ import type {
     IUserPathReference,
 } from "@/agent/messages"
 import type { IModelProfile } from "@/agent/model-values"
+import type { TToolAccess } from "@/agent/tool-policy"
 import type { Static, TSchema } from "typebox"
 import { Value } from "typebox/value"
 
@@ -46,6 +47,7 @@ export interface IAgentToolResult {
 }
 
 interface IAgentToolOptions {
+    readonly access?: TToolAccess
     readonly prepareArguments?: (input: unknown) => unknown
     readonly selfTruncatesOutput?: boolean
     readonly requiresConversationContext?: boolean

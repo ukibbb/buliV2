@@ -1,5 +1,7 @@
 import {
     Agent,
+    ToolPolicy,
+    isToolAllowed,
     type TAgentEvent,
     type TAgentMessage,
     type IAgentModelRequest,
@@ -13,6 +15,7 @@ import {
     type IUserInputContent,
 } from "@/agent"
 import { generateRandomId } from "@/common/ids"
+import { MAIN_BRANCH_ID } from "@/sessions/branches"
 import type { ICompactionCheckpoint } from "@/sessions/compaction/checkpoint"
 import {
     estimateContextUsage,
@@ -70,7 +73,10 @@ export class AgentSession {
     private readonly disposeTimeoutMs: number
     private readonly resolveRunConfiguration: TSessionRunConfigurationResolver
     private readonly systemPrompt: string
-    private readonly tools: readonly IRuntimeAgentTool[]
+    private readonly availableTools: readonly IRuntimeAgentTool[]
+    private tools: readonly IRuntimeAgentTool[]
+    private branchSwitchInProgress = false
+    private branchSwitchError: Error | undefined
     private readonly now: () => number
     private readonly generateId: () => string
     private readonly snapshotFreezeCache: ISessionSnapshotFreezeCache = {
@@ -106,7 +112,8 @@ export class AgentSession {
         this.manager = options.manager
         this.resolveRunConfiguration = options.resolveRunConfiguration
         this.systemPrompt = options.systemPrompt
-        this.tools = options.tools
+        this.availableTools = [...options.tools]
+        this.tools = this.resolveActiveTools()
         this.now = options.now ?? Date.now
         this.generateId = options.generateId ?? generateRandomId
         this.disposeTimeoutMs = options.disposeTimeoutMs ?? DEFAULT_DISPOSE_TIMEOUT_MS
@@ -179,6 +186,74 @@ export class AgentSession {
         return () => this.listeners.delete(listener)
     }
 
+    createBranch(): string {
+        this.assertCanSwitchBranch()
+        const branchId = this.generateId()
+        this.switchBranch(() => this.manager.createBranch(this.id, branchId))
+        return branchId
+    }
+
+    returnToParentBranch(): void {
+        this.assertCanSwitchBranch()
+        if (this.manager.getActiveBranchId(this.id) === MAIN_BRANCH_ID) {
+            throw new Error("Cannot return from the main branch")
+        }
+        this.switchBranch(() => this.manager.returnToParentBranch(this.id))
+    }
+
+    private resolveActiveTools(): readonly IRuntimeAgentTool[] {
+        const policy = this.manager.getActiveBranchId(this.id) === MAIN_BRANCH_ID
+            ? ToolPolicy.Full
+            : ToolPolicy.ReadOnly
+        return this.availableTools.filter((tool) => isToolAllowed(tool, policy))
+    }
+
+    private assertBranchContextAvailable(): void {
+        if (this.branchSwitchError) throw this.branchSwitchError
+        if (this.branchSwitchInProgress) {
+            throw new Error("Cannot interact while switching branches")
+        }
+    }
+
+    private assertCanSwitchBranch(): void {
+        if (this.disposed) throw new Error("AgentSession is disposed")
+        this.assertBranchContextAvailable()
+        if (this.persistenceError !== undefined) {
+            throw new Error("Session persistence failed. Reopen the session before switching branches.", {
+                cause: this.persistenceError,
+            })
+        }
+        if (this.agent.state.isRunning || this.agent.state.pendingToolCallIds.size > 0) {
+            throw new Error("Cannot switch branches while AgentSession is running")
+        }
+        if (this.compactionTask) throw new Error("Cannot switch branches while compacting")
+        if (this.agent.pendingSteeringMessages.length > 0 || this.agent.pendingFollowUpMessages.length > 0) {
+            throw new Error("Restore queued messages before switching branches")
+        }
+    }
+
+    private switchBranch(navigate: () => void): void {
+        this.assertCanSwitchBranch()
+        this.branchSwitchInProgress = true
+        try {
+            navigate()
+            const messages = this.loadDurableHistory()
+            const tools = this.resolveActiveTools()
+            this.agent.replaceContext(messages, tools)
+            this.tools = tools
+            this.updateContextUsageFromDurableHistory()
+            this.publishSnapshot()
+        } catch (cause) {
+            this.branchSwitchError = new Error(
+                "Branch switching failed. Reopen the session before continuing.",
+                { cause },
+            )
+            throw this.branchSwitchError
+        } finally {
+            this.branchSwitchInProgress = false
+        }
+    }
+
     /** Recomputes derived context telemetry after an idle model/catalog change. */
     refreshContextUsage(): void {
         if (this.disposed) return
@@ -202,6 +277,7 @@ export class AgentSession {
     }
 
     prompt(input: TUserInput): IAgentRunHandle {
+        this.assertBranchContextAvailable()
         if (this.disposed) throw new Error("AgentSession is disposed")
         if (this.compactionTask) {
             throw new Error("Cannot submit a prompt while compacting the session")
@@ -216,6 +292,7 @@ export class AgentSession {
     }
 
     steer(input: TUserInput): void {
+        this.assertBranchContextAvailable()
         if (this.disposed) throw new Error("AgentSession is disposed")
         if (this.compactionTask) {
             throw new Error("Cannot steer while compacting the session")
@@ -231,6 +308,7 @@ export class AgentSession {
     }
 
     followUp(input: TUserInput): void {
+        this.assertBranchContextAvailable()
         if (this.disposed) throw new Error("AgentSession is disposed")
         if (this.compactionTask) {
             throw new Error("Cannot queue a follow-up while compacting the session")
@@ -277,6 +355,7 @@ export class AgentSession {
     compact(
         reason: ICompactionCheckpoint["reason"] = "manual",
     ): Promise<ICompactionCheckpoint | undefined> {
+        this.assertBranchContextAvailable()
         if (this.disposed) throw new Error("AgentSession is disposed")
         if (this.persistenceError !== undefined) {
             throw new Error(
@@ -406,6 +485,7 @@ export class AgentSession {
         originalRequest?: IAgentModelRequest,
         activeRunConfiguration?: IAgentSessionRunConfiguration,
     ): Promise<ICompactionCheckpoint | undefined> {
+        this.assertBranchContextAvailable()
         if (this.disposed) throw new Error("AgentSession is disposed")
         if (this.persistenceError !== undefined) {
             throw new Error(
@@ -651,6 +731,7 @@ export class AgentSession {
         }
 
         return freezeSessionSnapshot({
+            activeBranchId: this.manager.getActiveBranchId(this.id),
             messages: state.messages,
             ...this.presentationSource,
             ...this.queuedMessagesSource,

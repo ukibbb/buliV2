@@ -1,3 +1,4 @@
+import { ToolAccess } from "@/agent/tool-policy"
 import { spawn } from "node:child_process"
 import { readFile, stat } from "node:fs/promises"
 import * as path from "node:path"
@@ -78,6 +79,7 @@ export function createGrepTool(
 ): IAgentTool<typeof GREP_INPUT_SCHEMA, "grep"> {
     return defineAgentTool({
         name: "grep",
+        access: ToolAccess.ReadOnly,
         description: `Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects ignore rules unless includeIgnored is true. Output is truncated to ${DEFAULT_LIMIT} matches or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Long lines are truncated to ${GREP_MAX_LINE_LENGTH} chars.`,
         inputSchema: GREP_INPUT_SCHEMA,
         selfTruncatesOutput: true,
@@ -154,6 +156,7 @@ export function createGrepTool(
                     }
 
                     const args: string[] = [
+                        "--no-config",
                         "--json",
                         "--line-number",
                         "--color=never",

@@ -76,6 +76,8 @@ export type {
     IAgentState,
 } from "@/agent/state"
 export { defineAgentTool } from "@/agent/tool"
+export { ToolPolicy, ToolAccess, isToolAllowed } from "@/agent/tool-policy"
+export type { TToolPolicy, TToolAccess } from "@/agent/tool-policy"
 export type {
     IAgentTool,
     IAgentToolContext,

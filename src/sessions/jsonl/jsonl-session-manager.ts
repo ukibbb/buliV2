@@ -23,50 +23,20 @@ import type {
     IFileChangeProposalRecord,
     TAgentMessage,
 } from "@/agent"
-import {
-    assertCheckpointAnchor,
-    type ICompactionCheckpoint,
-} from "@/sessions/compaction/checkpoint"
+import type { ICompactionCheckpoint } from "@/sessions/compaction/checkpoint"
 import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
 import { acquireSessionLogLock } from "@/sessions/jsonl/session-log-lock"
 import type {
     ISessionInfo,
     ISessionManager,
 } from "@/sessions/repository"
-import {
-    assertCompactionCheckpoint,
-    assertDurableSessionMessage,
-    assertFileChangeProposalRecord,
-    assertSessionInfo,
-} from "@/sessions/validation"
+import { sessionArchiveRecords } from "@/sessions/jsonl/session-archive-records"
+import { assertSessionRecord, SessionRecordType as Kind, serializeSessionRecords, type TSessionRecord } from "@/sessions/jsonl/session-records"
+import { replaySessionRecords, SessionReplayError } from "@/sessions/jsonl/session-replay"
 
 interface IJsonlSessionManagerOptions {
     readonly filePath: string
     readonly readOnly?: boolean
-}
-
-interface ISessionRecord {
-    readonly recordType: "session"
-    readonly version: 2
-    readonly session: ISessionInfo
-}
-
-interface IMessageRecord {
-    readonly recordType: "message"
-    readonly version: 2
-    readonly message: TAgentMessage
-}
-
-interface ICompactionRecord {
-    readonly recordType: "compaction"
-    readonly version: 2
-    readonly checkpoint: ICompactionCheckpoint
-}
-
-interface IFileChangeProposalJsonlRecord {
-    readonly recordType: "fileChangeProposal"
-    readonly version: 2
-    readonly proposal: IFileChangeProposalRecord
 }
 
 /** Persists session metadata and direct Agent messages as JSONL records. */
@@ -127,20 +97,12 @@ export class JsonlSessionManager implements ISessionManager {
 
     readonly appendMessage = (message: TAgentMessage): void => {
         this.assertWritable()
-        assertDurableSessionMessage(message)
-
-        const info = this.memory.getSessionInfo(message.sessionId)
-        if (!info) {
-            throw new Error(`Session does not exist: ${message.sessionId}`)
-        }
-
-        const isPersisted = this.persistedSessionIds.has(message.sessionId)
-        const records: readonly unknown[] = isPersisted
-            ? [messageRecord(message)]
-            : [sessionRecord(info), messageRecord(message)]
-
-        if (isPersisted) this.appendRecords(records)
-        else this.replaceFile(this.currentContents() + serializeRecords(records))
+        this.memory.validateMessageAppend(message)
+        this.persistRecord(message.sessionId, {
+            recordType: Kind.Message,
+            branchId: this.memory.getActiveBranchId(message.sessionId),
+            message,
+        })
         this.memory.appendMessage(message)
         this.persistedSessionIds.add(message.sessionId)
     }
@@ -168,63 +130,68 @@ export class JsonlSessionManager implements ISessionManager {
         return this.memory.getCompactionCheckpoint(sessionId)
     }
 
-    readonly saveCompactionCheckpoint = (
-        checkpoint: ICompactionCheckpoint,
-    ): void => {
+    readonly saveCompactionCheckpoint = (checkpoint: ICompactionCheckpoint): void => {
         this.assertWritable()
-        assertCompactionCheckpoint(checkpoint)
-        assertCheckpointAnchor(
+        this.memory.validateCheckpointSave(checkpoint)
+        this.persistRecord(checkpoint.sessionId, {
+            recordType: Kind.Compaction,
+            branchId: this.memory.getActiveBranchId(checkpoint.sessionId),
             checkpoint,
-            this.memory.getMessages(checkpoint.sessionId),
-        )
-        // Checkpoint jest append-only jak wiadomości. Powtórne kompaktowanie dopisuje
-        // nowszy rekord, a load wybiera ostatni.
-        this.appendRecords([compactionRecord(checkpoint)])
+        })
         this.memory.saveCompactionCheckpoint(checkpoint)
         this.persistedSessionIds.add(checkpoint.sessionId)
     }
 
     readonly deleteSession = (sessionId: string): void => {
         this.assertWritable()
-        const wasPersisted = this.persistedSessionIds.has(sessionId)
-        if (wasPersisted) {
-            const records: unknown[] = []
+        if (this.persistedSessionIds.has(sessionId)) {
+            const records: TSessionRecord[] = []
             for (const info of this.memory.listSessions()) {
-                if (info.id === sessionId || !this.persistedSessionIds.has(info.id)) {
-                    continue
-                }
-                records.push(sessionRecord(info))
-                records.push(
-                    ...this.memory.getMessages(info.id).map(messageRecord),
-                )
-                records.push(
-                    ...this.memory.getFileChangeProposals(info.id)
-                        .map(fileChangeProposalRecord),
-                )
-                const checkpoint = this.memory.getCompactionCheckpoint(info.id)
-                if (checkpoint) records.push(compactionRecord(checkpoint))
+                if (info.id === sessionId || !this.persistedSessionIds.has(info.id)) continue
+                records.push(...sessionArchiveRecords(this.memory.getSessionArchive(info.id)))
             }
-            this.replaceFile(serializeRecords(records))
+            this.replaceFile(serializeSessionRecords(records))
         }
         this.memory.deleteSession(sessionId)
         this.persistedSessionIds.delete(sessionId)
     }
 
-    /** Exports replayed session state, not the original log's historical records. */
     readonly exportSession = (sessionId: string): string => {
         this.assertActive()
-        const info = this.memory.getSessionInfo(sessionId)
-        if (!info) throw new Error(`Session does not exist: ${sessionId}`)
+        return serializeSessionRecords(sessionArchiveRecords(this.memory.getSessionArchive(sessionId)))
+    }
 
-        const records: unknown[] = [sessionRecord(info)]
-        records.push(...this.memory.getMessages(sessionId).map(messageRecord))
-        records.push(
-            ...this.memory.getFileChangeProposals(sessionId)
-                .map(fileChangeProposalRecord),
-        )
-        const checkpoint = this.memory.getCompactionCheckpoint(sessionId)
-        if (checkpoint) records.push(compactionRecord(checkpoint))
-        return serializeRecords(records)
+    readonly getActiveBranchId = (sessionId: string): string => {
+        this.assertActive()
+        return this.memory.getActiveBranchId(sessionId)
+    }
+
+    readonly createBranch = (sessionId: string, branchId: string): void => {
+        this.assertWritable()
+        const branch = this.memory.prepareBranch(sessionId, branchId)
+        this.persistRecord(sessionId, { recordType: Kind.Branch, sessionId, branch })
+        this.memory.createBranch(sessionId, branchId)
+        this.persistedSessionIds.add(sessionId)
+    }
+
+    readonly returnToParentBranch = (sessionId: string): void => {
+        this.assertWritable()
+        const branchId = this.memory.getParentBranchId(sessionId)
+        this.persistRecord(sessionId, { recordType: Kind.BranchSelection, sessionId, branchId })
+        this.memory.returnToParentBranch(sessionId)
+        this.persistedSessionIds.add(sessionId)
+    }
+
+    private persistRecord(sessionId: string, record: TSessionRecord): void {
+        if (this.persistedSessionIds.has(sessionId)) {
+            this.appendRecords([record])
+        } else {
+            const records: TSessionRecord[] = [
+                { recordType: Kind.Session, session: this.memory.getSessionInfo(sessionId)! },
+                record,
+            ]
+            this.replaceFile(this.currentContents() + serializeSessionRecords(records))
+        }
     }
 
     readonly dispose = (): void => {
@@ -235,191 +202,49 @@ export class JsonlSessionManager implements ISessionManager {
 
     private load(): void {
         if (!existsSync(this.filePath)) return
-
         const contents = readFileSync(this.filePath, "utf8")
         const lines = contents.split("\n")
-        const hasTerminatedTail = contents.endsWith("\n")
         const lastRecordIndex = lines.findLastIndex((line) => line.trim().length > 0)
-        const infoBySession = new Map<string, ISessionInfo>()
-        const messagesBySession = new Map<string, TAgentMessage[]>()
-        const proposalsBySession = new Map<
-            string,
-            IFileChangeProposalRecord[]
-        >()
-        const checkpointsBySession = new Map<string, {
-            readonly index: number
-            readonly checkpoint: ICompactionCheckpoint
-        }[]>()
-        const sessionOrder: string[] = []
-        const seenSessionIds = new Set<string>()
-
-        const rememberSession = (sessionId: string): void => {
-            if (seenSessionIds.has(sessionId)) return
-            seenSessionIds.add(sessionId)
-            sessionOrder.push(sessionId)
-        }
-
+        const records: TSessionRecord[] = []
+        const lineIndexes: number[] = []
+        let repairedContents: string | undefined
         for (const [index, line] of lines.entries()) {
             if (!line.trim()) continue
-
             let value: unknown
             try {
                 value = JSON.parse(line)
             } catch (error) {
-                if (index === lastRecordIndex && !hasTerminatedTail) {
-                    if (!this.readOnly) {
-                        const completeLines = lines.slice(0, index)
-                        this.replaceFile(
-                            completeLines.length > 0 ? `${completeLines.join("\n")}\n` : "",
-                        )
-                    }
+                if (index === lastRecordIndex && !contents.endsWith("\n")) {
+                    const completeLines = lines.slice(0, index)
+                    repairedContents = completeLines.length > 0 ? `${completeLines.join("\n")}\n` : ""
                     break
                 }
                 throw this.invalidLineError(index, error)
             }
-
-            if (isRecord(value) && value.recordType === "session") {
-                try {
-                    assertSessionRecord(value)
-                } catch (error) {
-                    throw this.invalidLineError(index, error)
-                }
-
-                rememberSession(value.session.id)
-                const existing = infoBySession.get(value.session.id)
-                if (
-                    existing
-                    && (
-                        existing.agentId !== value.session.agentId
-                        || existing.createdAt !== value.session.createdAt
-                    )
-                ) {
-                    throw this.invalidLineError(
-                        index,
-                        new Error("Session identity cannot change"),
-                    )
-                }
-                infoBySession.set(value.session.id, {
-                    ...cloneSessionInfo(value.session),
-                    updatedAt: Math.max(
-                        existing?.updatedAt ?? value.session.updatedAt,
-                        value.session.updatedAt,
-                    ),
-                })
-                this.persistedSessionIds.add(value.session.id)
-                continue
-            }
-
-            if (isRecord(value) && value.recordType === "fileChangeProposal") {
-                try {
-                    assertFileChangeProposalJsonlRecord(value)
-                    if (!infoBySession.has(value.proposal.sessionId)) {
-                        throw new Error(
-                            `Missing session metadata: ${value.proposal.sessionId}`,
-                        )
-                    }
-                } catch (error) {
-                    throw this.invalidLineError(index, error)
-                }
-
-                const proposals = proposalsBySession.get(value.proposal.sessionId)
-                    ?? []
-                const existingIndex = proposals.findIndex(
-                    (proposal) => proposal.id === value.proposal.id,
-                )
-                if (existingIndex === -1) proposals.push(value.proposal)
-                else proposals[existingIndex] = value.proposal
-                proposalsBySession.set(value.proposal.sessionId, proposals)
-                continue
-            }
-
-            if (isRecord(value) && value.recordType === "compaction") {
-                try {
-                    assertCompactionRecord(value)
-                    if (!infoBySession.has(value.checkpoint.sessionId)) {
-                        throw new Error(
-                            `Missing session metadata: ${value.checkpoint.sessionId}`,
-                        )
-                    }
-                } catch (error) {
-                    throw this.invalidLineError(index, error)
-                }
-
-                // Checkpoints are derived summaries, not the source history. Older
-                // concurrent writers could save a count from a stale in-memory view.
-                // Reindexing it would hide messages the summary never incorporated.
-                // Skip only an invalid anchor, retaining the last valid checkpoint
-                // (or full history); malformed records still fail validation above.
-                try {
-                    assertCheckpointAnchor(
-                        value.checkpoint,
-                        messagesBySession.get(value.checkpoint.sessionId) ?? [],
-                    )
-                } catch (error) {
-                    this.warnInvalidCheckpoint(index, error)
-                    continue
-                }
-                const checkpoints = checkpointsBySession.get(value.checkpoint.sessionId)
-                    ?? []
-                checkpoints.push({ index, checkpoint: value.checkpoint })
-                checkpointsBySession.set(value.checkpoint.sessionId, checkpoints)
-                continue
-            }
-
             try {
-                assertMessageRecord(value)
+                assertSessionRecord(value)
             } catch (error) {
                 throw this.invalidLineError(index, error)
             }
-
-            const message = value.message
-
-            const info = infoBySession.get(message.sessionId)
-            if (!info) {
-                throw this.invalidLineError(
-                    index,
-                    new Error(`Missing session metadata: ${message.sessionId}`),
-                )
-            }
-
-            rememberSession(message.sessionId)
-            const messages = messagesBySession.get(message.sessionId) ?? []
-            // Replay the same replacement-by-ID semantics used by the live manager;
-            // raw record counts are not necessarily durable message positions.
-            const existingIndex = messages.findIndex((item) => item.id === message.id)
-            if (existingIndex === -1) messages.push(message)
-            else messages[existingIndex] = message
-            // Even a replaced record may have advanced the session's timestamp.
-            infoBySession.set(message.sessionId, {
-                ...info,
-                updatedAt: Math.max(info.updatedAt, message.createdAt),
-            })
-            messagesBySession.set(message.sessionId, messages)
-            this.persistedSessionIds.add(message.sessionId)
+            records.push(value)
+            lineIndexes.push(index)
         }
-
-        for (const sessionId of sessionOrder) {
-            const messages = messagesBySession.get(sessionId) ?? []
-            const info = infoBySession.get(sessionId)
-            if (!info) throw new Error(`Missing session metadata: ${sessionId}`)
-
-            this.memory.createSession(info)
-            for (const message of messages) this.memory.appendMessage(message)
-            for (const proposal of proposalsBySession.get(sessionId) ?? []) {
-                this.memory.restoreFileChangeProposal(proposal)
+        let result
+        try {
+            result = replaySessionRecords(records)
+        } catch (error) {
+            if (error instanceof SessionReplayError) {
+                throw this.invalidLineError(lineIndexes[error.recordIndex]!, error.cause)
             }
-            // A later replacement may invalidate a previously complete tool sequence.
-            // Recheck against the final replay before choosing the newest usable summary.
-            for (const { index, checkpoint } of (
-                checkpointsBySession.get(sessionId) ?? []
-            ).toReversed()) {
-                try {
-                    this.memory.saveCompactionCheckpoint(checkpoint)
-                    break
-                } catch (error) {
-                    this.warnInvalidCheckpoint(index, error)
-                }
-            }
+            throw error
+        }
+        for (const archive of result.archives) {
+            this.memory.restoreSessionArchive(archive)
+            this.persistedSessionIds.add(archive.info.id)
+        }
+        if (repairedContents !== undefined && !this.readOnly) this.replaceFile(repairedContents)
+        for (const warning of result.warnings) {
+            this.warnInvalidCheckpoint(lineIndexes[warning.recordIndex]!, warning.reason)
         }
     }
 
@@ -456,7 +281,7 @@ export class JsonlSessionManager implements ISessionManager {
         }
     }
 
-    private appendRecords(records: readonly unknown[]): void {
+    private appendRecords(records: readonly TSessionRecord[]): void {
         /*
          * Steady-state appends need only the final LF byte, not a replay of the
          * growing UTF-8 log. Stat and inspect one byte on the same read-only
@@ -488,7 +313,7 @@ export class JsonlSessionManager implements ISessionManager {
         }
         appendFileSync(
             this.filePath,
-            `${separator}${serializeRecords(records)}`,
+            `${separator}${serializeSessionRecords(records)}`,
             { encoding: "utf8", mode: 0o600 },
         )
     }
@@ -526,127 +351,3 @@ function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error)
 }
 
-function sessionRecord(info: ISessionInfo): ISessionRecord {
-    return {
-        recordType: "session",
-        version: 2,
-        session: cloneSessionInfo(info),
-    }
-}
-
-function messageRecord(message: TAgentMessage): IMessageRecord {
-    return {
-        recordType: "message",
-        version: 2,
-        message: structuredClone(message),
-    }
-}
-
-function fileChangeProposalRecord(
-    proposal: IFileChangeProposalRecord,
-): IFileChangeProposalJsonlRecord {
-    return {
-        recordType: "fileChangeProposal",
-        version: 2,
-        proposal: structuredClone(proposal),
-    }
-}
-
-function compactionRecord(
-    checkpoint: ICompactionCheckpoint,
-): ICompactionRecord {
-    return {
-        recordType: "compaction",
-        version: 2,
-        checkpoint: structuredClone(checkpoint),
-    }
-}
-
-function cloneSessionInfo(info: ISessionInfo): ISessionInfo {
-    return {
-        id: info.id,
-        agentId: info.agentId,
-        title: info.title,
-        createdAt: info.createdAt,
-        updatedAt: info.updatedAt,
-    }
-}
-
-function serializeRecords(records: readonly unknown[]): string {
-    return records.length === 0
-        ? ""
-        : `${records.map((record) => JSON.stringify(record)).join("\n")}\n`
-}
-
-function assertSessionRecord(value: unknown): asserts value is ISessionRecord {
-    if (
-        !isRecord(value)
-        || !hasExactKeys(value, ["recordType", "version", "session"])
-        || value.recordType !== "session"
-        || value.version !== 2
-        || !isRecord(value.session)
-        || !hasExactKeys(value.session, [
-            "id",
-            "agentId",
-            "title",
-            "createdAt",
-            "updatedAt",
-        ])
-    ) {
-        throw new Error("Invalid session metadata")
-    }
-    assertSessionInfo(value.session)
-}
-
-function assertMessageRecord(value: unknown): asserts value is IMessageRecord {
-    if (
-        !isRecord(value)
-        || !hasExactKeys(value, ["recordType", "version", "message"])
-        || value.recordType !== "message"
-        || value.version !== 2
-    ) {
-        throw new Error("Invalid message record")
-    }
-    assertDurableSessionMessage(value.message)
-}
-
-function assertFileChangeProposalJsonlRecord(
-    value: unknown,
-): asserts value is IFileChangeProposalJsonlRecord {
-    if (
-        !isRecord(value)
-        || !hasExactKeys(value, ["recordType", "version", "proposal"])
-        || value.recordType !== "fileChangeProposal"
-        || value.version !== 2
-    ) {
-        throw new Error("Invalid file-change proposal record")
-    }
-    assertFileChangeProposalRecord(value.proposal)
-}
-
-function assertCompactionRecord(
-    value: unknown,
-): asserts value is ICompactionRecord {
-    if (
-        !isRecord(value)
-        || !hasExactKeys(value, ["recordType", "version", "checkpoint"])
-        || value.recordType !== "compaction"
-        || value.version !== 2
-    ) {
-        throw new Error("Invalid compaction record")
-    }
-    assertCompactionCheckpoint(value.checkpoint)
-}
-
-function hasExactKeys(
-    value: Record<string, unknown>,
-    keys: readonly string[],
-): boolean {
-    const actualKeys = Object.keys(value)
-    return actualKeys.length === keys.length
-        && keys.every((key) => Object.hasOwn(value, key))
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-    return value !== null && typeof value === "object" && !Array.isArray(value)
-}

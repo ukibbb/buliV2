@@ -50,6 +50,7 @@ function sessionSnapshot(
   overrides: Partial<ISessionSnapshot> = {},
 ): ISessionSnapshot {
   return {
+    activeBranchId: "main",
     messages: [],
     fileChangeProposals: [],
     pendingSteeringMessages: [],
@@ -99,6 +100,8 @@ function createSessionHarness(initialSnapshot: ISessionSnapshot) {
     steer: () => undefined,
     followUp: () => undefined,
     clearQueuedMessages: () => ({ steering: [], followUp: [] }),
+    createBranch: () => "side",
+    returnToParentBranch: () => undefined,
     compactSession: async () => undefined,
     abort: async () => undefined,
     dispose: async () => undefined,
@@ -138,6 +141,31 @@ function sessionElement(
     </BuliRuntimeProvider>
   )
 }
+
+test("branch indicator and transcript follow session snapshots", async () => {
+  const harness = createSessionHarness(sessionSnapshot({ activeBranchId: "side-a", messages: transcriptMessages(1) }))
+  const setup = await testRender(sessionElement(harness), { width: 100, height: 20 })
+  try {
+    await act(async () => { await setup.renderOnce() })
+    expect(setup.captureCharFrame()).toContain("Side branch side-a")
+    expect(setup.captureCharFrame()).toContain("read-only")
+    expect(setup.captureCharFrame()).toContain("Transcript line 0")
+    await act(async () => {
+      harness.setSnapshot(sessionSnapshot({ activeBranchId: "side-parent", messages: transcriptMessages(2) }))
+      await setup.renderOnce()
+    })
+    expect(setup.captureCharFrame()).toContain("Side branch side-parent")
+    await act(async () => {
+      harness.setSnapshot(sessionSnapshot())
+      await setup.renderOnce()
+    })
+    expect(setup.captureCharFrame()).not.toContain("Side branch")
+    expect(setup.captureCharFrame()).not.toContain("Transcript line 0")
+  } finally {
+    harness.controller.dispose()
+    act(() => setup.renderer.destroy())
+  }
+})
 
 function notifierElement(
   harness: ReturnType<typeof createSessionHarness>,

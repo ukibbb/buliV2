@@ -107,6 +107,7 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
   const aborted: string[] = []
   const sessionListeners = new Set<() => void>()
   let sessionSnapshot: ISessionSnapshot = options.sessionSnapshot ?? {
+    activeBranchId: "main",
     messages: [],
     fileChangeProposals: [],
     pendingSteeringMessages: [],
@@ -163,6 +164,8 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
         followUp: [],
       }
     },
+    createBranch: () => "side",
+    returnToParentBranch: () => undefined,
     compactSession: async () => undefined,
     abort: async (sessionId) => {
       aborted.push(sessionId)
@@ -481,6 +484,7 @@ test("two Escape keypresses close the menu before interrupting an active respons
   let cleared = 0
   const fake = fakeApplication({
     sessionSnapshot: {
+      activeBranchId: "main",
       messages: [], fileChangeProposals: [],
       pendingSteeringMessages: [{
         id: "steer-1", sessionId: "default", runId: "run-1", role: "user",
@@ -814,6 +818,7 @@ test("retains textarea input when prompt persistence fails", async () => {
 test("submits textarea input as steering while the session is running", async () => {
   const fake = fakeApplication({
     sessionSnapshot: {
+      activeBranchId: "main",
       messages: [],
       fileChangeProposals: [],
       pendingSteeringMessages: [],
@@ -855,6 +860,7 @@ test("notifies when a run finishes while authentication replaces the session", a
   let currentTime = 0
   const fake = fakeApplication({
     sessionSnapshot: {
+      activeBranchId: "main",
       messages: [],
       fileChangeProposals: [],
       pendingSteeringMessages: [],
@@ -891,6 +897,7 @@ test("notifies when a run finishes while authentication replaces the session", a
     currentTime = COMPLETION_NOTIFICATION_MIN_DURATION_MS
     await act(async () => {
       fake.setSessionSnapshot({
+        activeBranchId: "main",
         messages: [],
         fileChangeProposals: [],
         pendingSteeringMessages: [],
@@ -918,6 +925,7 @@ test("notifies when a run finishes while authentication replaces the session", a
 test("retains textarea input and allows Escape while compacting", async () => {
   const fake = fakeApplication({
     sessionSnapshot: {
+      activeBranchId: "main",
       messages: [],
       fileChangeProposals: [],
       pendingSteeringMessages: [],
@@ -966,6 +974,7 @@ test("retains textarea input and allows Escape while compacting", async () => {
 test("submits Alt+Enter input as follow-up while the session is running", async () => {
   const fake = fakeApplication({
     sessionSnapshot: {
+      activeBranchId: "main",
       messages: [],
       fileChangeProposals: [],
       pendingSteeringMessages: [],
@@ -1007,6 +1016,7 @@ test("submits Alt+Enter input as follow-up while the session is running", async 
 test("retains textarea input when a finishing run rejects steering", async () => {
   const fake = fakeApplication({
     sessionSnapshot: {
+      activeBranchId: "main",
       messages: [],
       fileChangeProposals: [],
       pendingSteeringMessages: [],
@@ -1050,6 +1060,7 @@ test("retains textarea input when a finishing run rejects steering", async () =>
 test("renders running and failed session status", async () => {
   const fake = fakeApplication({
     sessionSnapshot: {
+      activeBranchId: "main",
       messages: [],
       fileChangeProposals: [],
       pendingSteeringMessages: [{
@@ -1103,6 +1114,7 @@ test("renders running and failed session status", async () => {
 
     await act(async () => {
       fake.setSessionSnapshot({
+        activeBranchId: "main",
         messages: [],
         fileChangeProposals: [],
         pendingSteeringMessages: [],
@@ -1136,6 +1148,7 @@ test("keeps the selected slash command visible below a wrapped active budget", a
       models: [{ id: "test", name: "GPT-6 Astra Fast", reasoningEfforts: ["medium"] }],
     },
     sessionSnapshot: {
+      activeBranchId: "main",
       messages: [],
       fileChangeProposals: [],
       pendingSteeringMessages: [],
@@ -1177,7 +1190,7 @@ test("keeps the selected slash command visible below a wrapped active budget", a
     await render()
 
     const frame = setup.captureCharFrame()
-    expect(frame).toContain("→ review")
+    expect(frame).toContain("→ compact")
     expect(frame.split("\n").map((line) => line.trim()).join(" "))
       .toContain("compact 142k/160k (89% budget)")
     expect(textareaRenderable(setup.renderer.root).focused).toBe(true)
@@ -1186,13 +1199,13 @@ test("keeps the selected slash command visible below a wrapped active budget", a
       act(() => setup.resize(width, height))
       await render()
       const resizedFrame = setup.captureCharFrame()
-      expect(resizedFrame).toContain("→ review")
+      expect(resizedFrame).toContain("→ compact")
       expect(resizedFrame.split("\n").map((line) => line.trim()).join(" "))
         .toContain("compact 142k/160k (89% budget)")
       if (height === 30) {
         for (const commandName of [
           "new", "model", "reasoning", "sessions", "login", "logout",
-          "compact", "grill", "teach",
+          "branch", "return",
         ]) {
           expect(resizedFrame).toContain(`   ${commandName}`)
         }
@@ -1204,13 +1217,13 @@ test("keeps the selected slash command visible below a wrapped active budget", a
     const activeSession = fake.application.openSession("default").getSnapshot()
     act(() => fake.setSessionSnapshot({ ...activeSession, isRunning: false }))
     await render()
-    expect(setup.captureCharFrame()).toContain("→ review")
-    expect(setup.captureCharFrame()).toContain("   login")
+    expect(setup.captureCharFrame()).toContain("→ compact")
+    expect(setup.captureCharFrame()).toContain("   sessions")
 
     act(() => fake.setSessionSnapshot(activeSession))
     await render()
-    expect(setup.captureCharFrame()).toContain("→ review")
-    expect(setup.captureCharFrame()).not.toContain("   login")
+    expect(setup.captureCharFrame()).toContain("→ compact")
+    expect(setup.captureCharFrame()).not.toContain("   sessions")
 
     act(() => setup.mockInput.pressArrow("down"))
     await render()

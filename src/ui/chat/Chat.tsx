@@ -1,121 +1,26 @@
-import { memo } from "react"
-
-import { ChatStatus } from "@/ui/chat/ChatStatus"
-import { CommandMenu } from "@/ui/chat/CommandMenu"
-import { PromptEditor } from "@/ui/chat/PromptEditor"
-import { useBuliApplicationSnapshot } from "@/ui/context/application-context"
-import {
-    useBuliUiController,
-    useBuliUiSnapshot,
-} from "@/ui/context/ui-controller-context"
-import type {
-    TAgentRunEndReason,
-    IUserMessage,
-} from "@/agent"
-import type { IContextUsage } from "@/sessions"
-import { useTerminalClipboard } from "@/ui/terminal/clipboard/ClipboardOverlay"
+import { ChatFeedback } from "@/ui/chat/ChatFeedback"
+import { ChatInput } from "@/ui/chat/ChatInput"
+import { ChatMenu } from "@/ui/chat/ChatMenu"
+import { SessionActivity } from "@/ui/chat/SessionActivity"
+import { SessionQueue } from "@/ui/chat/SessionQueue"
 import { theme } from "@/ui/terminal/theme"
 
-interface IChatProps {
-    readonly isRunning?: boolean
-    readonly isCompacting?: boolean
-    readonly contextUsage?: IContextUsage | undefined
-    readonly pendingSteeringMessages?: readonly IUserMessage[]
-    readonly pendingFollowUpMessages?: readonly IUserMessage[]
-    readonly lastRunReason?: TAgentRunEndReason
-    readonly errorMessage?: string
-}
-
-/** Connects prompt, status, and command-menu views to application UI state. */
-function ChatView(props: IChatProps) {
-    const controller = useBuliUiController()
-    const ui = useBuliUiSnapshot()
-    const application = useBuliApplicationSnapshot()
-    const clipboard = useTerminalClipboard()
-    const selectedModel = application.models.find(
-        (model) => model.id === application.selection.modelId,
-    )
-    const catalog = application.modelCatalog
-    const catalogReady = application.selectedModelAvailable ?? (catalog === undefined || catalog.status === "ready")
-    const selectedModelName = catalogReady
-        ? selectedModel?.name ?? application.selection.modelId
-        : catalog?.status === "loading" ? "Loading models" : "Model unavailable"
-    const catalogMessage = catalog?.message
-        ?? (catalog?.status === "loading" ? "Loading available account models..." : undefined)
-
-    const menu = ui.menu
-
+/** Composes independent subscribers; no draft, menu or session state lives here. */
+export function Chat(props: { readonly sessionId?: string | undefined }) {
     return (
-        <box width="100%" flexShrink={0} flexDirection="column">
-            <text>{controller.workspaceRoot}</text>
-            <PromptEditor
-                value={controller.getInputDraft()}
-                menuOpen={menu !== null}
-                {...(clipboard?.read
-                    ? { clipboard: { read: clipboard.read } }
-                    : {})}
-                getCurrentValue={controller.getInputDraft}
-                onValueChange={controller.updateDraft}
-                onSubmit={controller.submitInput}
-                onMoveMenuSelection={controller.moveMenuSelection}
-                onActivateMenuItem={controller.activateSelectedMenuItem}
-                onError={controller.setExternalUiError}
-            />
-            {/* Runtime readiness blocks generation, not editing or slash commands:
-                login and catalog retry must remain usable after discovery fails.
-                Do not present a provisional model as available, or hide a change
-                from the requested Fast tier to an account-supported fallback. */}
-            {catalogMessage && catalogMessage !== ui.inputError ? <text
-                fg={catalog?.status === "error" ? theme.red : theme.amber}
-                minWidth={0}
-                wrapMode="word"
-            >{catalogMessage}</text> : null}
-            {application.providerCatalogs?.filter((provider) => provider.status === "error").map((provider) => (
-                <text key={provider.providerId} fg={theme.amber} wrapMode="word">
-                    {provider.message}{provider.stale ? " Using the previous catalog." : ""}
-                </text>
-            ))}
-            <ChatStatus
-                isRunning={props.isRunning}
-                isCompacting={props.isCompacting}
-                contextUsage={props.contextUsage}
-                pendingSteeringMessages={props.pendingSteeringMessages}
-                pendingFollowUpMessages={props.pendingFollowUpMessages}
-                lastRunReason={props.lastRunReason}
-                errorMessage={props.errorMessage}
-                inputError={ui.inputError}
-                selectedModelName={selectedModelName}
-                reasoningEffort={catalogReady ? application.selection.reasoningEffort : "--"}
-            />
-            <CommandMenu menu={menu} />
+        <box
+            id="chat"
+            width="100%"
+            minHeight={0}
+            flexShrink={1}
+            flexDirection="column"
+            backgroundColor={theme.surface}
+        >
+            <SessionQueue sessionId={props.sessionId} />
+            <ChatMenu />
+            <SessionActivity sessionId={props.sessionId} />
+            <ChatInput />
+            <ChatFeedback sessionId={props.sessionId} />
         </box>
     )
-}
-
-// Queue arrays are defensively cloned; stable message IDs still let text-only
-// streaming updates skip the unrelated prompt and status subtree.
-export const Chat = memo(ChatView, (previous, next) => (
-    previous.isRunning === next.isRunning
-    && previous.isCompacting === next.isCompacting
-    && previous.contextUsage === next.contextUsage
-    && previous.lastRunReason === next.lastRunReason
-    && previous.errorMessage === next.errorMessage
-    && sameMessageQueue(
-        previous.pendingSteeringMessages,
-        next.pendingSteeringMessages,
-    )
-    && sameMessageQueue(
-        previous.pendingFollowUpMessages,
-        next.pendingFollowUpMessages,
-    )
-))
-
-function sameMessageQueue(
-    previous: readonly IUserMessage[] | undefined,
-    next: readonly IUserMessage[] | undefined,
-): boolean {
-    if (previous === next) return true
-    if (previous === undefined || next === undefined) return false
-    return previous.length === next.length
-        && previous.every((message, index) => message.id === next[index]?.id)
 }

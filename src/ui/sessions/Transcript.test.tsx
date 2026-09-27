@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import {
+    BoxRenderable,
     CodeRenderable,
     DiffRenderable,
     LineNumberRenderable,
@@ -15,7 +16,7 @@ import { testRender } from "@opentui/react/test-utils"
 import { act, useState } from "react"
 
 import type { TAgentMessage, IAssistantMessage } from "@/agent"
-import type { ICompactionCheckpoint } from "@/sessions"
+import type { ICompactionCheckpoint, ICompactionProgress } from "@/sessions"
 import { Transcript } from "@/ui/sessions"
 import { syntax, theme } from "@/ui/terminal/theme"
 
@@ -60,6 +61,78 @@ function tableRenderables(root: Renderable): TextTableRenderable[] {
         ...tableRenderables(child),
     ])
 }
+
+test.each([40, 80])("renders untitled full-width user cards with literal content at %i columns", async (width) => {
+    const content = [
+        "",
+        "  # Literal **prompt** `code`  ",
+        "    indented zażółć 🐍 日本語",
+        "\tTabbed line",
+        "",
+        "wrapped text ".repeat(12),
+        "unbrokentoken".repeat(10),
+        "  trailing spaces  ",
+        "",
+    ].join("\n")
+    const setup = await testRender(<box flexDirection="column">
+        <text id="history-header" height={1} flexShrink={0}>Before history</text>
+        <Transcript messages={[{
+            id: "literal-prompt",
+            sessionId: "default",
+            runId: "run",
+            role: "user",
+            source: "prompt",
+            createdAt: 1,
+            content,
+        }]} />
+        <text id="history-footer" height={1} flexShrink={0}>After history</text>
+    </box>, { width, height: 30 })
+
+    try {
+        await act(async () => { await setup.renderOnce() })
+        const card = setup.renderer.root.findDescendantById("user-message-literal-prompt") as BoxRenderable
+        const body = card.getChildren()[0] as TextRenderable
+        const footer = setup.renderer.root.findDescendantById("history-footer")!
+        expect(card).toBeInstanceOf(BoxRenderable)
+        expect(card.title).toBeUndefined()
+        expect(card.width).toBe(width)
+        expect(card.x).toBe(0)
+        expect(card.y).toBe(2)
+        expect(card.borderStyle).toBe("single")
+        expect(card.borderColor.equals(RGBA.fromHex(theme.green))).toBe(true)
+        expect(card.backgroundColor.equals(RGBA.fromHex(theme.green))).toBe(false)
+        expect(body).toBeInstanceOf(TextRenderable)
+        expect(body.plainText).toBe(content)
+        expect(body.fg.equals(RGBA.fromHex(theme.text))).toBe(true)
+        expect(body.wrapMode).toBe("word")
+        expect(body.truncate).toBe(false)
+        expect(body.x).toBe(card.x + 2)
+        expect(body.y).toBe(card.y + 1)
+        expect(body.width).toBe(width - 4)
+        expect(card.height).toBe(body.height + 2)
+        expect(footer.y).toBe(card.y + card.height + 1)
+        expect(footer.y).toBeLessThan(30)
+        expect(markdownRenderables(card)).toHaveLength(0)
+        expect(codeRenderables(card)).toHaveLength(0)
+
+        const lines = setup.captureCharFrame().split("\n")
+        expect(lines[card.y]).toBe(`┌${"─".repeat(width - 2)}┐`)
+        expect(lines[card.y + card.height - 1]).toBe(`└${"─".repeat(width - 2)}┘`)
+        expect(lines[card.y - 1]!.trim()).toBe("")
+        expect(lines[card.y + card.height]!.trim()).toBe("")
+        expect(lines[body.y + 1]).toStartWith("│   # Literal **prompt** `code`  ")
+        expect(lines[body.y + 2]).toStartWith("│     indented zażółć 🐍 日本語")
+        expect(lines.slice(body.y, body.y + body.height).join("").replace(/[│\s]/g, ""))
+            .toBe(content.replace(/\s/g, ""))
+        const spans = setup.captureSpans().lines.slice(card.y, card.y + card.height)
+            .flatMap((line) => line.spans)
+        expect(spans.filter((span) => /[┌─┐└┘│]/.test(span.text))
+            .every((span) => span.fg.equals(RGBA.fromHex(theme.green)))).toBe(true)
+        expect(spans.some((span) => span.bg.equals(RGBA.fromHex(theme.green)))).toBe(false)
+    } finally {
+        act(() => setup.renderer.destroy())
+    }
+})
 
 test("renders direct, streaming, and persisted legacy tool messages", async () => {
     // Durable history can contain tool names removed from the active catalog.
@@ -263,7 +336,7 @@ test("renders direct, streaming, and persisted legacy tool messages", async () =
         activeRunId="run-3"
     />, {
         width: 80,
-        height: 20,
+        height: 30,
     })
 
     try {
@@ -846,7 +919,7 @@ test("renders full reasoning summaries as plain text in content order", async ()
         expect(completedReasoning?.wrapMode).toBe("word")
         expect(completedReasoning?.truncate).toBe(false)
         expect(streamingReasoning).toBeDefined()
-        expect(streamingReasoning?.fg.equals(RGBA.fromHex(theme.amber))).toBe(true)
+        expect(streamingReasoning?.fg.equals(RGBA.fromHex(theme.textMuted))).toBe(true)
         expect(streamingReasoning?.wrapMode).toBe("word")
         expect(streamingReasoning?.truncate).toBe(false)
         expect(markdownRenderables(setup.renderer.root)).toHaveLength(2)
@@ -855,6 +928,22 @@ test("renders full reasoning summaries as plain text in content order", async ()
         expect(frame).toContain("**literal Markdown syntax**")
         expect(frame.indexOf("Before summary")).toBeLessThan(frame.indexOf("Thought:"))
         expect(frame.indexOf("Thought:")).toBeLessThan(frame.indexOf("After summary"))
+        expect(completedReasoning!.parent!.height).toBe(completedReasoning!.height + 1)
+        expect(streamingReasoning!.parent!.height).toBe(streamingReasoning!.height + 1)
+        const afterSummary = markdownRenderables(setup.renderer.root)[1]!
+        expect(afterSummary.y).toBe(completedReasoning!.y + completedReasoning!.height + 1)
+        expect(frame.split("\n")[afterSummary.y - 1]!.trim()).toBe("")
+        const spans = setup.captureSpans().lines.flatMap((line) => line.spans)
+        for (const [text, color] of [
+            ["Thought:", theme.pink],
+            ["Thinking:", theme.amber],
+            ["Live released summary", theme.textMuted],
+            ["**literal Markdown syntax**", theme.textMuted],
+        ]) {
+            expect(spans.find((span) => span.text.includes(text!))?.fg.equals(
+                RGBA.fromHex(color!),
+            )).toBe(true)
+        }
     } finally {
         act(() => {
             setup.renderer.destroy()
@@ -899,7 +988,12 @@ test("shows work for empty streaming reasoning and hides empty completed reasoni
         )
         expect(reasoning).toHaveLength(1)
         expect(reasoning[0]?.plainText).toBe("Thinking...")
-        expect(reasoning[0]?.fg.equals(RGBA.fromHex(theme.amber))).toBe(true)
+        const spans = setup.captureSpans().lines.flatMap((line) => line.spans)
+        expect(spans.find((span) => span.text.includes("Thinking..."))?.fg.equals(
+            RGBA.fromHex(theme.amber),
+        )).toBe(true)
+        expect(reasoning[0]!.parent!.height).toBe(reasoning[0]!.height + 1)
+        expect(setup.captureCharFrame()).not.toContain("Thought")
     } finally {
         act(() => {
             setup.renderer.destroy()
@@ -1357,6 +1451,15 @@ test("keeps completed history renderables stable across streaming text updates",
     let updateText: ((text: string) => void) | undefined
     const messages: TAgentMessage[] = [
         {
+            id: "durable-user",
+            sessionId: "default",
+            runId: "run-durable",
+            role: "user",
+            source: "prompt",
+            createdAt: 0,
+            content: "  Preserve this prompt  ",
+        },
+        {
             id: "durable-assistant",
             sessionId: "default",
             runId: "run-durable",
@@ -1410,13 +1513,15 @@ test("keeps completed history renderables stable across streaming text updates",
 
     const setup = await testRender(<StreamingWithHistory />, {
         width: 80,
-        height: 12,
+        height: 18,
     })
 
     try {
         await act(async () => {
             await setup.renderOnce()
         })
+        const userBefore = setup.renderer.root.findDescendantById("user-message-durable-user")!
+        const userTextBefore = userBefore.getChildren()[0]
         const markdownBefore = markdownRenderables(setup.renderer.root)
         const historyCodeBefore = codeRenderables(markdownBefore[0]!).find(
             (renderable) => renderable.filetype === "typescript",
@@ -1442,6 +1547,9 @@ test("keeps completed history renderables stable across streaming text updates",
         const toolAfter = textRenderables(setup.renderer.root).find((renderable) =>
             renderable.plainText.startsWith("Read [src/stable.ts]")
         )
+        const userAfter = setup.renderer.root.findDescendantById("user-message-durable-user")!
+        expect(userAfter).toBe(userBefore)
+        expect(userAfter.getChildren()[0]).toBe(userTextBefore)
         expect(markdownAfter[0]).toBe(markdownBefore[0])
         expect(markdownAfter[1]).toBe(markdownBefore[1])
         expect(historyCodeAfter).toBe(historyCodeBefore)
@@ -1556,6 +1664,138 @@ test("renders a checkpoint at its anchor before uncompacted and streaming messag
         act(() => {
             setup.renderer.destroy()
         })
+    }
+})
+
+test("streams a checkpoint at its anchor and finalizes the same Markdown renderable", async () => {
+    const messages: TAgentMessage[] = [
+        {
+            id: "anchor", sessionId: "default", runId: "old", role: "assistant",
+            createdAt: 1, stopReason: "stop", content: [{ type: "text", text: "Durable answer" }],
+        },
+        {
+            id: "pending", sessionId: "default", runId: "new", role: "user",
+            createdAt: 2, source: "prompt", content: "Pending prompt",
+        },
+    ]
+    const previous: ICompactionCheckpoint = {
+        id: "previous", sessionId: "default", createdAt: 1, reason: "manual",
+        compactedMessageCount: 1, throughMessageId: "anchor", summary: "Previous checkpoint",
+    }
+    const progress: ICompactionProgress = {
+        id: "candidate", throughMessageId: "anchor", summary: "# Stable heading\n\nPartial",
+    }
+    type View = { compactionCheckpoint: ICompactionCheckpoint; compactionProgress?: ICompactionProgress }
+    let update: ((view: View) => void) | undefined
+    function StreamingCheckpoint(): React.ReactNode {
+        const [view, setView] = useState<View>({ compactionCheckpoint: previous, compactionProgress: progress })
+        update = setView
+        return <Transcript messages={messages} {...view} streamingMessage={{
+            id: "live", sessionId: "default", runId: "new", role: "assistant",
+            createdAt: 3, stopReason: "pending", content: [{ type: "text", text: "Live response" }],
+        }} />
+    }
+    const setup = await testRender(<StreamingCheckpoint />, { width: 80, height: 18 })
+    try {
+        await act(async () => { await setup.renderOnce() })
+        const before = markdownRenderables(setup.renderer.root)
+        expect(before).toHaveLength(3)
+        const preview = before[1]!
+        const heading = preview._blockStates[0]?.renderable
+        expect(heading).toBeDefined()
+        expect(preview.streaming).toBe(true)
+        expect(preview.content).toBe(progress.summary)
+        const frame = setup.captureCharFrame()
+        expect(frame).not.toContain("Previous checkpoint")
+        expect(frame).not.toContain("Context compacted")
+        expect(frame.indexOf("Compacting context")).toBeGreaterThan(frame.indexOf("Durable answer"))
+        expect(frame.indexOf("Pending prompt")).toBeGreaterThan(frame.indexOf("Partial"))
+        expect(frame.indexOf("Live response")).toBeGreaterThan(frame.indexOf("Pending prompt"))
+        const expanded = { ...progress, summary: progress.summary + " continues" }
+        act(() => update?.({ compactionCheckpoint: previous, compactionProgress: expanded }))
+        await act(async () => { await setup.renderOnce() })
+        const during = markdownRenderables(setup.renderer.root)
+        expect(during[0]).toBe(before[0])
+        expect(during[1]).toBe(preview)
+        expect(during[2]).toBe(before[2])
+        expect(preview._blockStates[0]?.renderable).toBe(heading)
+        expect(setup.captureCharFrame()).toContain("Partial continues")
+        act(() => update?.({ compactionCheckpoint: { ...previous, ...expanded } }))
+        await act(async () => { await setup.renderOnce() })
+        const after = markdownRenderables(setup.renderer.root)
+        expect(after).toHaveLength(3)
+        expect(after[1]).toBe(preview)
+        expect(preview.streaming).toBe(false)
+        expect(preview.content).toBe(expanded.summary)
+        expect(setup.captureCharFrame()).toContain("Context compacted")
+        expect(setup.captureCharFrame()).not.toContain("Compacting context")
+    } finally {
+        act(() => setup.renderer.destroy())
+    }
+})
+
+test.each([false, true])("restores the previous checkpoint or empty transcript when progress is discarded (previous: %s)", async (hasPrevious) => {
+    let clear: (() => void) | undefined
+    function DiscardedCheckpoint(): React.ReactNode {
+        const [active, setActive] = useState(true)
+        clear = () => setActive(false)
+        return <Transcript messages={[]} {...(hasPrevious ? { compactionCheckpoint: {
+            id: "previous", sessionId: "default", createdAt: 1, reason: "manual" as const,
+            compactedMessageCount: 1, throughMessageId: "missing", summary: "Previous checkpoint",
+        } } : {})} {...(active ? { compactionProgress: {
+            id: "candidate", throughMessageId: "missing", summary: "Unaccepted preview",
+        } } : {})} />
+    }
+    const setup = await testRender(<DiscardedCheckpoint />, { width: 80, height: 8 })
+    try {
+        await act(async () => { await setup.renderOnce() })
+        expect(setup.captureCharFrame()).toContain("Unaccepted preview")
+        expect(setup.captureCharFrame()).not.toContain("Previous checkpoint")
+        expect(setup.captureCharFrame()).not.toContain("Start conversation")
+        act(() => clear?.())
+        await act(async () => {
+            await setup.renderOnce()
+            await Promise.all(codeRenderables(setup.renderer.root).map(
+                (renderable) => renderable.highlightingDone,
+            ))
+            await setup.renderOnce()
+        })
+        expect(setup.captureCharFrame()).not.toContain("Unaccepted preview")
+        expect(setup.captureCharFrame()).not.toContain("Compacting context")
+        expect(setup.captureCharFrame()).toContain(hasPrevious ? "Previous checkpoint" : "Start conversation")
+        expect(markdownRenderables(setup.renderer.root)).toHaveLength(hasPrevious ? 1 : 0)
+    } finally {
+        act(() => setup.renderer.destroy())
+    }
+})
+
+test("uses streaming diff fallback in a compaction preview until its fence closes", async () => {
+    let closeFence: (() => void) | undefined
+    const patch = "--- a/value.ts\n+++ b/value.ts\n@@ -1 +1 @@\n-const value = 1\n+const value = 2"
+    function CompactionDiff(): React.ReactNode {
+        const [closed, setClosed] = useState(false)
+        closeFence = () => setClosed(true)
+        return <Transcript messages={[]} compactionProgress={{
+            id: "candidate", throughMessageId: "missing",
+            summary: `\`\`\`diff\n${patch}${closed ? "\n```" : ""}`,
+        }} />
+    }
+    const setup = await testRender(<CompactionDiff />, { width: 80, height: 12 })
+    try {
+        await act(async () => { await setup.renderOnce() })
+        const markdown = markdownRenderables(setup.renderer.root)[0]
+        expect(markdown?.streaming).toBe(true)
+        expect(diffRenderables(setup.renderer.root)).toHaveLength(0)
+        const spans = setup.captureSpans().lines.flatMap((line) => line.spans)
+        expect(spans.find((span) => span.text.includes("-const value = 1"))?.fg.equals(RGBA.fromHex(theme.red))).toBe(true)
+        expect(spans.find((span) => span.text.includes("+const value = 2"))?.fg.equals(RGBA.fromHex(theme.green))).toBe(true)
+        act(() => closeFence?.())
+        await act(async () => { await setup.renderOnce() })
+        expect(markdownRenderables(setup.renderer.root)[0]).toBe(markdown)
+        expect(diffRenderables(setup.renderer.root)).toHaveLength(1)
+        expect(diffRenderables(setup.renderer.root)[0]?.diff).toBe(patch)
+    } finally {
+        act(() => setup.renderer.destroy())
     }
 })
 

@@ -26,7 +26,10 @@ import {
     createContextAwareModel,
 } from "@/sessions/compaction/context-aware-model"
 import { projectAgentContext } from "@/sessions/compaction/context-projector"
-import { compactSessionMessages } from "@/sessions/compaction/session-compactor"
+import {
+    compactSessionMessages,
+    type ICompactionProgress,
+} from "@/sessions/compaction/session-compactor"
 import { createInterruptedToolResults } from "@/sessions/recovery"
 import type { ISessionManager } from "@/sessions/repository"
 import {
@@ -104,6 +107,7 @@ export class AgentSession {
     private persistenceError: unknown
     private acceptCriticalEvents = true
     private compactionController: AbortController | undefined
+    private compactionProgress: ICompactionProgress | undefined
     private compactionTask: Promise<ICompactionCheckpoint | undefined> | undefined
 
     constructor(options: IAgentSessionOptions) {
@@ -501,28 +505,26 @@ export class AgentSession {
         else sourceSignal?.addEventListener("abort", abortFromSource, { once: true })
 
         this.compactionController = controller
+        const clearProgressOnAbort = () => {
+            if (this.compactionController !== controller || !this.compactionProgress) return
+            this.compactionProgress = undefined
+            this.publishSnapshot()
+        }
+        controller.signal.addEventListener("abort", clearProgressOnAbort, { once: true })
         const operation = this.performCompaction(
             reason,
             controller,
             originalRequest,
             activeRunConfiguration,
         )
-        const completed = operation.then(
-            (checkpoint) => {
-                this.publishSnapshot()
-                return checkpoint
-            },
-            (error: unknown) => {
-                this.publishSnapshot()
-                throw error
-            },
-        )
         let task: Promise<ICompactionCheckpoint | undefined>
-        task = completed.finally(() => {
+        task = operation.finally(() => {
             sourceSignal?.removeEventListener("abort", abortFromSource)
+            controller.signal.removeEventListener("abort", clearProgressOnAbort)
             if (this.compactionTask === task) {
                 this.compactionTask = undefined
                 this.compactionController = undefined
+                this.compactionProgress = undefined
             }
             this.publishSnapshot()
         })
@@ -558,6 +560,15 @@ export class AgentSession {
             signal: controller.signal,
             now: this.now,
             generateId: this.generateId,
+            onProgress: (progress) => {
+                if (
+                    this.disposed
+                    || controller.signal.aborted
+                    || this.compactionController !== controller
+                ) return
+                this.compactionProgress = progress
+                this.publishSnapshot()
+            },
         })
         if (!checkpoint) return undefined
 
@@ -738,6 +749,9 @@ export class AgentSession {
             ...(state.streamingMessage
                 ? { streamingMessage: state.streamingMessage }
                 : {}),
+            ...(this.compactionProgress === undefined
+                ? {}
+                : { compactionProgress: this.compactionProgress }),
             isRunning: state.isRunning,
             isCompacting: this.compactionTask !== undefined,
             ...(this.contextUsage === undefined

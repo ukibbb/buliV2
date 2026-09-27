@@ -28,6 +28,7 @@ export {
 export {
     compactSessionMessages,
     type ICompactSessionMessagesOptions,
+    type ICompactionProgress,
 } from "@/sessions/compaction/session-compactor"
 export { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
 export {

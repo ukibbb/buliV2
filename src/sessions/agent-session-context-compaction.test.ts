@@ -651,6 +651,10 @@ test("AgentSession can compact at preflight and advance again for overflow recov
   seedLargeTurns(manager, 8)
   let conversationAttempts = 0
   let summaryAttempts = 0
+  const firstPublished = Promise.withResolvers<void>()
+  const secondPublished = Promise.withResolvers<void>()
+  const releaseFirst = Promise.withResolvers<void>()
+  const releaseSecond = Promise.withResolvers<void>()
   const requests: IAgentModelRequest[] = []
   const session = openSession(manager, {
     async *stream(request) {
@@ -664,6 +668,13 @@ test("AgentSession can compact at preflight and advance again for overflow recov
               ? "Initial checkpoint ".repeat(100)
               : "Recompressed checkpoint",
           ),
+        }
+        if (summaryAttempts === 1) {
+          firstPublished.resolve()
+          await releaseFirst.promise
+        } else {
+          secondPublished.resolve()
+          await releaseSecond.promise
         }
         yield { type: "finish", reason: "stop" }
         return
@@ -679,41 +690,112 @@ test("AgentSession can compact at preflight and advance again for overflow recov
   }, [], 60_000)
 
   const run = session.prompt("Keep this prompt")
-  await run.runFinished
-
-  expect(summaryAttempts).toBe(2)
-  expect(conversationAttempts).toBe(2)
-  expect(requests[0]?.contextSummary).toBe(
-    structuredSummary("Initial checkpoint ".repeat(100)),
-  )
-  expect(requests[0]?.messages).toEqual([
-    expect.objectContaining({
-      role: "user",
+  try {
+    await Promise.race([firstPublished.promise, run.runFinished])
+    const first = session.getSnapshot()
+    expect(first.isCompacting).toBe(true)
+    expect(first.isRunning).toBe(true)
+    expect(first.compactionCheckpoint).toBeUndefined()
+    expect(first.compactionProgress).toMatchObject({
+      throughMessageId: "large-assistant-7",
+      summary: structuredSummary("Initial checkpoint ".repeat(100)),
+    })
+    expect(manager.getCompactionCheckpoint("session-1")).toBeUndefined()
+    expect(conversationAttempts).toBe(0)
+    releaseFirst.resolve()
+    await Promise.race([secondPublished.promise, run.runFinished])
+    const second = session.getSnapshot()
+    expect(second.isCompacting).toBe(true)
+    expect(second.compactionCheckpoint?.id).toBe(first.compactionProgress?.id)
+    expect(second.compactionProgress?.id).not.toBe(first.compactionProgress?.id)
+    expect(second.compactionProgress).toMatchObject({
+      throughMessageId: "large-assistant-7",
+      summary: structuredSummary("Recompressed checkpoint"),
+    })
+    expect(second.compactionCheckpoint?.summary).toBe(first.compactionProgress?.summary)
+    releaseSecond.resolve()
+    await run.runFinished
+    expect(session.getSnapshot()).not.toHaveProperty("compactionProgress")
+    expect(session.getSnapshot().compactionCheckpoint?.id).toBe(second.compactionProgress?.id)
+    expect(summaryAttempts).toBe(2)
+    expect(conversationAttempts).toBe(2)
+    expect(requests[0]?.contextSummary).toBe(
+      structuredSummary("Initial checkpoint ".repeat(100)),
+    )
+    expect(requests[0]?.messages).toEqual([
+      expect.objectContaining({
+        role: "user",
+        runId: run.runId,
+        content: "Keep this prompt",
+      }),
+    ])
+    expect(requests[1]).toMatchObject({
       runId: run.runId,
-      content: "Keep this prompt",
-    }),
-  ])
-  expect(requests[1]).toMatchObject({
-    runId: run.runId,
-    contextSummary: structuredSummary("Recompressed checkpoint"),
-  })
-  expect(requests[1]?.messages).toEqual([
-    expect.objectContaining({
-      role: "user",
-      runId: run.runId,
-      content: "Keep this prompt",
-    }),
-  ])
-  expect(manager.getCompactionCheckpoint("session-1")).toMatchObject({
-    compactedMessageCount: 16,
-    summary: structuredSummary("Recompressed checkpoint"),
-  })
-  expect(session.getSnapshot().compactionCheckpoint).toMatchObject({
-    compactedMessageCount: 16,
-    summary: structuredSummary("Recompressed checkpoint"),
-  })
+      contextSummary: structuredSummary("Recompressed checkpoint"),
+    })
+    expect(requests[1]?.messages).toEqual([
+      expect.objectContaining({
+        role: "user",
+        runId: run.runId,
+        content: "Keep this prompt",
+      }),
+    ])
+    expect(manager.getCompactionCheckpoint("session-1")).toMatchObject({
+      compactedMessageCount: 16,
+      summary: structuredSummary("Recompressed checkpoint"),
+    })
+    expect(session.getSnapshot().compactionCheckpoint).toMatchObject({
+      compactedMessageCount: 16,
+      summary: structuredSummary("Recompressed checkpoint"),
+    })
+  } finally {
+    releaseFirst.resolve()
+    releaseSecond.resolve()
+    await run.runFinished
+    await session.dispose()
+  }
+})
 
-  await session.dispose()
+test("AgentSession discards a streamed recompression without size progress", async () => {
+  const manager = managerWithSession()
+  seedTurn(manager)
+  const previous = {
+    id: "previous",
+    sessionId: "session-1",
+    createdAt: 4,
+    reason: "automatic" as const,
+    compactedMessageCount: 2,
+    throughMessageId: "old-assistant",
+    summary: "Already compacted",
+  }
+  manager.saveCompactionCheckpoint(previous)
+  const previews: string[] = []
+  let conversationAttempts = 0
+  const session = openSession(manager, {
+    async *stream(request) {
+      if (isCompactionRequest(request)) {
+        yield { type: "text-delta", id: "summary", delta: previous.summary }
+        yield { type: "finish", reason: "stop" }
+        return
+      }
+      conversationAttempts += 1
+      throw new ModelContextOverflowError("No more compaction progress")
+    },
+  })
+  session.subscribe(() => {
+    const progress = session.getSnapshot().compactionProgress
+    if (progress) previews.push(progress.summary)
+  })
+  try {
+    await session.prompt("Continue").runFinished
+    expect(previews).toContain(previous.summary)
+    expect(conversationAttempts).toBe(1)
+    expect(session.getSnapshot().isCompacting).toBe(false)
+    expect(session.getSnapshot()).not.toHaveProperty("compactionProgress")
+    expect(manager.getCompactionCheckpoint("session-1")).toEqual(previous)
+  } finally {
+    await session.dispose()
+  }
 })
 
 test("AgentSession does not retry overflow after exposing semantic output", async () => {
@@ -862,6 +944,7 @@ test("AgentSession aborts preflight compaction without saving a checkpoint", asy
         return
       }
 
+      yield { type: "text-delta", id: "summary", delta: "Partial preflight summary" }
       summaryStarted.resolve()
       await waitForAbort(request.signal)
       request.signal.throwIfAborted()
@@ -875,7 +958,10 @@ test("AgentSession aborts preflight compaction without saving a checkpoint", asy
   const run = session.prompt("P".repeat(14_000))
   await run.initialPromptProcessed
   await summaryStarted.promise
+  expect(session.getSnapshot().compactionProgress?.summary).toBe("Partial preflight summary")
+  expect(checkpointSaves).toBe(0)
   await session.abort()
+  expect(session.getSnapshot()).not.toHaveProperty("compactionProgress")
 
   expect(conversationAttempts).toBe(0)
   expect(checkpointSaves).toBe(0)

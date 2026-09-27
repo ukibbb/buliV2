@@ -8,6 +8,7 @@ import {
 } from "@/agent"
 import type { ICompactionCheckpoint } from "@/sessions/compaction/checkpoint"
 import type { IContextUsage } from "@/sessions/compaction/context-budget"
+import type { ICompactionProgress } from "@/sessions/compaction/session-compactor"
 
 /** Immutable read model published by one live agent session. */
 export interface ISessionSnapshot {
@@ -18,6 +19,7 @@ export interface ISessionSnapshot {
     readonly pendingFollowUpMessages: readonly IUserMessage[]
     readonly streamingMessage?: IAssistantMessage
     readonly compactionCheckpoint?: ICompactionCheckpoint
+    readonly compactionProgress?: ICompactionProgress
     readonly isRunning: boolean
     readonly isCompacting: boolean
     readonly contextUsage?: IContextUsage
@@ -80,6 +82,15 @@ export function freezeSessionSnapshot(
                     snapshot.compactionCheckpoint,
                     previousSource?.compactionCheckpoint,
                     previousValue?.compactionCheckpoint,
+                ),
+            }),
+        ...(snapshot.compactionProgress === undefined
+            ? {}
+            : {
+                compactionProgress: freezeBranch(
+                    snapshot.compactionProgress,
+                    previousSource?.compactionProgress,
+                    previousValue?.compactionProgress,
                 ),
             }),
         isRunning: snapshot.isRunning,

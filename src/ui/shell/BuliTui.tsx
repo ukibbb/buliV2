@@ -14,6 +14,7 @@ import { SessionScreen } from "@/ui/shell/SessionScreen"
 import type { IAuthenticationService } from "@/authentication"
 import { AuthenticationFlow } from "@/ui/authentication"
 import { TerminalViewport } from "@/ui/terminal"
+import { theme } from "@/ui/terminal/theme"
 
 interface IBuliTuiProps {
     readonly authentication: IAuthenticationService
@@ -50,6 +51,17 @@ export function BuliTui(props: IBuliTuiProps) {
 
     return (
         <TerminalViewport width={width} height={height}>
+            {!ui.authenticationMode ? (
+                <text
+                    id="workspace-header"
+                    fg={theme.pink}
+                    width="100%"
+                    height={1}
+                    flexShrink={0}
+                    wrapMode="none"
+                    truncate
+                >{controller.workspaceRoot}</text>
+            ) : null}
             {ui.route.type === "session" ? (
                 <SessionCompletionNotifier
                     key={`completion:${ui.route.sessionId}`}

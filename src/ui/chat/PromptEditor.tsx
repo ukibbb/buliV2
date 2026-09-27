@@ -18,6 +18,7 @@ import {
     type IPathMention,
 } from "@/ui/chat/prompt-draft"
 import { buliKeyboardShortcuts } from "@/ui/keyboard-shortcuts"
+import { theme } from "@/ui/terminal/theme"
 import type {
     IPathCompletion,
 } from "@/ui/controller/path-menu"
@@ -357,6 +358,7 @@ export function PromptEditor(props: IPromptEditorProps) {
             width="100%"
             border={["top", "bottom"]}
             borderStyle="single"
+            borderColor={theme.green}
             style={{
                 minHeight: CHAT_MIN_ROW_COUNT,
                 maxHeight: CHAT_MAX_ROW_COUNT,

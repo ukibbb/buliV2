@@ -1,7 +1,8 @@
 import { useBlur, useFocus, useRenderer } from "@opentui/react"
 import { useEffect, useRef, type ReactNode } from "react"
 
-import { useSession } from "@/ui/context/application-context"
+import type { ISessionSnapshot } from "@/sessions"
+import { useSessionSelector } from "@/ui/context/application-context"
 
 interface ISessionCompletionNotifierProps {
     readonly sessionId: string
@@ -14,7 +15,7 @@ export const COMPLETION_NOTIFICATION_MIN_DURATION_MS = 5_000
 export function SessionCompletionNotifier(
     props: ISessionCompletionNotifierProps,
 ): ReactNode {
-    const session = useSession(props.sessionId)
+    const isRunning = useSessionSelector(props.sessionId, selectIsRunning)
     const renderer = useRenderer()
     const terminalFocusedRef = useRef(true)
     const runStateRef = useRef({
@@ -35,16 +36,16 @@ export function SessionCompletionNotifier(
         const runState = runStateRef.current
         if (!runState.initialized) {
             runState.initialized = true
-            runState.wasRunning = session.isRunning
-            runState.startedAt = session.isRunning ? now() : null
+            runState.wasRunning = isRunning
+            runState.startedAt = isRunning ? now() : null
             return
         }
 
-        const finishedRun = runState.wasRunning && !session.isRunning
-        if (!runState.wasRunning && session.isRunning) {
+        const finishedRun = runState.wasRunning && !isRunning
+        if (!runState.wasRunning && isRunning) {
             runState.startedAt = now()
         }
-        runState.wasRunning = session.isRunning
+        runState.wasRunning = isRunning
         if (!finishedRun) return
 
         const startedAt = runState.startedAt
@@ -56,7 +57,9 @@ export function SessionCompletionNotifier(
         ) {
             void renderer.triggerNotification("Run finished", "Buli")
         }
-    }, [now, renderer, session.isRunning])
+    }, [now, renderer, isRunning])
 
     return null
 }
+
+const selectIsRunning = (session: ISessionSnapshot) => session.isRunning

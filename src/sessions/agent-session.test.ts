@@ -429,6 +429,38 @@ test("freezeSessionSnapshot freezes and structurally shares checkpoints", () => 
   expect(Object.isFrozen(third.compactionCheckpoint)).toBe(true)
 })
 
+test("freezeSessionSnapshot detaches, freezes and shares compaction progress", () => {
+  const progress = { id: "candidate", throughMessageId: "anchor", summary: "First" }
+  const checkpoint = compactionCheckpoint()
+  const source = {
+    ...sessionSnapshotWithCheckpoint(checkpoint),
+    compactionProgress: progress,
+  }
+  const cache = { source: undefined, value: undefined }
+  const first = freezeSessionSnapshot(source, cache)
+  const second = freezeSessionSnapshot({ ...source, isCompacting: true }, cache)
+
+  expect(first.compactionProgress).not.toBe(progress)
+  expect(Object.isFrozen(first.compactionProgress)).toBe(true)
+  expect(second.compactionProgress).toBe(first.compactionProgress)
+  progress.summary = "Mutated source"
+  expect(first.compactionProgress?.summary).toBe("First")
+  expect(() => {
+    (first.compactionProgress as { summary: string }).summary = "Mutated snapshot"
+  }).toThrow()
+  const third = freezeSessionSnapshot({
+    ...source,
+    compactionProgress: { ...progress, summary: "First second" },
+  }, cache)
+  expect(third.compactionProgress).not.toBe(first.compactionProgress)
+  expect(third.compactionProgress?.summary).toBe("First second")
+  expect(third.messages).toBe(first.messages)
+  expect(third.compactionCheckpoint).toBe(first.compactionCheckpoint)
+  const cleared = freezeSessionSnapshot(sessionSnapshotWithCheckpoint(checkpoint), cache)
+  expect(cleared).not.toHaveProperty("compactionProgress")
+  expect(third.compactionProgress?.summary).toBe("First second")
+})
+
 test("AgentSession persists steering and follow-up before each model request", async () => {
   const manager = new InMemorySessionManager()
   manager.createSession(sessionInfo("session-1", "test-agent", "Steering"))
@@ -1020,6 +1052,213 @@ test("AgentSession does not persist a manual checkpoint that enlarges context", 
   expect(manager.getMessages("session-1")).toEqual(original)
 
   await session.dispose()
+})
+
+test.each([false, true])("AgentSession streams immutable compaction progress and installs it atomically (previous: %s)", async (hasPrevious) => {
+  const manager = new InMemorySessionManager()
+  manager.createSession(sessionInfo("session-1", "test-agent", "Progress"))
+  seedConversation(manager, 2, "X".repeat(1_000))
+  if (hasPrevious) manager.saveCompactionCheckpoint(compactionCheckpoint())
+  const saves = spyOn(manager, "saveCompactionCheckpoint")
+  const proposalReads = spyOn(manager, "getFileChangeProposals")
+  const firstPublished = Promise.withResolvers<void>()
+  const secondPublished = Promise.withResolvers<void>()
+  const releaseSecond = Promise.withResolvers<void>()
+  const releaseFinish = Promise.withResolvers<void>()
+  const session = new AgentSession({
+    agentId: "test-agent",
+    sessionId: "session-1",
+    manager,
+    systemPrompt: "System",
+    resolveRunConfiguration: () => ({
+      model: {
+        async *stream() {
+          yield { type: "text-delta", id: "summary", delta: "## Goals\n\nFirst" }
+          firstPublished.resolve()
+          await releaseSecond.promise
+          yield { type: "text-delta", id: "summary", delta: " second" }
+          secondPublished.resolve()
+          await releaseFinish.promise
+          yield { type: "finish", reason: "stop" }
+        },
+      },
+      reasoningEffort: "medium",
+    }),
+    tools: [],
+    generateId: () => "candidate",
+  })
+  const initial = session.getSnapshot()
+  const publications: ISessionSnapshot[] = []
+  session.subscribe(() => publications.push(session.getSnapshot()))
+  const task = session.compact()
+
+  try {
+    expect(session.getSnapshot().isCompacting).toBe(true)
+    expect(session.getSnapshot().compactionProgress).toBeUndefined()
+    await Promise.race([firstPublished.promise, task])
+    const first = session.getSnapshot()
+    const readsBefore = proposalReads.mock.calls.length
+    expect(first.compactionProgress).toEqual({
+      id: "candidate", throughMessageId: "seed-assistant-1", summary: "## Goals\n\nFirst",
+    })
+    expect(Object.isFrozen(first.compactionProgress)).toBe(true)
+    expect(first.streamingMessage).toBeUndefined()
+    expect(saves).not.toHaveBeenCalled()
+    expect(first.compactionCheckpoint).toBe(initial.compactionCheckpoint)
+    releaseSecond.resolve()
+    await Promise.race([secondPublished.promise, task])
+    const second = session.getSnapshot()
+    expect(second.compactionProgress?.summary).toBe("## Goals\n\nFirst second")
+    expect(first.compactionProgress?.summary).toBe("## Goals\n\nFirst")
+    expect(second.compactionProgress).not.toBe(first.compactionProgress)
+    for (const branch of ["messages", "fileChangeProposals", "compactionCheckpoint", "contextUsage"] as const) {
+      expect(second[branch]).toBe(first[branch])
+      expect(first[branch]).toBe(initial[branch])
+    }
+    expect(proposalReads.mock.calls.length).toBe(readsBefore)
+    expect(saves).not.toHaveBeenCalled()
+    releaseFinish.resolve()
+    const checkpoint = await task
+    expect(checkpoint?.id).toBe("candidate")
+    expect(saves).toHaveBeenCalledTimes(1)
+    expect(session.getSnapshot()).toMatchObject({ isCompacting: false, compactionCheckpoint: checkpoint })
+    expect(session.getSnapshot()).not.toHaveProperty("compactionProgress")
+    expect(publications.filter((snapshot) => snapshot.compactionCheckpoint?.id === "candidate")
+      .every((snapshot) => !snapshot.compactionProgress && !snapshot.isCompacting)).toBe(true)
+    expect(publications.filter((snapshot) => snapshot.compactionProgress)
+      .every((snapshot) => snapshot.isCompacting)).toBe(true)
+    expect(manager.getMessages("session-1")).toEqual(initial.messages)
+    expect(await session.compact()).toBeUndefined()
+    expect(session.getSnapshot()).not.toHaveProperty("compactionProgress")
+    expect(saves).toHaveBeenCalledTimes(1)
+  } finally {
+    releaseSecond.resolve()
+    releaseFinish.resolve()
+    await task.catch(() => undefined)
+    saves.mockRestore()
+    proposalReads.mockRestore()
+    await session.dispose()
+  }
+})
+
+test.each(["provider-error", "truncated", "unfinished", "empty", "oversized", "save-error"] as const)(
+  "AgentSession clears %s compaction previews without replacing the previous checkpoint",
+  async (failure) => {
+    const manager = new InMemorySessionManager()
+    manager.createSession(sessionInfo("session-1", "test-agent", "Rejected progress"))
+    seedConversation(manager, 2, "X".repeat(1_000))
+    const previous = compactionCheckpoint()
+    manager.saveCompactionCheckpoint(previous)
+    const saves = spyOn(manager, "saveCompactionCheckpoint")
+    if (failure === "save-error") saves.mockImplementation(() => { throw new Error("Save failed") })
+    const published = Promise.withResolvers<void>()
+    const releaseFinish = Promise.withResolvers<void>()
+    const session = new AgentSession({
+      agentId: "test-agent",
+      sessionId: "session-1",
+      manager,
+      systemPrompt: "System",
+      resolveRunConfiguration: () => ({
+        model: {
+          async *stream() {
+            yield {
+              type: "text-delta", id: "summary",
+              delta: failure === "empty" ? "   " : failure === "oversized" ? "X".repeat(50_000) : "Candidate",
+            }
+            published.resolve()
+            await releaseFinish.promise
+            if (failure === "provider-error") {
+              yield { type: "error", error: new Error("Provider failed") }
+            } else if (failure !== "unfinished") {
+              yield { type: "finish", reason: failure === "truncated" ? "max_output_tokens" : "stop" }
+            }
+          },
+        },
+        reasoningEffort: "medium",
+      }),
+      tools: [],
+    })
+    const initial = session.getSnapshot()
+    const task = session.compact().then(
+      (checkpoint) => ({ checkpoint, error: undefined }),
+      (error: unknown) => ({ checkpoint: undefined, error }),
+    )
+    try {
+      await Promise.race([published.promise, task])
+      expect(session.getSnapshot().compactionProgress).toBeDefined()
+      expect(saves).not.toHaveBeenCalled()
+      releaseFinish.resolve()
+      const result = await task
+      expect(result.checkpoint).toBeUndefined()
+      if (failure === "oversized") expect(result.error).toBeUndefined()
+      else expect(result.error).toBeInstanceOf(Error)
+      expect(saves).toHaveBeenCalledTimes(failure === "save-error" ? 1 : 0)
+      expect(session.getSnapshot().isCompacting).toBe(false)
+      expect(session.getSnapshot()).not.toHaveProperty("compactionProgress")
+      expect(session.getSnapshot().compactionCheckpoint).toBe(initial.compactionCheckpoint)
+      expect(manager.getCompactionCheckpoint("session-1")).toEqual(previous)
+      expect(manager.getMessages("session-1")).toEqual(initial.messages)
+    } finally {
+      releaseFinish.resolve()
+      await task
+      saves.mockRestore()
+      await session.dispose()
+    }
+  },
+)
+
+test.each(["abort", "dispose"] as const)("AgentSession clears progress immediately on %s and ignores late deltas", async (action) => {
+  const manager = new InMemorySessionManager()
+  manager.createSession(sessionInfo("session-1", "test-agent", "Cancelled progress"))
+  seedConversation(manager, 2, "X".repeat(1_000))
+  manager.saveCompactionCheckpoint(compactionCheckpoint())
+  const published = Promise.withResolvers<void>()
+  const releaseLate = Promise.withResolvers<void>()
+  const session = new AgentSession({
+    agentId: "test-agent",
+    sessionId: "session-1",
+    manager,
+    systemPrompt: "System",
+    resolveRunConfiguration: () => ({
+      model: {
+        async *stream() {
+          yield { type: "text-delta", id: "summary", delta: "Candidate" }
+          published.resolve()
+          await releaseLate.promise
+          yield { type: "text-delta", id: "summary", delta: " late" }
+          yield { type: "finish", reason: "stop" }
+        },
+      },
+      reasoningEffort: "medium",
+    }),
+    tools: [],
+    disposeTimeoutMs: 10,
+  })
+  const publications: ISessionSnapshot[] = []
+  session.subscribe(() => publications.push(session.getSnapshot()))
+  const task = session.compact().then(() => undefined, (error: unknown) => error)
+  try {
+    await Promise.race([published.promise, task])
+    expect(session.getSnapshot().compactionProgress?.summary).toBe("Candidate")
+    const publicationsBeforeCancel = publications.length
+    const stopped = action === "abort" ? session.abort() : session.dispose()
+    expect(session.getSnapshot()).not.toHaveProperty("compactionProgress")
+    if (action === "dispose") {
+      await expect(stopped).rejects.toThrow("Timed out waiting for AgentSession to stop")
+      expect(publications).toHaveLength(publicationsBeforeCancel)
+    }
+    releaseLate.resolve()
+    expect(await task).toBe(action === "abort" ? "Buli interaction was aborted" : "AgentSession is shutting down")
+    if (action === "abort") await stopped
+    expect(session.getSnapshot().isCompacting).toBe(false)
+    expect(session.getSnapshot()).not.toHaveProperty("compactionProgress")
+    expect(manager.getCompactionCheckpoint("session-1")).toEqual(compactionCheckpoint())
+    expect(publications.slice(publicationsBeforeCancel).every((snapshot) => !snapshot.compactionProgress)).toBe(true)
+  } finally {
+    releaseLate.resolve()
+    await task
+    await session.dispose().catch(() => undefined)
+  }
 })
 
 test("AgentSession compacts durable history into one cumulative checkpoint", async () => {

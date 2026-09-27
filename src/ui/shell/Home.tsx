@@ -17,13 +17,16 @@ export function Home(): ReactNode {
         <box
             width="100%"
             minHeight={0}
+            flexBasis={0}
             flexGrow={1}
             flexDirection="column"
         >
             <box
                 width="100%"
                 minHeight={0}
+                flexBasis={0}
                 flexGrow={1}
+                overflow="hidden"
                 alignItems="center"
                 justifyContent="center"
             >

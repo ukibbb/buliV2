@@ -41,6 +41,12 @@ const COMPACTION_RECOMPRESSION_PROMPT_PREFIX = "Operational checkpoint to recomp
 const COMPACTION_HISTORY_PROMPT_SUFFIX = "\n\nMerge this history into the cumulative operational checkpoint."
 const COMPACTION_RECOMPRESSION_PROMPT_SUFFIX = "\n\nRewrite this content as a materially shorter cumulative operational checkpoint while preserving every actionable fact."
 
+export interface ICompactionProgress {
+    readonly id: string
+    readonly throughMessageId: string
+    readonly summary: string
+}
+
 /** Supplies durable history and model dependencies for one compaction pass. */
 export interface ICompactSessionMessagesOptions {
     readonly sessionId: string
@@ -55,6 +61,7 @@ export interface ICompactSessionMessagesOptions {
     readonly signal: AbortSignal
     readonly now: () => number
     readonly generateId: () => string
+    readonly onProgress?: (progress: ICompactionProgress) => void
 }
 
 /** Creates a cumulative checkpoint while leaving every durable message intact. */
@@ -90,6 +97,8 @@ export async function compactSessionMessages(
     const previousSummary = recompressing ? previous?.summary : undefined
     if (recompressing && previousSummary === undefined) return undefined
 
+    const anchor = options.messages[cutoff - 1]
+    if (!anchor) throw new Error("Compaction cutoff has no anchor message")
     const checkpointId = options.generateId()
     let history = recompressing
         ? previousSummary ?? ""
@@ -100,6 +109,7 @@ export async function compactSessionMessages(
     const result = await summarizeCompactionHistory(
         options,
         checkpointId,
+        anchor.id,
         history,
         recompressing ? undefined : previous?.summary,
         recompressing ? "recompress" : "history",
@@ -112,8 +122,6 @@ export async function compactSessionMessages(
     ) {
         return undefined
     }
-    const anchor = options.messages[cutoff - 1]
-    if (!anchor) throw new Error("Compaction cutoff has no anchor message")
 
     const checkpoint: ICompactionCheckpoint = {
         id: checkpointId,
@@ -217,6 +225,7 @@ type TCompactionPromptMode = "history" | "recompress"
 async function summarizeCompactionHistory(
     options: ICompactSessionMessagesOptions,
     checkpointId: string,
+    throughMessageId: string,
     history: string,
     contextSummary: string | undefined,
     mode: TCompactionPromptMode,
@@ -260,6 +269,7 @@ async function summarizeCompactionHistory(
         switch (event.type) {
             case "text-delta":
                 summary += event.delta
+                options.onProgress?.({ id: checkpointId, throughMessageId, summary })
                 break
             case "finish":
                 finished = true

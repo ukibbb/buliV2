@@ -3,9 +3,13 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
+  BoxRenderable,
   CodeRenderable,
+  RGBA,
+  TextRenderable,
   parseKeypress,
   type Renderable,
+  ScrollBoxRenderable,
   TextareaRenderable,
 } from "@opentui/core"
 import { testRender } from "@opentui/react/test-utils"
@@ -34,7 +38,7 @@ import {
   useBuliNavigationSnapshot,
   useBuliUiSnapshot,
 } from "@/ui/context/ui-controller-context"
-import { glyphs } from "@/ui/terminal/theme"
+import { glyphs, theme } from "@/ui/terminal/theme"
 
 const WORKSPACE_ROOT = "/workspace"
 const TEST_AGENT_ID = "test-agent"
@@ -91,6 +95,8 @@ function findTextareaRenderable(root: Renderable): TextareaRenderable | undefine
 }
 
 interface IFakeApplicationOptions {
+  readonly workspaceRoot?: string
+  readonly searchPaths?: IBuliApplication["searchPaths"]
   readonly applicationSnapshot?: IBuliApplicationSnapshot
   readonly sessionSnapshot?: ISessionSnapshot
   readonly submitPrompt?: (prompt: IBuliPromptInput) => IBuliPromptRun
@@ -125,7 +131,8 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
     getSnapshot: () => sessionSnapshot,
   }
   const application: IBuliApplication = {
-    workspaceRoot: WORKSPACE_ROOT,
+    workspaceRoot: options.workspaceRoot ?? WORKSPACE_ROOT,
+    ...(options.searchPaths ? { searchPaths: options.searchPaths } : {}),
     subscribe: () => () => undefined,
     getSnapshot: () => options.applicationSnapshot ?? APPLICATION_SNAPSHOT,
     refreshModels: async (signal) => options.refreshModels?.(signal),
@@ -215,6 +222,203 @@ function buliElementWithController(
     }),
   })
 }
+
+test.each([WORKSPACE_ROOT, `${WORKSPACE_ROOT}/${"long-directory/".repeat(12)}`])(
+  "keeps workspace %s in a single fixed header outside authentication",
+  async (workspaceRoot) => {
+    const fake = fakeApplication({ workspaceRoot })
+    const controller = new BuliUiController({ application: fake.application })
+    const initialSession = fake.application.openSession("default").getSnapshot()
+    fake.setSessionSnapshot({
+      ...initialSession,
+      messages: Array.from({ length: 40 }, (_, index) => ({
+        id: `message-${index}`,
+        sessionId: "default",
+        runId: "history",
+        role: "user" as const,
+        source: "prompt" as const,
+        content: `Transcript line ${index}`,
+        createdAt: index,
+      })),
+    })
+    const setup = await testRender(buliElementWithController(fake.application, controller), {
+      width: 40, height: 14,
+    })
+    const render = async () => {
+      await act(async () => { await setup.renderOnce() })
+      await act(async () => { await setup.renderOnce() })
+    }
+    const checkHeader = () => {
+      const header = setup.renderer.root.findDescendantById("workspace-header")!
+      expect(header.y).toBe(0)
+      expect(header.height).toBe(1)
+      expect(header.width).toBe(40)
+      expect((header as TextRenderable).fg.equals(RGBA.fromHex(theme.pink))).toBe(true)
+      const frame = setup.captureCharFrame()
+      expect(frame.split("\n")[0]!.startsWith(WORKSPACE_ROOT)).toBe(true)
+      expect(frame.match(/\/workspace/g)).toHaveLength(1)
+      return header
+    }
+
+    try {
+      await render()
+      const header = checkHeader()
+      await act(async () => { await controller.activateSession("default") })
+      await render()
+      expect(checkHeader()).toBe(header)
+      const transcript = setup.renderer.root.findDescendantById("session-transcript")
+      expect(transcript).toBeInstanceOf(ScrollBoxRenderable)
+      const scroll = transcript as ScrollBoxRenderable
+      expect(scroll.y).toBeGreaterThanOrEqual(1)
+      expect(scroll.scrollTop).toBeGreaterThan(0)
+      act(() => scroll.scrollTo(0))
+      await render()
+      expect(scroll.scrollTop).toBe(0)
+      expect(setup.captureCharFrame()).toContain("Transcript line 0")
+      expect(checkHeader()).toBe(header)
+
+      act(() => controller.openAuthentication("login"))
+      await render()
+      expect(setup.renderer.root.findDescendantById("workspace-header")).toBeUndefined()
+      expect(setup.captureCharFrame()).not.toContain(WORKSPACE_ROOT)
+      act(() => controller.closeAuthentication())
+      await render()
+      checkHeader()
+      expect(textareaRenderable(setup.renderer.root).focused).toBe(true)
+    } finally {
+      act(() => setup.renderer.destroy())
+      controller.dispose()
+    }
+  },
+)
+
+test.each([40, 80])("keeps one activity snake above the editor at %i columns", async (width) => {
+  const fake = fakeApplication()
+  const controller = new BuliUiController({ application: fake.application })
+  await controller.activateSession("default")
+  const idle = fake.application.openSession("default").getSnapshot()
+  const setup = await testRender(buliElementWithController(fake.application, controller), {
+    width, height: 14,
+  })
+  try {
+    await act(async () => { await setup.renderOnce() })
+    const textarea = textareaRenderable(setup.renderer.root)
+    for (const state of [
+      { isRunning: false, isCompacting: false },
+      { isRunning: true, isCompacting: false },
+      { isRunning: false, isCompacting: true },
+      { isRunning: true, isCompacting: true },
+      { isRunning: false, isCompacting: false },
+    ]) {
+      act(() => fake.setSessionSnapshot({ ...idle, ...state }))
+      await act(async () => { await setup.renderOnce() })
+      await act(async () => { await setup.renderOnce() })
+      const activity = setup.renderer.root.findDescendantById("chat-activity")!
+      expect(activity.height).toBeGreaterThanOrEqual(1)
+      expect(activity.y + activity.height).toBeLessThan(textarea.y)
+      expect(textareaRenderable(setup.renderer.root)).toBe(textarea)
+      expect(textarea.focused).toBe(true)
+      expect((textarea.parent as BoxRenderable).borderColor.equals(RGBA.fromHex(theme.green))).toBe(true)
+      const frame = setup.captureCharFrame()
+      const active = state.isRunning || state.isCompacting
+      expect(frame.split(glyphs.snakeHead).length - 1).toBe(active ? 1 : 0)
+      const activityText = frame.split("\n")
+        .slice(activity.y, activity.y + activity.height)
+        .map((line) => line.trim()).join(" ")
+      if (state.isCompacting) {
+        expect(activityText).toContain("Compacting context · Esc stop")
+        expect(frame).not.toContain("Enter steer")
+      } else if (state.isRunning) {
+        expect(activityText).toContain("Enter steer | Alt+Enter follow-up | Esc stop")
+        expect(frame).not.toContain("Compacting context")
+      } else {
+        expect(activity.height).toBe(1)
+        expect(activityText).toBe("")
+      }
+    }
+  } finally {
+    act(() => setup.renderer.destroy())
+    controller.dispose()
+  }
+})
+
+test("keeps asynchronous path suggestions above the editor and completes the selected reference", async () => {
+  const queries: string[] = []
+  let releaseSearch!: () => void
+  const gate = new Promise<void>((resolve) => { releaseSearch = resolve })
+  const fake = fakeApplication({
+    searchPaths: async (query) => {
+      queries.push(query)
+      await gate
+      return Array.from({ length: 30 }, (_, index) => ({
+        kind: "file" as const,
+        path: `/workspace/src/file-${index}.ts`,
+        displayPath: `src/file-${index}.ts`,
+      }))
+    },
+  })
+  const controller = new BuliUiController({ application: fake.application })
+  const setup = await testRender(buliElementWithController(fake.application, controller), {
+    width: 40, height: 14,
+  })
+  const render = async () => {
+    for (let frame = 0; frame < 3; frame++) {
+      await act(async () => { await setup.renderOnce() })
+    }
+  }
+  const checkMenuPosition = () => {
+    const menu = setup.renderer.root.findDescendantById("command-menu")!
+    const activity = setup.renderer.root.findDescendantById("chat-activity")!
+    const textarea = textareaRenderable(setup.renderer.root)
+    expect(menu.y).toBeGreaterThanOrEqual(1)
+    expect(menu.y + menu.height).toBeLessThanOrEqual(activity.y)
+    expect(activity.y + activity.height).toBeLessThan(textarea.y)
+    expect(textarea.focused).toBe(true)
+  }
+
+  try {
+    await render()
+    const textarea = textareaRenderable(setup.renderer.root)
+    await act(async () => { await setup.mockInput.typeText("@sr") })
+    await render()
+    expect(setup.captureCharFrame()).toContain("Searching paths...")
+    checkMenuPosition()
+    await act(async () => { await Bun.sleep(30); releaseSearch(); await gate })
+    await render()
+    expect(queries).toEqual(["sr"])
+    expect(setup.captureCharFrame()).toContain("→ src/file-0.ts")
+    checkMenuPosition()
+
+    act(() => setup.mockInput.pressArrow("up"))
+    await render()
+    expect(setup.captureCharFrame()).toContain("→ src/file-29.ts")
+    expect(setup.captureCharFrame()).not.toContain("src/file-0.ts")
+    for (const [width, height] of [[40, 10], [120, 30], [40, 14]] as const) {
+      act(() => setup.resize(width, height))
+      await render()
+      expect(setup.captureCharFrame()).toContain("→ src/file-29.ts")
+      expect(setup.captureCharFrame()).toContain("Test / medium")
+      checkMenuPosition()
+    }
+    act(() => setup.mockInput.pressEnter())
+    await render()
+    expect(controller.getSnapshot().menu).toBeNull()
+    expect(textareaRenderable(setup.renderer.root)).toBe(textarea)
+    expect(textarea.plainText).toBe("@src/file-29.ts ")
+    expect(controller.getInputDraft().references).toEqual([{
+      type: "path",
+      kind: "file",
+      path: "/workspace/src/file-29.ts",
+      source: { value: "@src/file-29.ts", start: 0, end: 15 },
+    }])
+    expect(fake.prompts).toHaveLength(0)
+    expect(textarea.focused).toBe(true)
+  } finally {
+    releaseSearch()
+    act(() => setup.renderer.destroy())
+    controller.dispose()
+  }
+})
 
 test("navigation subscribers ignore draft and menu updates but observe route and authentication changes", async () => {
   const { application } = fakeApplication()
@@ -1096,6 +1300,7 @@ test("renders running and failed session status", async () => {
     await act(async () => {
       await setup.renderOnce()
     })
+    await act(async () => { await setup.renderOnce() })
     const runningFrame = setup.captureCharFrame()
     expect(runningFrame).not.toContain("Working...")
     expect(runningFrame).toContain("Enter steer")
@@ -1104,10 +1309,10 @@ test("renders running and failed session status", async () => {
     expect(runningFrame).toContain(glyphs.snakeHead)
     expect(runningFrame).toContain(glyphs.snakeBody)
     expect(runningFrame).toContain(glyphs.snakeEmptyTrack)
-    expect(runningFrame).toContain("Steering:")
+    expect(runningFrame).toContain("Steering")
     expect(runningFrame).toContain("Adjust the")
     expect(runningFrame).toContain("answer")
-    expect(runningFrame).toContain("Follow-up:")
+    expect(runningFrame).toContain("Follow-up")
     expect(runningFrame).toContain("summarize it")
     expect(runningFrame).toContain("Esc restores")
     expect(runningFrame).toContain("queued input")
@@ -1141,7 +1346,121 @@ test("renders running and failed session status", async () => {
   }
 })
 
-test("keeps the selected slash command visible below a wrapped active budget", async () => {
+test("keeps a long scrollable queue above menus without displacing the editor and context status", async () => {
+  const fake = fakeApplication({
+    applicationSnapshot: {
+      ...APPLICATION_SNAPSHOT,
+      models: [{ id: "test", name: "GPT-6 Astra Fast", reasoningEfforts: ["medium"] }],
+    },
+  })
+  const initial = fake.application.openSession("default").getSnapshot()
+  const pending = Array.from({ length: 6 }, (_, index) => ({
+    id: `queued-${index}`,
+    sessionId: "default",
+    runId: "run-1",
+    role: "user" as const,
+    source: "followUp" as const,
+    content: `Queued message ${index}\n${"Complete wrapped text ".repeat(15)}\nqueue-end-${index}`,
+    createdAt: index,
+  }))
+  const activeSession: ISessionSnapshot = {
+    ...initial,
+    isRunning: true,
+    pendingSteeringMessages: [{ ...pending[0]!, source: "steer" }],
+    pendingFollowUpMessages: pending.slice(1),
+    contextUsage: {
+      estimatedInputTokens: 142_000,
+      compactionInputTokens: 142_000,
+      contextWindowTokens: 200_000,
+      compactionThresholdTokens: 160_000,
+      remainingTokens: 58_000,
+      usageRatio: 0.71,
+      shouldCompact: false,
+    },
+  }
+  fake.setSessionSnapshot(activeSession)
+  const controller = new BuliUiController({ application: fake.application })
+  await controller.activateSession("default")
+  controller.updateInput("/")
+  controller.moveMenuSelection(-1)
+  const setup = await testRender(buliElementWithController(fake.application, controller), {
+    width: 80, height: 24,
+  })
+  const render = async () => {
+    // Let React commits and OpenTUI layout settle before checking scrolling behavior.
+    for (let frame = 0; frame < 4; frame++) {
+      await act(async () => { await setup.renderOnce() })
+    }
+  }
+  try {
+    await render()
+    const textarea = textareaRenderable(setup.renderer.root)
+    const scroll = setup.renderer.root.findDescendantById("queued-messages-scroll") as ScrollBoxRenderable
+    await act(async () => {
+      await setup.mockMouse.scroll(scroll.x + 2, scroll.y + 2, "down")
+    })
+    await render()
+    expect(scroll.scrollTop).toBeGreaterThan(0)
+    expect(textarea.focused).toBe(true)
+
+    for (const isCompacting of [false, true]) {
+      act(() => fake.setSessionSnapshot({ ...activeSession, isCompacting }))
+      for (const [width, height] of [[80, 24], [40, 14], [40, 10], [120, 30], [40, 14]] as const) {
+        act(() => setup.resize(width, height))
+        await render()
+        const queue = setup.renderer.root.findDescendantById("queued-messages")!
+        const hint = setup.renderer.root.findDescendantById("queued-messages-hint")!
+        const menu = setup.renderer.root.findDescendantById("command-menu")!
+        const activity = setup.renderer.root.findDescendantById("chat-activity")!
+        const status = setup.renderer.root.findDescendantById("chat-status")!
+        const queueRows = queue.getLayoutNode().getComputedHeight()
+        const scrollRows = scroll.getLayoutNode().getComputedHeight()
+        expect(queue.y + queueRows).toBeLessThanOrEqual(menu.y)
+        expect(menu.y + menu.height).toBeLessThanOrEqual(activity.y)
+        expect(activity.y + activity.height).toBeLessThan(textarea.y)
+        expect(status.y + status.height).toBeLessThanOrEqual(height)
+        expect(scrollRows).toBeLessThanOrEqual(Math.min(10, Math.floor(height / 3)))
+        expect(textareaRenderable(setup.renderer.root)).toBe(textarea)
+        expect(textarea.focused).toBe(true)
+        expect(textarea.plainText).toBe("/")
+        const frame = setup.captureCharFrame()
+        expect(frame.split("\n")[0]!.trim()).toBe(WORKSPACE_ROOT)
+        expect(frame).toContain("→ compact")
+        expect(frame.replace(/\s+/g, "")).toContain("ctx~142k/200k(71%)")
+        expect(frame.match(/ctx ~/g)).toHaveLength(1)
+        expect(frame.split(glyphs.snakeHead).length - 1).toBe(1)
+        expect(frame).not.toContain("budget)")
+        if (isCompacting) expect(frame).toContain("Compacting context")
+        if (scrollRows > 0) {
+          expect(scroll.y + scrollRows).toBeLessThanOrEqual(hint.y)
+          expect(frame.split("\n")[hint.y]!.trim()).toBe("Esc restores queued input")
+          act(() => scroll.scrollTo(scroll.scrollHeight))
+          await render()
+          // At one row, the bottom of a complete card is its border, not its text.
+          if (scrollRows === 1) {
+            act(() => scroll.scrollBy(-1))
+            await render()
+          }
+          expect(setup.captureCharFrame()).toContain("queue-end-5")
+          expect(setup.captureCharFrame().split("\n")[0]!.trim()).toBe(WORKSPACE_ROOT)
+        } else {
+          expect(frame).not.toMatch(/[│┌┐└┘]/)
+        }
+      }
+    }
+    act(() => fake.setSessionSnapshot({ ...activeSession, pendingSteeringMessages: [], pendingFollowUpMessages: [] }))
+    await render()
+    expect(setup.renderer.root.findDescendantById("queued-messages")).toBeUndefined()
+    expect(setup.captureCharFrame()).not.toContain("Esc restores queued input")
+    expect(textareaRenderable(setup.renderer.root)).toBe(textarea)
+    expect(textarea.focused).toBe(true)
+  } finally {
+    act(() => setup.renderer.destroy())
+    controller.dispose()
+  }
+})
+
+test("keeps slash commands above the focused editor through narrow terminal resizes", async () => {
   const fake = fakeApplication({
     applicationSnapshot: {
       ...APPLICATION_SNAPSHOT,
@@ -1189,19 +1508,31 @@ test("keeps the selected slash command visible below a wrapped active budget", a
     })
     await render()
 
-    const frame = setup.captureCharFrame()
-    expect(frame).toContain("→ compact")
-    expect(frame.split("\n").map((line) => line.trim()).join(" "))
-      .toContain("compact 142k/160k (89% budget)")
-    expect(textareaRenderable(setup.renderer.root).focused).toBe(true)
+    const textarea = textareaRenderable(setup.renderer.root)
+    const checkLayout = (height: number) => {
+      const frame = setup.captureCharFrame()
+      const menu = setup.renderer.root.findDescendantById("command-menu")!
+      const activity = setup.renderer.root.findDescendantById("chat-activity")!
+      expect(frame).toContain("→ compact")
+      expect(frame.replace(/\s+/g, ""))
+        .toContain("ctx~142k/200k(71%)")
+      expect(frame).not.toContain("budget)")
+      expect(frame.match(/ctx ~/g)).toHaveLength(1)
+      expect(menu.y).toBeGreaterThanOrEqual(1)
+      expect(menu.y + menu.height).toBeLessThanOrEqual(activity.y)
+      expect(activity.y + activity.height).toBeLessThan(textarea.y)
+      expect(textarea.y + textarea.height).toBeLessThan(height)
+      expect(textareaRenderable(setup.renderer.root)).toBe(textarea)
+      expect(textarea.focused).toBe(true)
+      expect(textarea.plainText).toBe("/")
+    }
+    checkLayout(14)
 
-    for (const [width, height] of [[40, 14], [120, 30], [80, 14]] as const) {
+    for (const [width, height] of [[40, 14], [40, 10], [120, 30], [80, 14]] as const) {
       act(() => setup.resize(width, height))
       await render()
+      checkLayout(height)
       const resizedFrame = setup.captureCharFrame()
-      expect(resizedFrame).toContain("→ compact")
-      expect(resizedFrame.split("\n").map((line) => line.trim()).join(" "))
-        .toContain("compact 142k/160k (89% budget)")
       if (height === 30) {
         for (const commandName of [
           "new", "model", "reasoning", "sessions", "login", "logout",
@@ -1217,13 +1548,13 @@ test("keeps the selected slash command visible below a wrapped active budget", a
     const activeSession = fake.application.openSession("default").getSnapshot()
     act(() => fake.setSessionSnapshot({ ...activeSession, isRunning: false }))
     await render()
-    expect(setup.captureCharFrame()).toContain("→ compact")
-    expect(setup.captureCharFrame()).toContain("   sessions")
+    checkLayout(14)
+    expect(setup.captureCharFrame()).not.toContain(glyphs.snakeHead)
 
     act(() => fake.setSessionSnapshot(activeSession))
     await render()
-    expect(setup.captureCharFrame()).toContain("→ compact")
-    expect(setup.captureCharFrame()).not.toContain("   sessions")
+    checkLayout(14)
+    expect(setup.captureCharFrame()).toContain(glyphs.snakeHead)
 
     act(() => setup.mockInput.pressArrow("down"))
     await render()
@@ -1357,7 +1688,12 @@ test("selects a model from the picker and updates the status row", async () => {
       await setup.renderOnce()
     })
 
+    await act(async () => { await setup.renderOnce() })
     expect(setup.captureCharFrame()).toContain("→ Test")
+    const menu = setup.renderer.root.findDescendantById("command-menu")!
+    const textarea = textareaRenderable(setup.renderer.root)
+    expect(menu.y + menu.height).toBeLessThan(textarea.y)
+    expect(textarea.focused).toBe(true)
 
     await act(async () => {
       setup.renderer.keyInput.processParsedKey(down)
@@ -1500,6 +1836,7 @@ test("renders the sessions picker and switches transcripts", async () => {
       await setup.renderOnce()
     })
 
+    await act(async () => { await setup.renderOnce() })
     const pickerFrame = setup.captureCharFrame()
     expect(pickerFrame).toContain("First history")
     expect(pickerFrame).toContain("Second history")

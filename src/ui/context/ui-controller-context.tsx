@@ -7,6 +7,7 @@ import {
 } from "react"
 
 import { BuliUiController, type IBuliUiSnapshot } from "@/ui/ui-controller"
+import { useSnapshotSelector } from "@/ui/context/use-snapshot-selector"
 
 const BuliUiControllerContext = createContext<BuliUiController | undefined>(undefined)
 
@@ -44,6 +45,13 @@ export function useBuliNavigationSnapshot(): Pick<IBuliUiSnapshot, "route" | "au
     const route = useSyncExternalStore(controller.subscribe, getRoute)
     const authenticationMode = useSyncExternalStore(controller.subscribe, getAuthenticationMode)
     return { route, authenticationMode }
+}
+
+/** Selects UI data without coupling menu, draft, errors and navigation. */
+export function useBuliUiSelector<Selection>(
+    select: (snapshot: IBuliUiSnapshot) => Selection,
+): Selection {
+    return useSnapshotSelector(useBuliUiController(), select)
 }
 
 /** Subscribes a component to application UI state. */

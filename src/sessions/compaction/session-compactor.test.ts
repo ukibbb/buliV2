@@ -8,6 +8,7 @@ import type {
 import {
   compactSessionMessages,
   type ICompactionCheckpoint,
+  type ICompactionProgress,
   projectAgentContext,
 } from "@/sessions"
 
@@ -519,6 +520,98 @@ test("compactSessionMessages rejects oversized history without serial fallback",
     "Compaction summary input does not fit the summarizer model context in one request",
   )
   expect(modelCalled).toBe(false)
+})
+
+test("compactSessionMessages reports cumulative progress before completion with a stable anchor", async () => {
+  const firstPublished = Promise.withResolvers<void>()
+  const secondPublished = Promise.withResolvers<void>()
+  const releaseSecond = Promise.withResolvers<void>()
+  const releaseFinish = Promise.withResolvers<void>()
+  const progress: ICompactionProgress[] = []
+  const model: IAgentModel = {
+    async *stream() {
+      yield { type: "text-delta", id: "summary", delta: "  ## Goals\n\nFirst" }
+      firstPublished.resolve()
+      await releaseSecond.promise
+      yield { type: "text-delta", id: "summary", delta: " second  " }
+      secondPublished.resolve()
+      await releaseFinish.promise
+      yield { type: "finish", reason: "stop" }
+    },
+  }
+  let completed = false
+  const task = compactSessionMessages({
+    sessionId: "session-1",
+    messages: [...conversation(4), user("pending", "Not processed yet", 5)],
+    runConfiguration: { model, reasoningEffort: "low" },
+    reason: "manual",
+    signal: new AbortController().signal,
+    now: () => 100,
+    generateId: () => "streamed-checkpoint",
+    onProgress: (value) => progress.push(value),
+  }).then((checkpoint) => {
+    completed = true
+    return checkpoint
+  })
+
+  try {
+    await Promise.race([firstPublished.promise, task])
+    expect(completed).toBe(false)
+    expect(progress).toEqual([{
+      id: "streamed-checkpoint",
+      throughMessageId: "assistant-3",
+      summary: "  ## Goals\n\nFirst",
+    }])
+    releaseSecond.resolve()
+    await Promise.race([secondPublished.promise, task])
+    expect(completed).toBe(false)
+    expect(progress).toHaveLength(2)
+    expect(progress[1]).toEqual({
+      id: "streamed-checkpoint",
+      throughMessageId: "assistant-3",
+      summary: "  ## Goals\n\nFirst second  ",
+    })
+    expect(progress[0]?.summary).toBe("  ## Goals\n\nFirst")
+    releaseFinish.resolve()
+    expect(await task).toMatchObject({
+      id: "streamed-checkpoint",
+      throughMessageId: "assistant-3",
+      compactedMessageCount: 4,
+      summary: "## Goals\n\nFirst second",
+    })
+  } finally {
+    releaseSecond.resolve()
+    releaseFinish.resolve()
+    await task
+  }
+})
+
+test("compactSessionMessages stops progress reporting when aborted by its observer", async () => {
+  const controller = new AbortController()
+  const reason = new Error("Cancelled preview")
+  const progress: ICompactionProgress[] = []
+  const model: IAgentModel = {
+    async *stream() {
+      yield { type: "text-delta", id: "summary", delta: "First" }
+      yield { type: "text-delta", id: "summary", delta: " late" }
+      yield { type: "finish", reason: "stop" }
+    },
+  }
+
+  await expect(compactSessionMessages({
+    sessionId: "session-1",
+    messages: conversation(4),
+    runConfiguration: { model, reasoningEffort: "low" },
+    reason: "manual",
+    signal: controller.signal,
+    now: () => 100,
+    generateId: () => "aborted-preview",
+    onProgress: (value) => {
+      progress.push(value)
+      controller.abort(reason)
+    },
+  })).rejects.toBe(reason)
+  expect(progress.map((value) => value.summary)).toEqual(["First"])
 })
 
 test("compactSessionMessages rejects truncated or empty summaries", async () => {

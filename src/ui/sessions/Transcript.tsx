@@ -13,12 +13,15 @@ import type {
     IToolCallContent,
     IToolResultMessage,
 } from "@/agent"
-import type { ICompactionCheckpoint } from "@/sessions"
+import type { ICompactionCheckpoint, ICompactionProgress } from "@/sessions"
+import { MessageCard } from "@/ui/components/MessageCard"
 import { colorDiffText } from "@/ui/sessions/colored-diff"
 import { normalizeMarkdownDiff } from "@/ui/sessions/markdown-diff"
 import { FileChangeDiff } from "@/ui/sessions/FileChangeDiff"
 import { ToolCallDisplay } from "@/ui/sessions/ToolCallDisplay"
 import { syntax, theme } from "@/ui/terminal/theme"
+
+const REASONING_BOTTOM_PADDING = 1
 
 const MARKDOWN_TABLE_OPTIONS = {
     style: "grid",
@@ -44,6 +47,7 @@ export interface ITranscriptProps {
     readonly fileChangeProposals?: readonly IFileChangeProposalRecord[]
     readonly streamingMessage?: IAssistantMessage
     readonly compactionCheckpoint?: ICompactionCheckpoint
+    readonly compactionProgress?: ICompactionProgress
     readonly activeRunId?: string
     readonly pendingToolCallIds?: readonly string[]
 }
@@ -99,11 +103,14 @@ function MarkdownBody(props: {
 }
 
 function CompactionCheckpointCard(props: {
-    readonly checkpoint: ICompactionCheckpoint
+    readonly summary: string
+    readonly streaming: boolean
 }): ReactNode {
     return <box width="100%" flexDirection="column">
-        <text fg={theme.textMuted}>Context compacted</text>
-        <MarkdownBody content={props.checkpoint.summary} streaming={false} />
+        <text fg={props.streaming ? theme.amber : theme.textMuted}>
+            {props.streaming ? "Compacting context…" : "Context compacted"}
+        </text>
+        <MarkdownBody content={props.summary} streaming={props.streaming} />
     </box>
 }
 
@@ -129,16 +136,21 @@ function AssistantCard(props: {
                     const hasSummary = content.text.trim().length > 0
                     if (!hasSummary && !props.streaming) return null
 
-                    return <text
+                    return <box
                         key={`${props.message.id}-reasoning-${index}`}
-                        fg={props.streaming ? theme.amber : theme.textMuted}
-                        wrapMode="word"
-                        truncate={false}
+                        width="100%"
+                        flexDirection="column"
+                        paddingBottom={REASONING_BOTTOM_PADDING}
                     >
-                        {hasSummary
-                            ? `${props.streaming ? "Thinking" : "Thought"}: ${content.text}`
-                            : "Thinking..."}
-                    </text>
+                        <text fg={theme.textMuted} wrapMode="word" truncate={false}>
+                            <span fg={props.streaming ? theme.amber : theme.pink}>
+                                {hasSummary
+                                    ? `${props.streaming ? "Thinking" : "Thought"}: `
+                                    : "Thinking..."}
+                            </span>
+                            {hasSummary ? content.text : null}
+                        </text>
+                    </box>
                 }
 
                 if (content.type === "toolCall") {
@@ -177,11 +189,12 @@ export function Transcript(props: ITranscriptProps): ReactNode {
             : new Set(props.pendingToolCallIds),
         [props.pendingToolCallIds],
     )
+    const transcriptItems = useMemo(
+        () => projectTranscriptItems(props.messages, props.fileChangeProposals ?? []),
+        [props.messages, props.fileChangeProposals],
+    )
     const durableHistory = useMemo(
-        () => projectTranscriptItems(
-            props.messages,
-            props.fileChangeProposals ?? [],
-        ).map((item) => item.type === "message"
+        () => transcriptItems.map((item) => item.type === "message"
             ? renderDurableMessage(
                 item.message,
                 projection,
@@ -192,44 +205,38 @@ export function Transcript(props: ITranscriptProps): ReactNode {
                 diff={item.proposal.diff}
                 path={item.proposal.path}
             />),
-        [
-            props.messages,
-            props.fileChangeProposals,
-            projection,
-            runningToolCallIds,
-        ],
+        [transcriptItems, projection, runningToolCallIds],
+    )
+    const visibleCheckpoint = props.compactionProgress ?? props.compactionCheckpoint
+    const checkpointStreaming = props.compactionProgress !== undefined
+    const checkpointAnchorId = visibleCheckpoint?.throughMessageId
+    const checkpointAnchorIndex = useMemo(
+        () => transcriptItems.findIndex((item) => item.type === "message"
+            && item.message.id === checkpointAnchorId),
+        [transcriptItems, checkpointAnchorId],
     )
     const checkpointHistory = useMemo(() => {
-        if (!props.compactionCheckpoint) return durableHistory
+        if (!visibleCheckpoint) return durableHistory
 
         const checkpointCard = <CompactionCheckpointCard
-            key={props.compactionCheckpoint.id}
-            checkpoint={props.compactionCheckpoint}
+            key={visibleCheckpoint.id}
+            summary={visibleCheckpoint.summary}
+            streaming={checkpointStreaming}
         />
-        const anchorIndex = projectTranscriptItems(
-            props.messages,
-            props.fileChangeProposals ?? [],
-        ).findIndex((item) => item.type === "message"
-            && item.message.id === props.compactionCheckpoint?.throughMessageId)
-        if (anchorIndex < 0) return [...durableHistory, checkpointCard]
+        if (checkpointAnchorIndex < 0) return [...durableHistory, checkpointCard]
 
         return [
-            ...durableHistory.slice(0, anchorIndex + 1),
+            ...durableHistory.slice(0, checkpointAnchorIndex + 1),
             checkpointCard,
-            ...durableHistory.slice(anchorIndex + 1),
+            ...durableHistory.slice(checkpointAnchorIndex + 1),
         ]
-    }, [
-        durableHistory,
-        props.messages,
-        props.fileChangeProposals,
-        props.compactionCheckpoint,
-    ])
+    }, [durableHistory, visibleCheckpoint, checkpointStreaming, checkpointAnchorIndex])
 
     if (
         props.messages.length === 0
         && (props.fileChangeProposals?.length ?? 0) === 0
         && !props.streamingMessage
-        && !props.compactionCheckpoint
+        && !visibleCheckpoint
     ) {
         return <text fg={theme.textMuted} selectable={false}>
             Start conversation
@@ -301,9 +308,13 @@ function renderDurableMessage(
 ): ReactNode {
     switch (message.role) {
         case "user":
-            return <text bg={theme.green} key={message.id} margin={1}>
-                {message.content.trim()}
-            </text>
+            return <MessageCard
+                key={message.id}
+                id={`user-message-${message.id}`}
+                content={message.content}
+                borderColor={theme.green}
+                marginY={1}
+            />
         case "assistant":
             return <AssistantCard
                 key={message.id}

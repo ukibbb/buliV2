@@ -1,7 +1,7 @@
 import {
     createContext,
     useContext,
-    useState,
+    useMemo,
     useSyncExternalStore,
     type ReactNode,
 } from "react"
@@ -11,6 +11,7 @@ import type {
     ISnapshotSource,
 } from "@/app/contracts"
 import type { ISessionSnapshot } from "@/sessions"
+import { useSnapshotSelector } from "@/ui/context/use-snapshot-selector"
 
 /** Runtime contract context shared by connected application views. */
 export const BuliApplicationRuntimeContext =
@@ -47,11 +48,39 @@ export function useBuliApplicationSnapshot(): IBuliApplicationSnapshot {
     )
 }
 
-/** Subscribes a component to one live session snapshot. */
-export function useSession(sessionId: string): ISessionSnapshot {
+/** Selects only the session fields owned by the subscribing view. */
+export function useSessionSelector<Selection>(
+    sessionId: string | undefined,
+    select: (snapshot: ISessionSnapshot) => Selection,
+    equal?: (previous: Selection, next: Selection) => boolean,
+): Selection {
     const runtime = useBuliRuntime()
-    const [session] = useState<ISnapshotSource<ISessionSnapshot>>(
-        () => runtime.openSession(sessionId),
+    const session = useMemo(
+        () => sessionId === undefined ? HOME_SESSION_SOURCE : runtime.openSession(sessionId),
+        [runtime, sessionId],
     )
-    return useSyncExternalStore(session.subscribe, session.getSnapshot)
+    return useSnapshotSelector(session, select, equal)
+}
+
+/** Subscribes a component that actually needs the complete session. */
+export function useSession(sessionId: string): ISessionSnapshot {
+    return useSessionSelector(sessionId, selectSession)
+}
+
+const selectSession = (snapshot: ISessionSnapshot) => snapshot
+
+// Home has no live session. Keep its idle source stable and do not open a session.
+const HOME_SESSION: ISessionSnapshot = {
+    activeBranchId: "main",
+    messages: [],
+    fileChangeProposals: [],
+    pendingSteeringMessages: [],
+    pendingFollowUpMessages: [],
+    isRunning: false,
+    isCompacting: false,
+    pendingToolCallIds: [],
+}
+const HOME_SESSION_SOURCE: ISnapshotSource<ISessionSnapshot> = {
+    getSnapshot: () => HOME_SESSION,
+    subscribe: () => () => {},
 }

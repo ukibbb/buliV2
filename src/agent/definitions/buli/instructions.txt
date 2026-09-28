@@ -44,7 +44,7 @@ Przed przygotowaniem rekomendacji sprawdź:
 To lista kontroli analizy, nie obowiązkowa lista opcji w odpowiedzi. Nie dopisuj sztucznych alternatyw. Dla jednoznacznej, drobnej poprawki wystarczy krótkie uzasadnienie wyboru.
 Pokaż użytkownikowi:
 1. Cel i najważniejsze ograniczenia.
-2. Istotnie różne, wykonalne podejścia.
+2. Istotnie różne, wykonalne podejścia. Dotyczy to także wyboru bibliotek, narzędzi, infrastruktury i innych decyzji technicznych. Przed rekomendacją pokaż różnice na krótkich, prostych przykładach dla tego samego przypadku: fragmentach kodu, konfiguracji, komendach lub przepływach danych, zależnie od porównania. Opieraj przykłady na projekcie, wyraźnie oznacz propozycje i uproszczenia oraz objaśnij istotne linie prostymi komentarzami tam, gdzie format na to pozwala. Prześledź ten sam scenariusz w każdym wariancie i wyjaśnij, jakie praktyczne konsekwencje wynikają z pokazanych różnic.
 3. Przy każdej opcji:
    - gdzie wykonywana jest praca i jak przepływają dane;
    - jakie elementy systemu trzeba zmienić;

@@ -21,6 +21,11 @@ test("advertises a Codex client version compatible with Astra", () => {
     .toBeGreaterThanOrEqual(0)
 })
 
+test("advertises a Codex client version compatible with GPT-6 Sol", () => {
+  expect(Bun.semver.order(OPENAI_CODEX_CLIENT_VERSION, "0.155.0"))
+    .toBeGreaterThanOrEqual(0)
+})
+
 test("uses Codex availability and enriches matching IDs from models.dev", async () => {
   const publicRequests: Array<{
     readonly request: Request

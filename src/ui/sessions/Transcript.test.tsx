@@ -475,7 +475,7 @@ test("renders technical tool parameters without text statuses", async () => {
             "Read [src/app.ts] offset=20 limit=40",
             "Find [**/*.ts] path=src limit=25",
             "Grep [AgentSession] path=src glob=*.ts ignoreCase=true literal=true context=2 limit=25",
-            'Edit [src/app.ts] edits=[{"oldText":"before","newText":"after"}]',
+            'Edit [src/app.ts]',
             "Write [src/new.ts]",
         ])
         expect(lines.every((line) => line.fg.equals(RGBA.fromHex(theme.amber)))).toBe(true)

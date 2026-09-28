@@ -134,7 +134,7 @@ test("preserves compact small tool parameters and fallback targets", () => {
             literal: true, context: 2, limit: 25,
         }, "Grep [AgentSession] path=src glob=*.ts ignoreCase=true literal=true context=2 limit=25"],
         ["edit", { path: "src/app.ts", edits: [{ oldText: "before", newText: "after" }] },
-            'Edit [src/app.ts] edits=[{"oldText":"before","newText":"after"}]'],
+            'Edit [src/app.ts]'],
         ["write", { path: "src/new.ts", content: "export {}\n" }, "Write [src/new.ts]"],
         ["apply_patch", { explanation: "cleanup", changes: [{ kind: "delete", path: "p" }] },
             'Apply patch [cleanup] changes=[{"kind":"delete","path":"p"}]'],
@@ -197,8 +197,8 @@ test("matches native compact JSON quoting, property order, omissions and array h
         { value: "\r\n\t\b\f\u0000\uD800".repeat(30) },
     ]
     for (const value of values) {
-        expect(activity("edit", { path: "p", edits: value }))
-            .toBe(`Edit [p] edits=${shippedTarget(JSON.stringify(value))}`)
+        expect(activity("apply_patch", { explanation: "p", changes: value }))
+            .toBe(`Apply patch [p] changes=${shippedTarget(JSON.stringify(value))}`)
         const input = { value }
         expect(activity("custom", input))
             .toBe(`custom [${shippedTarget(JSON.stringify(input))}]`)
@@ -231,7 +231,7 @@ test("keeps detail joining, newline replacement and whole-result trimming in ord
     }))).toBe(`Read [p] ${glyphs.failure}`)
 })
 
-test.each(["edit", "apply_patch"])("bounds %s nested string work without reading later fields or array entries", (name) => {
+test.each(["edit", "apply_patch"])("avoids hidden %s data and bounds visible nested string work", (name) => {
     for (const size of [1_000, 1_000_000]) {
         const largeText = "x".repeat(size)
         let entryReads = 0
@@ -271,9 +271,14 @@ test.each(["edit", "apply_patch"])("bounds %s nested string work without reading
         expect(activity(name, name === "edit"
             ? { path: "p", edits: entries }
             : { explanation: "why", changes: entries }))
-            .toBe(name === "edit" ? `Edit [p] edits=${preview}` : `Apply patch [why] changes=${preview}`)
+            .toBe(name === "edit" ? "Edit [p]" : `Apply patch [why] changes=${preview}`)
         expect({ entryReads, textReads, suffixReads, serializationHooks })
-            .toEqual({ entryReads: 1, textReads: 1, suffixReads: 0, serializationHooks: 0 })
+            .toEqual({
+                entryReads: name === "edit" ? 0 : 1,
+                textReads: name === "edit" ? 0 : 1,
+                suffixReads: 0,
+                serializationHooks: 0,
+            })
     }
 })
 
@@ -360,7 +365,7 @@ test("uses a fixed fallback for malformed non-JSON data without invoking convers
     }]) {
         expect(activity("custom", value)).toBe("custom [[unserializable]]")
         expect(activity("edit", { path: "p", edits: value }))
-            .toBe("Edit [p] edits=[unserializable]")
+            .toBe("Edit [p]")
     }
 })
 
@@ -368,19 +373,28 @@ test("keeps huge malformed JSON-looking string arguments as escaped text", () =>
     const prefix = '{"oldText":"'
     const raw = `${prefix}${'"\r\n\t'.repeat(100_000)}`
     const expected = shippedTarget(`${prefix}${'"\r\n\t'.repeat(100)}`)
-    expect(activity("edit", { path: "p", edits: raw })).toBe(`Edit [p] edits=${expected}`)
+    expect(activity("edit", { path: "p", edits: raw })).toBe("Edit [p]")
     expect(activity("bash", { command: raw })).toBe(`Bash [${expected}]`)
     expect(activity("custom", { arguments: raw })).toBe(
         `custom [${shippedTarget(JSON.stringify({ arguments: `${prefix}${'"\r\n\t'.repeat(100)}` }))}]`,
     )
 })
 
+test("does not read hidden edit arguments", () => {
+    let reads = 0
+    expect(activity("edit", {
+        path: "src/app.ts",
+        get edits() { reads++; throw new Error("Edit arguments are not displayed") },
+    })).toBe("Edit [src/app.ts]")
+    expect(reads).toBe(0)
+})
+
 test("does not cache mutable input identities or inspect hidden write content", () => {
     const input = { path: "p", edits: [{ oldText: "before", newText: "after" }] }
-    expect(activity("edit", input)).toBe('Edit [p] edits=[{"oldText":"before","newText":"after"}]')
+    expect(activity("edit", input)).toBe('Edit [p]')
     input.path = "changed"
     input.edits[0]!.newText = "updated"
-    expect(activity("edit", input)).toBe('Edit [changed] edits=[{"oldText":"before","newText":"updated"}]')
+    expect(activity("edit", input)).toBe('Edit [changed]')
     let reads = 0
     expect(activity("write", {
         path: "p".repeat(1_000_000),

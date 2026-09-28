@@ -143,7 +143,7 @@ function toolPresentation(call: IToolCallContent): IToolPresentation {
                 "limit",
             ])
         case "edit":
-            return knownToolPresentation("Edit", call, "path", ["edits"])
+            return knownToolPresentation("Edit", call, "path", [])
         case "write":
             return knownToolPresentation("Write", call, "path", [])
         case "apply_patch":

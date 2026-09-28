@@ -40,8 +40,12 @@ Traktuj codebase, zainstalowane biblioteki i dokumentację jako źródła. Spraw
 Nie udawaj pewności. Jeśli czegoś nie wiesz, sprawdź to. Jeśli nie możesz sprawdzić, powiedz, jakiej informacji brakuje i jakie wnioski zależą od tej informacji.
 Bądź krytyczny wobec istniejącego kodu i moich pomysłów. Dyskutuj ze mną. Wyjaśniaj swoje zastrzeżenia i proponuj konkretną alternatywę.
 # Jak piszesz kod?
-Dbaj o małą liczbę zależności między częściami systemu i jasną odpowiedzialność każdej części. Kod ma prowadzić czytelnika od ogółu do szczegółu. Nazwy mają wyrażać intencję, a przepływ sterowania ma być łatwy do prześledzenia.
-Wybieraj najprostsze rozwiązanie, które poprawnie rozwiązuje rzeczywisty problem. Unikaj magicznych wartości, ogromnych funkcji, głębokich zagnieżdżeń i zbędnych abstrakcji. Wydzielaj małe funkcje, gdy upraszczają kod.
-Nie kopiuj bezmyślnie praktyk projektu. Oceniaj je i bierz odpowiedzialność za jakość. Sprawdzaj też koszt i ryzyko odejścia od istniejących interfejsów.
-Stosuj wzorce projektowe tylko wtedy, gdy rzeczywiście upraszczają rozwiązanie. Możesz je zaproponować, ale wyjaśnij korzyści, koszty i konsekwencje. Nie wdrażaj ich bez mojej zgody.
-Bądź cierpliwy wobec mnie i bezwzględny wobec niejasnego kodu. Z każdą zmianą mam rozumieć więcej i potrzebować mniej pomocy.
+- minimal coupling
+- high cohesion.
+- Nie wzoruj się na praktykach stosowanych w projekcie - weź odpowiedzialność za jakość kodu.
+- Kod powinien czytać się jak dobrze napisana książka: prowadzić od ogółu do szczegółu, jasno nazywać intencje, wyraźnie rozdzielać odpowiedzialności i zachowywać płynny, łatwy do prześledzenia przepływ sterowania.
+- Kod jest tym lepszy, im prościej i poprawniej rozwiązuje rzeczywisty problem — bez popisywania się, zbędnych abstrakcji i komplikowania życia następnemu programiście.
+- Bez magic strings / numbers.
+- Bez ogromnych funkcji z if / elif / else i ogromnych wcięć - helper z returnem jest znacznie lepszy.
+- Clean code.
+- Wzorce projektowe stosuj tylko wtedy, gdy faktycznie upraszczają rozwiązanie; w pozostałych przypadkach możesz zaproponować ich użycie, wyjaśniając konkretne korzyści, koszty i konsekwencje, ale nie wdrażaj ich bez zgody użytkownika.

@@ -36,6 +36,8 @@ const APPLICATION_SNAPSHOT: IBuliApplicationSnapshot = {
 }
 
 interface IApplicationSpyOptions {
+  readonly activateNovibe?: IBuliApplication["activateNovibe"]
+  readonly deactivateNovibe?: IBuliApplication["deactivateNovibe"]
   readonly runningSessionId?: string
   readonly compactingSessionId?: string
   readonly selectModel?: (modelId: string) => void
@@ -146,6 +148,8 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
         followUp: [],
       }
     },
+    activateNovibe: options.activateNovibe ?? (async () => "NoVibe włączone."),
+    deactivateNovibe: options.deactivateNovibe ?? (async () => "NoVibe wyłączone."),
     createBranch: () => "side",
     returnToParentBranch: () => undefined,
     compactSession: async (sessionId) => {
@@ -310,6 +314,7 @@ test("publishes all command suggestions from slash input", () => {
     "branch",
     "return",
     "compact",
+    "novibe",
   ])
   expect(notifications).toBe(1)
 })
@@ -865,14 +870,34 @@ test("login and logout commands activate authentication mode", async () => {
   expect(spy.prompts).toEqual([])
 })
 
+test("NoVibe action arguments reach the handler and never become model prompts", async () => {
+  const calls: string[] = []
+  const spy = applicationSpy({
+    activateNovibe: async (id) => { calls.push(`on:${id}`); return "NoVibe włączone." },
+    deactivateNovibe: async (id) => { calls.push(`off:${id}`); return "NoVibe wyłączone." },
+  })
+  const controller = new BuliUiController({ application: spy.application })
+  await controller.activateSession("session-1")
+  await controller.submitInput("/novibe")
+  expect(controller.getSnapshot().menu?.emptyMessage).toBe("NoVibe włączone.")
+  await controller.submitInput("/novibe off")
+  expect(controller.getSnapshot().menu?.emptyMessage).toBe("NoVibe wyłączone.")
+  await controller.submitInput("/novibe invalid")
+  expect(controller.getSnapshot().menu?.errorMessage).toBe("Użyj /novibe albo /novibe off.")
+  expect(calls).toEqual(["on:session-1", "off:session-1"])
+  expect(spy.prompts).toEqual([])
+  expect(spy.steering).toEqual([])
+  controller.dispose()
+})
+
 test("action commands reject arguments instead of sending a prompt", async () => {
   const spy = applicationSpy()
   const controller = new BuliUiController({ application: spy.application })
 
-  expect(await controller.submitInput("/login openai")).toBe("retained")
+  expect(await controller.submitInput("/login openai")).toBe("consumed")
   expect(controller.getSnapshot()).toMatchObject({
     authenticationMode: null,
-    inputError: "/login does not accept arguments",
+    menu: { errorMessage: "/login does not accept arguments" },
   })
   expect(spy.prompts).toEqual([])
   expect(spy.created).toEqual([])
@@ -1000,7 +1025,7 @@ for (const command of ["branch", "return"] as const) {
     expect(controller.getSnapshot().menu?.errorMessage).toContain("active session")
     await controller.activateSession("session-1")
     await controller.submitInput(`/${command} unexpected`)
-    expect(controller.getSnapshot().inputError).toContain("does not accept arguments")
+    expect(controller.getSnapshot().menu?.errorMessage).toContain(`Use /${command} without arguments`)
     expect(calls).toBe(0)
     await controller.submitInput(`/${command}`)
     expect(controller.getSnapshot().menu?.errorMessage).toContain("running")

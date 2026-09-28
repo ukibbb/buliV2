@@ -30,7 +30,7 @@ export interface IBuliPickerContent {
 type TBuliCommandHandler = (
     args: string,
     context: IBuliCommandContext,
-) => void | Promise<void>
+) => void | string | Promise<void | string>
 
 export type TBuliCommand = IBuliCommandInfo & (
     | {

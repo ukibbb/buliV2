@@ -114,6 +114,8 @@ function createSessionHarness(initialSnapshot: ISessionSnapshot) {
       path: `/workspace/src/file-${index}.ts`,
       displayPath: `src/file-${index}.ts`,
     })),
+    activateNovibe: async () => "NoVibe włączone.",
+    deactivateNovibe: async () => "NoVibe wyłączone.",
     createBranch: () => "side",
     returnToParentBranch: () => undefined,
     compactSession: async () => undefined,

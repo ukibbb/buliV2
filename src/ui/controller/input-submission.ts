@@ -92,14 +92,14 @@ export class BuliInputSubmission {
             ? this.commands.find((command) => command.name === name)
             : undefined
 
-        if (knownCommand && knownCommand.kind !== "prompt" && args) {
+        if (knownCommand?.kind === "picker" && args) {
             this.store.setInputError(
                 new Error(`/${knownCommand.name} does not accept arguments`),
             )
             return "retained"
         }
 
-        if (name && !args && knownCommand?.kind !== "prompt") {
+        if (name && knownCommand?.kind !== "prompt" && (knownCommand?.kind === "action" || !args)) {
             try {
                 if (await this.executeCommand(name, args)) {
                     this.consumeInput(input)

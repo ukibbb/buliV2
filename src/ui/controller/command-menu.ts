@@ -117,10 +117,18 @@ export class BuliCommandMenu {
         const context = this.commandContext()
         assertCommandsAllowed(context)
         if (command.kind === "action") {
-            await command.handler(args, context)
+            const message = await command.handler(args, context)
+            if (typeof message === "string" && !this.store.isDisposed
+                && this.commandContext().sessionId === context.sessionId) {
+                this.store.setMenu({
+                    mode: "commands", items: [], selectedIndex: 0,
+                    emptyMessage: message, errorMessage: null,
+                })
+            }
             return true
         }
 
+        if (args.trim()) throw new Error(`/${name} does not accept arguments`)
         this.cancelPendingLoad()
         const loadGeneration = this.loadGeneration
         const loadController = new AbortController()

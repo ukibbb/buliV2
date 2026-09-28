@@ -19,6 +19,10 @@ import type {
     ISnapshotSource,
 } from "@/app/contracts"
 import { generateRandomId } from "@/common/ids"
+import { version as applicationVersion } from "../../package.json"
+import { SessionMcpController } from "@/mcp/session-mcp-controller"
+import { McpConnection } from "@/mcp/mcp-connection"
+import { createNovibeContribution, NOVIBE_ENDPOINT, NOVIBE_SERVER_ID } from "@/mcp/novibe"
 import {
     AgentSession,
     type IContextEstimationPolicy,
@@ -103,7 +107,10 @@ export class BuliApplicationRuntime implements IBuliApplication {
 
     // What are agent sesions what is thier responsibility
     private readonly sessions = new Map<string, AgentSession>()
+    private readonly sessionMcpControllers = new Map<string, SessionMcpController>()
     private readonly sessionCloseTasks = new Map<string, Promise<void>>()
+    private readonly novibeConnections = new Map<string, McpConnection>()
+    private readonly novibeActivations = new Map<string, { abort: AbortController; task: Promise<string> }>()
     // what does it mean ?
     private disposed = false
     private disposeTask: Promise<void> | undefined
@@ -210,13 +217,70 @@ export class BuliApplicationRuntime implements IBuliApplication {
         if (!session) return Promise.resolve()
 
         const task = Promise.resolve().then(async () => {
-            await session.dispose()
+            this.sessionMcpControllers.get(sessionId)?.dispose()
+            await Promise.all([session.dispose(), this.closeNovibeConnection(sessionId)])
+            this.sessionMcpControllers.delete(sessionId)
             this.manager.releaseSession?.(sessionId)
             this.sessions.delete(sessionId)
             this.sessionCloseTasks.delete(sessionId)
         })
         this.sessionCloseTasks.set(sessionId, task)
         return task
+    }
+
+    readonly activateNovibe = (sessionId: string): Promise<string> => {
+        if (this.disposed) return Promise.reject(new Error("Buli runtime is disposed"))
+        const session = this.getOrOpenAgentSession(sessionId)
+        const controller = this.sessionMcpControllers.get(sessionId)!
+        if (controller.isActive(NOVIBE_SERVER_ID)) return Promise.resolve("NoVibe jest aktywne — tylko odczyt.")
+        const pending = this.novibeActivations.get(sessionId)
+        if (pending) return pending.task
+        const abort = new AbortController()
+        const signal = AbortSignal.any([abort.signal, this.lifetime.signal])
+        const task = Promise.resolve().then(async () => {
+            session.assertCanUpdateConfiguration()
+            const connection = await McpConnection.connect({
+                endpoint: new URL(NOVIBE_ENDPOINT),
+                clientInfo: { name: "buli", version: applicationVersion },
+                signal,
+            })
+            try {
+                signal.throwIfAborted()
+                if (this.sessionCloseTasks.has(sessionId) || this.sessions.get(sessionId) !== session) {
+                    throw new Error("Sesja została zamknięta podczas łączenia z NoVibe.")
+                }
+                const contribution = createNovibeContribution(connection)
+                this.novibeConnections.set(sessionId, connection)
+                controller.activate(NOVIBE_SERVER_ID, contribution)
+                return "NoVibe włączone — dostępne są cztery narzędzia odczytu."
+            } catch (error) {
+                if (this.novibeConnections.get(sessionId) === connection) this.novibeConnections.delete(sessionId)
+                try { await connection.close() } catch { /* Preserve the activation error. */ }
+                throw error
+            }
+        }).finally(() => {
+            if (this.novibeActivations.get(sessionId)?.abort === abort) this.novibeActivations.delete(sessionId)
+        })
+        this.novibeActivations.set(sessionId, { abort, task })
+        return task
+    }
+
+    readonly deactivateNovibe = async (sessionId: string): Promise<string> => {
+        if (this.disposed) throw new Error("Buli runtime is disposed")
+        const session = this.getOrOpenAgentSession(sessionId)
+        session.assertCanUpdateConfiguration()
+        this.sessionMcpControllers.get(sessionId)!.deactivate(NOVIBE_SERVER_ID)
+        await this.closeNovibeConnection(sessionId)
+        return "NoVibe wyłączone. Historia rozmowy pozostała bez zmian."
+    }
+
+    private async closeNovibeConnection(sessionId: string): Promise<void> {
+        const pending = this.novibeActivations.get(sessionId)
+        pending?.abort.abort(abortError("NoVibe connection cancelled"))
+        if (pending) await pending.task.catch(() => {})
+        const connection = this.novibeConnections.get(sessionId)
+        this.novibeConnections.delete(sessionId)
+        await connection?.close()
     }
 
     readonly listSessions = (): readonly ISessionInfo[] => {
@@ -430,6 +494,8 @@ export class BuliApplicationRuntime implements IBuliApplication {
         }
 
         const sessions = [...this.sessions.values()]
+        for (const controller of this.sessionMcpControllers.values()) controller.dispose()
+        this.sessionMcpControllers.clear()
         const modelRefreshTask = this.modelRefreshTask
         // An injected catalog loader may ignore cancellation. It cannot commit
         // after disposal, so observe rejection without holding shutdown open.
@@ -437,7 +503,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
         this.sessions.clear()
         this.listeners.clear()
         const results = await Promise.allSettled(
-            sessions.map(async (session) => session.dispose()),
+            sessions.flatMap((session) => [session.dispose(), this.closeNovibeConnection(session.id)]),
         )
         const errors: unknown[] = results.flatMap((result) =>
             result.status === "rejected" ? [result.reason] : []
@@ -767,7 +833,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
         info: ISessionInfo,
         agent: IAgentDefinition,
     ): AgentSession {
-        return new AgentSession({
+        const session = new AgentSession({
             agentId: agent.id,
             sessionId: info.id,
             manager: this.manager,
@@ -804,6 +870,14 @@ export class BuliApplicationRuntime implements IBuliApplication {
                 ? {}
                 : { toolOutputStore: this.toolOutputStore }),
         })
+        const controller = new SessionMcpController({
+            baseConfiguration: { systemPrompt: agent.systemPrompt, tools: agent.tools },
+            applyConfiguration: (configuration) => session.updateConfiguration(configuration),
+            assertToolExecutionAllowed: (tool, context) =>
+                session.assertToolExecutionAllowed(tool, context),
+        })
+        this.sessionMcpControllers.set(info.id, controller)
+        return session
     }
 
     private resolveAgent(agentId: string): IAgentDefinition {

@@ -171,6 +171,8 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
         followUp: [],
       }
     },
+    activateNovibe: async () => "NoVibe włączone.",
+    deactivateNovibe: async () => "NoVibe wyłączone.",
     createBranch: () => "side",
     returnToParentBranch: () => undefined,
     compactSession: async () => undefined,
@@ -1425,7 +1427,7 @@ test("keeps a long scrollable queue above menus without displacing the editor an
         expect(textarea.plainText).toBe("/")
         const frame = setup.captureCharFrame()
         expect(frame.split("\n")[0]!.trim()).toBe(WORKSPACE_ROOT)
-        expect(frame).toContain("→ compact")
+        expect(frame).toContain("→ novibe")
         expect(frame.replace(/\s+/g, "")).toContain("ctx~142k/200k(71%)")
         expect(frame.match(/ctx ~/g)).toHaveLength(1)
         expect(frame.split(glyphs.snakeHead).length - 1).toBe(1)
@@ -1513,7 +1515,7 @@ test("keeps slash commands above the focused editor through narrow terminal resi
       const frame = setup.captureCharFrame()
       const menu = setup.renderer.root.findDescendantById("command-menu")!
       const activity = setup.renderer.root.findDescendantById("chat-activity")!
-      expect(frame).toContain("→ compact")
+      expect(frame).toContain("→ novibe")
       expect(frame.replace(/\s+/g, ""))
         .toContain("ctx~142k/200k(71%)")
       expect(frame).not.toContain("budget)")

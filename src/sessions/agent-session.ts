@@ -9,6 +9,7 @@ import {
     type IAgentRunHandle,
     type IAgentState,
     type IRuntimeAgentTool,
+    type IAgentToolContext,
     type IToolOutputStore,
     type IModelProfile,
     type TUserInput,
@@ -58,6 +59,11 @@ interface IAgentSessionOptions {
     readonly toolOutputStore?: IToolOutputStore
 }
 
+export interface ISessionConfiguration {
+    readonly systemPrompt: string
+    readonly tools: readonly IRuntimeAgentTool[]
+}
+
 interface IQueuedSessionMessages {
     readonly steering: readonly TUserInput[]
     readonly followUp: readonly TUserInput[]
@@ -75,8 +81,8 @@ export class AgentSession {
     private readonly unsubscribeAgent: () => void
     private readonly disposeTimeoutMs: number
     private readonly resolveRunConfiguration: TSessionRunConfigurationResolver
-    private readonly systemPrompt: string
-    private readonly availableTools: readonly IRuntimeAgentTool[]
+    private systemPrompt: string
+    private availableTools: readonly IRuntimeAgentTool[]
     private tools: readonly IRuntimeAgentTool[]
     private branchSwitchInProgress = false
     private branchSwitchError: Error | undefined
@@ -205,11 +211,78 @@ export class AgentSession {
         this.switchBranch(() => this.manager.returnToParentBranch(this.id))
     }
 
-    private resolveActiveTools(): readonly IRuntimeAgentTool[] {
+    /** Applies complete model configuration without replacing conversation history. */
+    updateConfiguration(configuration: ISessionConfiguration): void {
+        this.assertCanUpdateConfiguration()
+        const availableTools = [...configuration.tools]
+        this.assertUniqueToolNames(availableTools)
+        const tools = this.resolveActiveTools(availableTools)
+        const nextConfiguration = {
+            systemPrompt: configuration.systemPrompt,
+            tools,
+        }
+        const nextContextUsage = this.estimateProjectedContext(
+            this.manager.getMessages(this.id),
+            nextConfiguration,
+        )
+        const nextSnapshot = this.createSnapshot(nextContextUsage)
+
+        this.agent.updateConfiguration(nextConfiguration)
+        this.systemPrompt = nextConfiguration.systemPrompt
+        this.availableTools = availableTools
+        this.tools = tools
+        this.contextUsage = nextContextUsage
+        this.snapshot = nextSnapshot
+        this.notifyListeners()
+    }
+
+    /** Host-side authorization for an externally supplied tool executor. */
+    assertToolExecutionAllowed(tool: IRuntimeAgentTool, context: IAgentToolContext): void {
+        if (this.disposed) throw new Error("AgentSession is disposed")
+        if (context.sessionId !== this.id) {
+            throw new Error("Tool execution belongs to another session")
+        }
+        this.assertBranchContextAvailable()
         const policy = this.manager.getActiveBranchId(this.id) === MAIN_BRANCH_ID
             ? ToolPolicy.Full
             : ToolPolicy.ReadOnly
-        return this.availableTools.filter((tool) => isToolAllowed(tool, policy))
+        if (!isToolAllowed(tool, policy)) {
+            throw new Error(`Tool "${tool.name}" is not allowed on this branch`)
+        }
+        context.signal.throwIfAborted()
+    }
+
+    private assertUniqueToolNames(tools: readonly IRuntimeAgentTool[]): void {
+        const names = new Set<string>()
+        for (const tool of tools) {
+            if (names.has(tool.name)) throw new Error(`Duplicate tool name: ${tool.name}`)
+            names.add(tool.name)
+        }
+    }
+
+    /** Checks readiness before asynchronous configuration preparation; application rechecks on commit. */
+    assertCanUpdateConfiguration(): void {
+        if (this.disposed) throw new Error("AgentSession is disposed")
+        this.assertBranchContextAvailable()
+        if (this.persistenceError !== undefined) {
+            throw new Error("Session persistence failed. Reopen the session before updating configuration.")
+        }
+        if (this.agent.state.isRunning || this.agent.state.pendingToolCallIds.size > 0) {
+            throw new Error("Cannot update configuration while AgentSession is running")
+        }
+        if (this.compactionTask) throw new Error("Cannot update configuration while compacting")
+        if (this.agent.pendingSteeringMessages.length > 0 || this.agent.pendingFollowUpMessages.length > 0) {
+            throw new Error("Restore queued messages before updating configuration")
+        }
+    }
+
+    private resolveActiveTools(
+        availableTools: readonly IRuntimeAgentTool[] = this.availableTools,
+    ): readonly IRuntimeAgentTool[] {
+        const policy = this.manager.getActiveBranchId(this.id) === MAIN_BRANCH_ID
+            ? ToolPolicy.Full
+            : ToolPolicy.ReadOnly
+        return availableTools.filter((tool) => isToolAllowed(tool, policy))
     }
 
     private assertBranchContextAvailable(): void {
@@ -636,18 +709,22 @@ export class AgentSession {
 
     private estimateProjectedContext(
         messages: readonly TAgentMessage[],
+        configuration: ISessionConfiguration = {
+            systemPrompt: this.systemPrompt,
+            tools: this.tools,
+        },
     ): IContextUsage {
         const projection = projectAgentContext(
             messages,
             this.manager.getCompactionCheckpoint(this.id),
         )
         return estimateContextUsage({
-            systemPrompt: this.systemPrompt,
+            systemPrompt: configuration.systemPrompt,
             ...(projection.contextSummary === undefined
                 ? {}
                 : { contextSummary: projection.contextSummary }),
             messages: projection.messages,
-            tools: this.tools,
+            tools: configuration.tools,
             ...(this.currentModelProfile === undefined
                 ? {}
                 : { modelProfile: this.currentModelProfile }),
@@ -698,6 +775,10 @@ export class AgentSession {
 
     private publishSnapshot(): void {
         this.snapshot = this.createSnapshot()
+        this.notifyListeners()
+    }
+
+    private notifyListeners(): void {
         if (this.disposed) return
         for (const listener of [...this.listeners]) {
             try {
@@ -708,7 +789,9 @@ export class AgentSession {
         }
     }
 
-    private createSnapshot(): ISessionSnapshot {
+    private createSnapshot(
+        contextUsage: IContextUsage | undefined = this.contextUsage,
+    ): ISessionSnapshot {
         const state = this.agent.state
 
         // Defensive manager getters return new objects, even for empty proposals.
@@ -754,9 +837,9 @@ export class AgentSession {
                 : { compactionProgress: this.compactionProgress }),
             isRunning: state.isRunning,
             isCompacting: this.compactionTask !== undefined,
-            ...(this.contextUsage === undefined
+            ...(contextUsage === undefined
                 ? {}
-                : { contextUsage: this.contextUsage }),
+                : { contextUsage }),
             ...(state.activeRunId ? { activeRunId: state.activeRunId } : {}),
             pendingToolCallIds: this.snapshotPendingToolCallIds(
                 state.pendingToolCallIds,

@@ -284,6 +284,23 @@ export class Agent {
         }
     }
 
+    /** Updates model configuration without replacing conversation history. */
+    updateConfiguration(
+        configuration: Pick<IAgentOptions, "systemPrompt" | "tools">,
+    ): void {
+        if (this.activeRun) {
+            throw new Error("Cannot update configuration while Agent is running")
+        }
+        if (this.steeringQueue.length > 0 || this.followUpQueue.length > 0) {
+            throw new Error("Restore queued messages before updating configuration")
+        }
+        this.stateValue = {
+            ...this.stateValue,
+            systemPrompt: configuration.systemPrompt,
+            tools: [...configuration.tools],
+        }
+    }
+
     replaceContext(
         messages: readonly TAgentMessage[],
         tools: readonly IRuntimeAgentTool[],

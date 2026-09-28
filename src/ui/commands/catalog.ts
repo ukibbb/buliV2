@@ -6,7 +6,8 @@ export const BULI_COMMANDS: readonly TBuliCommand[] = [
         kind: "action",
         name: "new",
         description: "Start a new session",
-        handler: (_args, context) => {
+        handler: (args, context) => {
+            assertNoArguments("new", args)
             return context.goHome()
         },
     },
@@ -117,7 +118,8 @@ export const BULI_COMMANDS: readonly TBuliCommand[] = [
         kind: "action",
         name: "login",
         description: "Connect an authentication provider",
-        handler: (_args, context) => {
+        handler: (args, context) => {
+            assertNoArguments("login", args)
             context.openAuthentication("login")
         },
     },
@@ -125,7 +127,8 @@ export const BULI_COMMANDS: readonly TBuliCommand[] = [
         kind: "action",
         name: "logout",
         description: "Disconnect an authentication provider",
-        handler: (_args, context) => {
+        handler: (args, context) => {
+            assertNoArguments("logout", args)
             context.openAuthentication("logout")
         },
     },
@@ -153,14 +156,31 @@ export const BULI_COMMANDS: readonly TBuliCommand[] = [
         kind: "action",
         name: "compact",
         description: "Summarize older context without deleting history",
-        handler: async (_args, context) => {
+        handler: async (args, context) => {
+            assertNoArguments("compact", args)
             if (!context.sessionId) {
                 throw new Error("Compaction requires an active session")
             }
             await context.application.compactSession(context.sessionId)
         },
     },
+    {
+        kind: "action",
+        name: "novibe",
+        description: "Włącz odczyt NoVibe lub wyłącz go przez /novibe off",
+        handler: async (args, { application, sessionId }) => {
+            if (!sessionId) throw new Error("NoVibe wymaga aktywnej sesji.")
+            const argument = args.trim()
+            if (argument === "") return application.activateNovibe(sessionId)
+            if (argument === "off") return application.deactivateNovibe(sessionId)
+            throw new Error("Użyj /novibe albo /novibe off.")
+        },
+    },
 ]
+
+function assertNoArguments(name: string, args: string): void {
+    if (args.trim()) throw new Error(`/${name} does not accept arguments`)
+}
 
 function shortSessionId(sessionId: string): string {
     return [...sessionId].slice(0, 8).join("")

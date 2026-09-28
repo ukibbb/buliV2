@@ -14,6 +14,27 @@ const TOOL_TARGET_MAX_CHARACTERS = 96
 // Persisted sessions can still contain calls to the removed handoff tool.
 const LEGACY_PATCH_HANDOFF_TOOL_NAME = "request_patch_handoff"
 
+// Keep the legacy tool palette local; other transcript text uses the app theme.
+const toolCallStyle = {
+    text: "#FFFFFF",
+    textMuted: "#64748B",
+    horizontalPadding: 1,
+    verticalPadding: 0,
+    leftRail: {
+        topLeft: "",
+        bottomLeft: "",
+        vertical: "┃",
+        topRight: "",
+        bottomRight: "",
+        horizontal: " ",
+        bottomT: "",
+        topT: "",
+        cross: "",
+        leftT: "",
+        rightT: "",
+    },
+} as const
+
 interface IToolCallDisplayProps {
     readonly call?: IToolCallContent
     readonly result?: IToolResultMessage
@@ -44,31 +65,44 @@ export function ToolCallDisplay(props: IToolCallDisplayProps): ReactNode {
     const detail = detailParts.length === 0 ? undefined : detailParts.join(" | ")
 
     const line = <text
-        fg={state.critical ? theme.red : state.live ? theme.amber : theme.textMuted}
+        fg={state.critical ? theme.red : state.live ? theme.amber : toolCallStyle.textMuted}
         minWidth={0}
         flexShrink={1}
         wrapMode="word"
         truncate={false}
     >
-        <span fg={theme.text}>{name}</span>
+        <span fg={toolCallStyle.text}>{name}</span>
         {target === undefined ? null : <>
-            <span fg={state.live ? theme.amber : theme.textMuted}> [</span>
-            <span fg={theme.textMuted}>{target}</span>
-            <span fg={state.live ? theme.amber : theme.textMuted}>]</span>
+            <span fg={state.accent}> [</span>
+            <span fg={toolCallStyle.textMuted}>{target}</span>
+            <span fg={state.accent}>]</span>
         </>}
         {detail === undefined ? null : <span
-            fg={state.critical ? theme.red : theme.textMuted}
+            fg={state.accent}
         >{` ${detail}`}</span>}
         {state.marker === undefined
             ? null
             : <span fg={state.accent}>{` ${state.marker}`}</span>}
     </text>
 
-    if (!props.result?.diff) return line
-
-    return <box width="100%" flexDirection="column">
-        {line}
-        <FileChangeDiff diff={props.result.diff} />
+    return <box
+        width="100%"
+        flexDirection="column"
+        border={["left"]}
+        borderColor={state.accent}
+        customBorderChars={toolCallStyle.leftRail}
+    >
+        <box
+            width="100%"
+            minWidth={0}
+            flexDirection="column"
+            backgroundColor={theme.surface}
+            paddingX={toolCallStyle.horizontalPadding}
+            paddingY={toolCallStyle.verticalPadding}
+        >
+            {line}
+            {props.result?.diff ? <FileChangeDiff diff={props.result.diff} /> : null}
+        </box>
     </box>
 }
 

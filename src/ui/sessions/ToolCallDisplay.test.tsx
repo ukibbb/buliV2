@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test"
-import { isValidElement, type ReactNode } from "react"
+import { RGBA } from "@opentui/core"
+import { testRender } from "@opentui/react/test-utils"
+import { act, isValidElement, type ReactNode } from "react"
 
 import type { IToolResultMessage } from "@/agent"
 import { FileChangeDiff } from "@/ui/sessions/FileChangeDiff"
@@ -51,7 +53,11 @@ test.each([false, true])("renders an OpenTUI diff even when isError=%s", (isErro
         throw new Error("Expected tool activity element")
     }
     expect(node.type).toBe("box")
-    const renderedDiff = node.props.children[1]
+    const body = node.props.children
+    if (!isValidElement<{ children: ReactNode[] }>(body)) {
+        throw new Error("Expected card body")
+    }
+    const renderedDiff = body.props.children[1]
     if (!isValidElement<{ diff: string; view: string; showLineNumbers: boolean }>(renderedDiff)) {
         throw new Error("Expected diff element")
     }
@@ -59,11 +65,51 @@ test.each([false, true])("renders an OpenTUI diff even when isError=%s", (isErro
     expect(renderedDiff.props).toMatchObject({ diff })
 })
 
-test("keeps the existing text-only view without a nonempty diff", () => {
+test("keeps a compact left-rail card without a nonempty diff or disclosure controls", () => {
     for (const result of [toolResult({}), toolResult({ diff: "" })]) {
         const node = ToolCallDisplay({ result })
-        if (!isValidElement(node)) throw new Error("Expected activity element")
-        expect(node.type).toBe("text")
+        if (!isValidElement<{ children: ReactNode }>(node)) throw new Error("Expected card")
+        expect(node.type).toBe("box")
+        expect(node.props).toMatchObject({
+            border: ["left"],
+            customBorderChars: { vertical: "┃", topLeft: "", bottomLeft: "" },
+            width: "100%",
+        })
+        const body = node.props.children
+        if (!isValidElement(body)) throw new Error("Expected card body")
+        expect(body.props).toMatchObject({
+            backgroundColor: "#000000", paddingX: 1, paddingY: 0,
+        })
+        expect(textContent(node)).not.toContain("[+]")
+        expect(textContent(node)).not.toContain("[-]")
+    }
+})
+
+test.each([
+    ["running", undefined, "#F59E0B"],
+    ["pending", undefined, "#F59E0B"],
+    [undefined, toolResult({ isError: false }), "#10B981"],
+    [undefined, toolResult({ isError: true }), "#EF4444"],
+    [undefined, toolResult({ isError: false, outcome: "rejected" }), "#94A3B8"],
+    [undefined, toolResult({ isError: false, outcome: "manual" }), "#F59E0B"],
+] as const)("renders legacy rail and text colors for phase %s and result %j", async (phase, result, accent) => {
+    const setup = await testRender(<ToolCallDisplay
+        call={{ type: "toolCall", toolCallId: "call", toolName: "read", input: { path: "src/example.ts" } }}
+        {...(phase === undefined ? {} : { phase })}
+        {...(result === undefined ? {} : { result })}
+    />, { width: 60, height: 4 })
+    try {
+        await act(async () => { await setup.renderOnce() })
+        const frame = setup.captureCharFrame()
+        expect(frame).toContain("┃ Read [src/example.ts]")
+        expect(frame).not.toContain("[+]")
+        expect(frame).not.toContain("[-]")
+        const spans = setup.captureSpans().lines.flatMap(line => line.spans)
+        for (const [text, color] of [["┃", accent], ["[", accent], ["Read", "#FFFFFF"], ["src/example.ts", "#64748B"]]) {
+            expect(spans.some(span => span.text.includes(text!) && span.fg.equals(RGBA.fromHex(color!)))).toBe(true)
+        }
+    } finally {
+        act(() => setup.renderer.destroy())
     }
 })
 

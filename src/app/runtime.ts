@@ -232,7 +232,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
         if (this.disposed) return Promise.reject(new Error("Buli runtime is disposed"))
         const session = this.getOrOpenAgentSession(sessionId)
         const controller = this.sessionMcpControllers.get(sessionId)!
-        if (controller.isActive(NOVIBE_SERVER_ID)) return Promise.resolve("NoVibe jest aktywne — tylko odczyt.")
+        if (controller.isActive(NOVIBE_SERVER_ID)) return Promise.resolve("NoVibe jest aktywne.")
         const pending = this.novibeActivations.get(sessionId)
         if (pending) return pending.task
         const abort = new AbortController()
@@ -252,7 +252,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
                 const contribution = createNovibeContribution(connection)
                 this.novibeConnections.set(sessionId, connection)
                 controller.activate(NOVIBE_SERVER_ID, contribution)
-                return "NoVibe włączone — dostępne są cztery narzędzia odczytu."
+                return "NoVibe włączone — pobrano wszystkie narzędzia serwera."
             } catch (error) {
                 if (this.novibeConnections.get(sessionId) === connection) this.novibeConnections.delete(sessionId)
                 try { await connection.close() } catch { /* Preserve the activation error. */ }

@@ -167,7 +167,7 @@ export const BULI_COMMANDS: readonly TBuliCommand[] = [
     {
         kind: "action",
         name: "novibe",
-        description: "Włącz odczyt NoVibe lub wyłącz go przez /novibe off",
+        description: "Włącz NoVibe lub wyłącz je przez /novibe off",
         handler: async (args, { application, sessionId }) => {
             if (!sessionId) throw new Error("NoVibe wymaga aktywnej sesji.")
             const argument = args.trim()

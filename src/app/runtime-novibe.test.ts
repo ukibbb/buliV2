@@ -23,7 +23,7 @@ function fixture(options: { missingTool?: boolean; waitForList?: Promise<void> }
             if (message.method === "tools/list") {
                 listStarted.resolve()
                 await options.waitForList
-                const names = options.missingTool ? [] : [...NOVIBE_READ_TOOL_NAMES, "edit_document", "create_document"]
+                const names = options.missingTool ? [] : [...NOVIBE_READ_TOOL_NAMES, "edit_document", "create_document", "future_tool"]
                 return respond({ tools: names.map((name) => ({ name, inputSchema: { type: "object" } })) })
             }
             return respond({ content: [{ type: "text", text: "Test note" }] })
@@ -57,7 +57,7 @@ function fixture(options: { missingTool?: boolean; waitForList?: Promise<void> }
     }
 }
 
-test("NoVibe activation is session-local, read-only and idempotent; off preserves history", async () => {
+test("NoVibe activation discovers all tools, is session-local and idempotent; off preserves history", async () => {
     const f = fixture()
     try {
         await f.runtime.activateNovibe(f.first)
@@ -65,7 +65,9 @@ test("NoVibe activation is session-local, read-only and idempotent; off preserve
         expect(f.initializations()).toBe(1)
         expect(f.runtime.openSession(f.first).getSnapshot().messages).toHaveLength(0)
         await f.prompt(f.first)
-        expect(f.requests.at(-1)?.tools.map((tool) => tool.name)).toEqual(NOVIBE_READ_TOOL_NAMES.map((name) => `novibe__${name}`))
+        expect(f.requests.at(-1)?.tools.map((tool) => tool.name)).toEqual(
+            [...NOVIBE_READ_TOOL_NAMES, "edit_document", "create_document", "future_tool"].map((name) => `novibe__${name}`),
+        )
         expect(f.requests.at(-1)?.systemPrompt).toContain("Test NoVibe instructions")
         await f.prompt(f.second)
         expect(f.requests.at(-1)?.tools).toHaveLength(0)
@@ -79,13 +81,13 @@ test("NoVibe activation is session-local, read-only and idempotent; off preserve
     } finally { await f.dispose() }
 })
 
-test("invalid discovery closes the connection without activating NoVibe", async () => {
+test("an empty tool catalog does not require hardcoded NoVibe tools", async () => {
     const f = fixture({ missingTool: true })
     try {
-        await expect(f.runtime.activateNovibe(f.first)).rejects.toThrow("list_libraries")
-        expect(f.closes[0]).toHaveBeenCalledTimes(1)
+        await f.runtime.activateNovibe(f.first)
         await f.prompt(f.first)
         expect(f.requests.at(-1)?.tools).toHaveLength(0)
+        expect(f.requests.at(-1)?.systemPrompt).toContain("Test NoVibe instructions")
     } finally { await f.dispose() }
 })
 

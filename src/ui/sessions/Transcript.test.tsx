@@ -1032,7 +1032,7 @@ test("keeps completed headings stable while streaming markdown grows", async () 
         expect(markdownBefore).toBeDefined()
         expect(markdownBefore?.streaming).toBe(true)
         expect(markdownBefore?.internalBlockMode).toBe("top-level")
-        expect(markdownBefore?.renderNode).toBeFunction()
+        expect(markdownBefore?.renderNode).toBeUndefined()
         expect(markdownBefore?.tableOptions).toEqual({
             style: "grid",
             widthMode: "full",
@@ -1128,7 +1128,7 @@ test("updates streaming code without replacing its renderable", async () => {
     }
 })
 
-test("replaces a completed streaming diff block with the diff viewer", async () => {
+test("keeps a streaming diff block as native code when its fence closes", async () => {
     let finishDiff: (() => void) | undefined
     const patch = [
         "--- a/example.ts",
@@ -1168,12 +1168,10 @@ test("replaces a completed streaming diff block with the diff viewer", async () 
         })
 
         expect(diffRenderables(setup.renderer.root)).toHaveLength(0)
-        expect(codeRenderables(setup.renderer.root).some(
+        const code = codeRenderables(setup.renderer.root).find(
             (renderable) => renderable.filetype === "diff",
-        )).toBe(false)
-        const spans = setup.captureSpans().lines.flatMap((line) => line.spans)
-        expect(spans.find((span) => span.text.includes("-const answer = 1"))?.fg.equals(RGBA.fromHex(theme.red))).toBe(true)
-        expect(spans.find((span) => span.text.includes("+const answer = 2"))?.fg.equals(RGBA.fromHex(theme.green))).toBe(true)
+        )
+        expect(code?.content).toBe(patch)
 
         act(() => {
             finishDiff?.()
@@ -1183,8 +1181,11 @@ test("replaces a completed streaming diff block with the diff viewer", async () 
         })
 
         const diffs = diffRenderables(setup.renderer.root)
-        expect(diffs).toHaveLength(1)
-        expect(diffs[0]?.diff).toBe(patch)
+        expect(diffs).toHaveLength(0)
+        expect(codeRenderables(setup.renderer.root).find(
+            (renderable) => renderable.filetype === "diff",
+        )).toBe(code)
+        expect(code?.content).toBe(patch)
     } finally {
         act(() => {
             setup.renderer.destroy()
@@ -1192,7 +1193,7 @@ test("replaces a completed streaming diff block with the diff viewer", async () 
     }
 })
 
-test("repairs completed diff counts before creating the diff viewer", async () => {
+test("preserves completed Markdown diff counts without repairing them", async () => {
     const patch = [
         "--- a/example.ts",
         "+++ b/example.ts",
@@ -1220,8 +1221,10 @@ test("repairs completed diff counts before creating the diff viewer", async () =
         })
 
         const diffs = diffRenderables(setup.renderer.root)
-        expect(diffs).toHaveLength(1)
-        expect(diffs[0]?.diff).toContain("@@ -1,1 +1,2 @@")
+        expect(diffs).toHaveLength(0)
+        expect(codeRenderables(setup.renderer.root).find(
+            (renderable) => renderable.filetype === "diff",
+        )?.content).toBe(patch)
         expect(message.content[0]).toEqual({
             type: "text",
             text: `\`\`\`diff\n${patch}\n\`\`\``,
@@ -1234,9 +1237,9 @@ test("repairs completed diff counts before creating the diff viewer", async () =
     }
 })
 
-test.each(["proposal", "markdown"] as const)(
-    "clips %s diff backgrounds and numbered text when scrolling the transcript",
-    async (kind) => {
+test(
+    "clips proposal diff backgrounds and numbered text when scrolling the transcript",
+    async () => {
         const patch = [
             "--- a/example.txt",
             "+++ b/example.txt",
@@ -1254,9 +1257,7 @@ test.each(["proposal", "markdown"] as const)(
             role: "assistant",
             createdAt: 1,
             stopReason: "stop",
-            content: kind === "markdown"
-                ? [{ type: "text", text: `\`\`\`diff\n${patch}\n\`\`\`` }]
-                : [],
+            content: [],
         }, {
             id: "later-message",
             sessionId: "default",
@@ -1280,7 +1281,7 @@ test.each(["proposal", "markdown"] as const)(
         >
             <Transcript
                 messages={messages}
-                fileChangeProposals={kind === "proposal" ? [{
+                fileChangeProposals={[{
                     id: "scrolling-proposal",
                     sessionId: "default",
                     runId: "run-diff",
@@ -1290,7 +1291,7 @@ test.each(["proposal", "markdown"] as const)(
                     diff: patch,
                     status: "applied",
                     createdAt: 2,
-                }] : []}
+                }]}
             />
         </scrollbox>, { width: 80, height: 10 })
 
@@ -1407,7 +1408,7 @@ test.each(["proposal", "markdown"] as const)(
     },
 )
 
-test("colors text for a structurally malformed completed diff", async () => {
+test("preserves malformed Markdown diffs as native code", async () => {
     const patch = [
         "--- a/example.ts",
         "+++ b/example.ts",
@@ -1433,11 +1434,9 @@ test("colors text for a structurally malformed completed diff", async () => {
         })
 
         expect(diffRenderables(setup.renderer.root)).toHaveLength(0)
-        expect(codeRenderables(setup.renderer.root).some(
+        expect(codeRenderables(setup.renderer.root).find(
             (renderable) => renderable.filetype === "diff",
-        )).toBe(false)
-        const spans = setup.captureSpans().lines.flatMap((line) => line.spans)
-        expect(spans.find((span) => span.text.includes("@@ -1 +1 @@"))?.fg.equals(RGBA.fromHex(theme.amber))).toBe(true)
+        )?.content).toBe(patch)
         expect(setup.captureCharFrame()).toContain("line without a diff prefix")
         expect(setup.captureCharFrame()).not.toContain("Error parsing diff")
     } finally {
@@ -1618,7 +1617,7 @@ test("renders a checkpoint at its anchor before uncompacted and streaming messag
         }}
     />, {
         width: 80,
-        height: 20,
+        height: 30,
     })
 
     try {
@@ -1651,15 +1650,18 @@ test("renders a checkpoint at its anchor before uncompacted and streaming messag
         expect(markdown[0]?.conceal).toBe(true)
         expect(markdown[0]?.concealCode).toBe(false)
         expect(markdown[0]?.internalBlockMode).toBe("top-level")
-        expect(markdown[0]?.renderNode).toBeFunction()
+        expect(markdown[0]?.renderNode).toBeUndefined()
         expect(markdown[0]?.tableOptions).toEqual(expect.objectContaining({
             style: "grid",
             widthMode: "full",
         }))
         const checkpointDiffs = diffRenderables(setup.renderer.root)
-        expect(checkpointDiffs).toHaveLength(1)
-        expect(checkpointDiffs[0]?.diff).toContain("@@ -1 +1 @@")
-        expect(checkpointDiffs[0]?.diff).toContain("+const value = 2")
+        expect(checkpointDiffs).toHaveLength(0)
+        const checkpointCode = codeRenderables(setup.renderer.root).find(
+            (renderable) => renderable.filetype === "diff",
+        )
+        expect(checkpointCode?.content).toContain("@@ -1 +1 @@")
+        expect(checkpointCode?.content).toContain("+const value = 2")
     } finally {
         act(() => {
             setup.renderer.destroy()
@@ -1769,7 +1771,7 @@ test.each([false, true])("restores the previous checkpoint or empty transcript w
     }
 })
 
-test("uses streaming diff fallback in a compaction preview until its fence closes", async () => {
+test("keeps compaction diff previews as native code after the fence closes", async () => {
     let closeFence: (() => void) | undefined
     const patch = "--- a/value.ts\n+++ b/value.ts\n@@ -1 +1 @@\n-const value = 1\n+const value = 2"
     function CompactionDiff(): React.ReactNode {
@@ -1786,14 +1788,18 @@ test("uses streaming diff fallback in a compaction preview until its fence close
         const markdown = markdownRenderables(setup.renderer.root)[0]
         expect(markdown?.streaming).toBe(true)
         expect(diffRenderables(setup.renderer.root)).toHaveLength(0)
-        const spans = setup.captureSpans().lines.flatMap((line) => line.spans)
-        expect(spans.find((span) => span.text.includes("-const value = 1"))?.fg.equals(RGBA.fromHex(theme.red))).toBe(true)
-        expect(spans.find((span) => span.text.includes("+const value = 2"))?.fg.equals(RGBA.fromHex(theme.green))).toBe(true)
+        const code = codeRenderables(setup.renderer.root).find(
+            (renderable) => renderable.filetype === "diff",
+        )
+        expect(code?.content).toBe(patch)
         act(() => closeFence?.())
         await act(async () => { await setup.renderOnce() })
         expect(markdownRenderables(setup.renderer.root)[0]).toBe(markdown)
-        expect(diffRenderables(setup.renderer.root)).toHaveLength(1)
-        expect(diffRenderables(setup.renderer.root)[0]?.diff).toBe(patch)
+        expect(diffRenderables(setup.renderer.root)).toHaveLength(0)
+        expect(codeRenderables(setup.renderer.root).find(
+            (renderable) => renderable.filetype === "diff",
+        )).toBe(code)
+        expect(code?.content).toBe(patch)
     } finally {
         act(() => setup.renderer.destroy())
     }
@@ -1902,7 +1908,7 @@ test("styles rich Markdown and renders code without line numbers", async () => {
         expect(markdown?.conceal).toBe(true)
         expect(markdown?.concealCode).toBe(false)
         expect(markdown?.internalBlockMode).toBe("top-level")
-        expect(markdown?.renderNode).toBeFunction()
+        expect(markdown?.renderNode).toBeUndefined()
 
         const tables = tableRenderables(setup.renderer.root)
         expect(tables).toHaveLength(1)
@@ -1934,12 +1940,13 @@ test("styles rich Markdown and renders code without line numbers", async () => {
             "typescript",
             "python",
             "bash",
+            "diff",
         ])
         expect(fencedCode.every((renderable) => renderable.syntaxStyle === syntax))
             .toBe(true)
 
-        expect(spans.find((span) => span.text.includes("-before"))?.fg.equals(RGBA.fromHex(theme.red))).toBe(true)
-        expect(spans.find((span) => span.text.includes("+after"))?.fg.equals(RGBA.fromHex(theme.green))).toBe(true)
+        expect(fencedCode.find((renderable) => renderable.filetype === "diff")?.content)
+            .toBe("-before\n+after")
         expect(lineNumberRenderables(setup.renderer.root)).toHaveLength(0)
     } finally {
         act(() => {

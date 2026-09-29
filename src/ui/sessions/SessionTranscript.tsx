@@ -2,7 +2,7 @@ import { MacOSScrollAccel, type ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard } from "@opentui/react"
 import { useMemo, useRef } from "react"
 
-import { MAIN_BRANCH_ID, type ISessionSnapshot } from "@/sessions"
+import type { ISessionSnapshot } from "@/sessions"
 import { useSessionSelector } from "@/ui/context/application-context"
 import { sameSnapshotFields } from "@/ui/context/use-snapshot-selector"
 import { Transcript } from "@/ui/sessions/Transcript"
@@ -31,11 +31,6 @@ export function SessionTranscript(props: { readonly sessionId: string }) {
     })
 
     return <>
-        {session.activeBranchId !== MAIN_BRANCH_ID ? (
-            <text fg={theme.amber} wrapMode="word">
-                {`Side branch ${session.activeBranchId} · read-only · /return to parent`}
-            </text>
-        ) : null}
         <scrollbox
             id="session-transcript"
             ref={scrollRef}

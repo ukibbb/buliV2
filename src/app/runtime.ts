@@ -63,6 +63,9 @@ export interface IBuliRuntimeOptions {
     // readonly tuiControler: ITuiController
     readonly models: readonly IBuliModelRuntimeConfig[]
     readonly selection: IBuliModelSelection
+    readonly restoredSelection?: IBuliModelSelection
+    readonly preferencesWarning?: string
+    readonly saveModelSelection?: (selection: IBuliModelSelection) => void
     readonly loadModels?: TBuliModelRegistrationLoader
     readonly loadProviderCatalogs?: TProviderCatalogLoader
     // Opts into discovery-gated startup (requires loadModels). This in-memory
@@ -98,6 +101,9 @@ export class BuliApplicationRuntime implements IBuliApplication {
     private readonly lifetime = new AbortController()
 
     private selection: IBuliModelSelection
+    private preserveRestoredModel = false
+    private preferencesWarning: string | undefined
+    private readonly saveModelSelection: ((selection: IBuliModelSelection) => void) | undefined
     private modelRefreshTask: Promise<void> | undefined
     private modelCatalog: IBuliApplicationSnapshot["modelCatalog"]
     // Even selecting the current value is explicit intent, unlike the private
@@ -155,6 +161,15 @@ export class BuliApplicationRuntime implements IBuliApplication {
 
         this.resolveAgent(this.defaultAgentId)
         this.selectedRegistration = this.resolveSelectedModel()
+        this.saveModelSelection = options.saveModelSelection
+        this.preferencesWarning = options.preferencesWarning
+        if (options.restoredSelection !== undefined && this.loadProviderCatalogs) {
+            this.selection = { ...options.restoredSelection }
+            this.selectedRegistration = undefined
+            this.preserveRestoredModel = true
+            this.modelManuallySelected = true
+            this.manuallySelectedReasoningEffort = this.selection.reasoningEffort
+        }
         this.snapshot = this.createSnapshot()
     }
 
@@ -534,6 +549,10 @@ export class BuliApplicationRuntime implements IBuliApplication {
         const selectedRegistration = this.resolveSelectedModel(selection)
         // Sprawdź model oraz effort przed zmianą jakiegokolwiek stanu runtime.
 
+        this.saveModelSelection?.({ ...selection })
+        const hadPreferencesWarning = this.preferencesWarning !== undefined
+        this.preferencesWarning = undefined
+        this.preserveRestoredModel = false
         if (field === "modelId") this.modelManuallySelected = true
         else this.manuallySelectedReasoningEffort = selection.reasoningEffort
         const dismissNotice = this.modelCatalog?.status === "ready"
@@ -542,6 +561,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
             selection.modelId === this.selection.modelId
             && selection.reasoningEffort === this.selection.reasoningEffort
             && !dismissNotice
+            && !hadPreferencesWarning
         ) {
             // Rozpoznaj, że kandydacka selekcja jest identyczna z aktualną.
             return
@@ -609,6 +629,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
             defaultAgentId: this.defaultAgentId,
             models: Object.freeze(models),
             selection: Object.freeze({ ...selection }),
+            ...(this.preferencesWarning === undefined ? {} : { preferencesWarning: this.preferencesWarning }),
             ...(this.loadProviderCatalogs ? {
                 providerCatalogs: Object.freeze(this.providerCatalogs.map((status) => Object.freeze({ ...status }))),
                 selectedModelAvailable: this.providerModels.size > 0 && modelsSource.some((model) => model.id === selection.modelId),
@@ -657,7 +678,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
         if (current && previous && current.modelProfile?.providerId !== previous.modelProfile?.providerId) {
             throw new Error("Automatic provider switching is disabled: selected model changed provider")
         }
-        const hasCandidate = current || (previous && models.some((model) => sameKnownProvider(previous, model)))
+        const hasCandidate = current || (!this.preserveRestoredModel && previous && models.some((model) => sameKnownProvider(previous, model)))
         let selection = this.selection
         if (hasCandidate) {
             selection = reconcileSelection(models, selection, previous,
@@ -666,6 +687,9 @@ export class BuliApplicationRuntime implements IBuliApplication {
         }
         const requestedId = this.initialProviderDiscovery && !this.modelManuallySelected
             ? this.preferredModelIds?.[0] ?? this.selection.modelId : this.selection.modelId
+        if (this.preserveRestoredModel && current && selection.reasoningEffort !== this.selection.reasoningEffort) {
+            this.preferencesWarning = `Saved reasoning "${this.selection.reasoningEffort}" is unavailable for "${selection.modelId}". Using "${selection.reasoningEffort}" without changing saved preferences.`
+        }
         this.providerModels = next
         this.providerCatalogs = statuses
         this.models = models

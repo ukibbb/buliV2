@@ -350,19 +350,19 @@ test("branch indicator and transcript follow session snapshots", async () => {
   const setup = await testRender(sessionElement(harness), { width: 100, height: 20 })
   try {
     await act(async () => { await setup.renderOnce() })
-    expect(setup.captureCharFrame()).toContain("Side branch side-a")
-    expect(setup.captureCharFrame()).toContain("read-only")
+    expect(setup.captureCharFrame()).toContain("BRANCH")
+    expect(setup.captureCharFrame()).toContain("tylko odczyt")
     expect(setup.captureCharFrame()).toContain("Transcript line 0")
     await act(async () => {
       harness.setSnapshot(sessionSnapshot({ activeBranchId: "side-parent", messages: transcriptMessages(2) }))
       await setup.renderOnce()
     })
-    expect(setup.captureCharFrame()).toContain("Side branch side-parent")
+    expect(setup.captureCharFrame()).toContain("BRANCH")
     await act(async () => {
       harness.setSnapshot(sessionSnapshot())
       await setup.renderOnce()
     })
-    expect(setup.captureCharFrame()).not.toContain("Side branch")
+    expect(setup.captureCharFrame()).not.toContain("BRANCH")
     expect(setup.captureCharFrame()).not.toContain("Transcript line 0")
   } finally {
     harness.controller.dispose()

@@ -1,3 +1,5 @@
+import { SessionIndicators } from "@/ui/chat/SessionIndicators"
+import { SessionErrors } from "@/ui/chat/SessionErrors"
 import { ChatFeedback } from "@/ui/chat/ChatFeedback"
 import { ChatInput } from "@/ui/chat/ChatInput"
 import { ChatMenu } from "@/ui/chat/ChatMenu"
@@ -19,6 +21,8 @@ export function Chat(props: { readonly sessionId?: string | undefined }) {
             <SessionQueue sessionId={props.sessionId} />
             <ChatMenu />
             <SessionActivity sessionId={props.sessionId} />
+            <SessionIndicators sessionId={props.sessionId} />
+            <SessionErrors sessionId={props.sessionId} />
             <ChatInput />
             <ChatFeedback sessionId={props.sessionId} />
         </box>

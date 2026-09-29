@@ -60,6 +60,7 @@ interface IAgentSessionOptions {
 }
 
 export interface ISessionConfiguration {
+    readonly activeMcpServerIds?: readonly string[]
     readonly systemPrompt: string
     readonly tools: readonly IRuntimeAgentTool[]
 }
@@ -82,6 +83,12 @@ export class AgentSession {
     private readonly disposeTimeoutMs: number
     private readonly resolveRunConfiguration: TSessionRunConfigurationResolver
     private systemPrompt: string
+    private mcpStatusCache: {
+        tools: readonly IRuntimeAgentTool[]
+        serverIds: readonly string[]
+        value: NonNullable<ISessionSnapshot["activeMcpServers"]>
+    } | undefined
+    private activeMcpServerIds: readonly string[] = []
     private availableTools: readonly IRuntimeAgentTool[]
     private tools: readonly IRuntimeAgentTool[]
     private branchSwitchInProgress = false
@@ -225,11 +232,13 @@ export class AgentSession {
             this.manager.getMessages(this.id),
             nextConfiguration,
         )
-        const nextSnapshot = this.createSnapshot(nextContextUsage)
+        const activeMcpServerIds = [...(configuration.activeMcpServerIds ?? [])]
+        const nextSnapshot = this.createSnapshot(nextContextUsage, tools, activeMcpServerIds)
 
         this.agent.updateConfiguration(nextConfiguration)
         this.systemPrompt = nextConfiguration.systemPrompt
         this.availableTools = availableTools
+        this.activeMcpServerIds = activeMcpServerIds
         this.tools = tools
         this.contextUsage = nextContextUsage
         this.snapshot = nextSnapshot
@@ -791,6 +800,8 @@ export class AgentSession {
 
     private createSnapshot(
         contextUsage: IContextUsage | undefined = this.contextUsage,
+        tools: readonly IRuntimeAgentTool[] = this.tools,
+        activeMcpServerIds: readonly string[] = this.activeMcpServerIds,
     ): ISessionSnapshot {
         const state = this.agent.state
 
@@ -826,6 +837,9 @@ export class AgentSession {
 
         return freezeSessionSnapshot({
             activeBranchId: this.manager.getActiveBranchId(this.id),
+            ...(activeMcpServerIds.length === 0 ? {} : {
+                activeMcpServers: this.snapshotMcpServers(tools, activeMcpServerIds),
+            }),
             messages: state.messages,
             ...this.presentationSource,
             ...this.queuedMessagesSource,
@@ -847,6 +861,22 @@ export class AgentSession {
             ...(state.lastRunReason ? { lastRunReason: state.lastRunReason } : {}),
             ...(state.errorMessage ? { errorMessage: state.errorMessage } : {}),
         }, this.snapshotFreezeCache)
+    }
+
+    private snapshotMcpServers(tools: readonly IRuntimeAgentTool[], serverIds: readonly string[]) {
+        if (this.mcpStatusCache?.tools === tools && this.mcpStatusCache.serverIds === serverIds) {
+            return this.mcpStatusCache.value
+        }
+        const value = serverIds.map((serverId) => ({
+            serverId,
+            toolNames: tools.flatMap((tool) => {
+                const binding = tool.sourceBinding
+                return binding?.source.kind === "mcp" && binding.source.serverId === serverId
+                    ? [binding.toolName] : []
+            }),
+        }))
+        this.mcpStatusCache = { tools, serverIds, value }
+        return value
     }
 
     private snapshotPendingToolCallIds(

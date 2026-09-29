@@ -47,7 +47,7 @@ test("MCP is inactive by default and activation is idempotent", () => {
     expect(configurations).toHaveLength(1)
     expect(configurations[0]?.systemPrompt).toBe("Base\n\nNotes")
     controller.deactivate("novibe")
-    expect(configurations.at(-1)).toEqual({ systemPrompt: "Base", tools: [] })
+    expect(configurations.at(-1)).toEqual({ systemPrompt: "Base", tools: [], activeMcpServerIds: [] })
     controller.deactivate("novibe")
     expect(configurations).toHaveLength(2)
 })

@@ -104,6 +104,7 @@ export class SessionMcpController {
             names.add(tool.name)
         }
         return {
+            activeMcpServerIds: [...registrations.keys()],
             systemPrompt: [
                 this.baseConfiguration.systemPrompt,
                 ...contributions.map((contribution) => contribution.instructions),

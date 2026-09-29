@@ -20,7 +20,7 @@ export function SessionActivity(props: { readonly sessionId: string | undefined 
             <box flexShrink={0}><SnakeAnimation /></box>
             <text minWidth={0} flexShrink={1} wrapMode="word" fg={activity.isCompacting ? theme.amber : theme.textMuted}>
                 {activity.isCompacting
-                    ? "Compacting context · Esc stop"
+                    ? "Compacting context | Esc stop"
                     : "Enter steer | Alt+Enter follow-up | Esc stop"}
             </text>
         </> : null}

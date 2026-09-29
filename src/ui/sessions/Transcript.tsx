@@ -3,6 +3,7 @@ import {
     DiffRenderable,
     TextRenderable,
 } from "@opentui/core"
+import { ErrorNotice } from "@/ui/chat/ErrorNotice"
 import { useRenderer } from "@opentui/react"
 import { useMemo, type ReactNode } from "react"
 
@@ -171,7 +172,7 @@ function AssistantCard(props: {
                 return null
             })}
             {props.message.errorMessage
-                ? <text fg={theme.red}>{props.message.errorMessage}</text>
+                ? <ErrorNotice message={props.message.errorMessage} />
                 : null}
         </box>
     )

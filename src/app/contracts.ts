@@ -72,6 +72,7 @@ export interface IBuliApplicationSnapshot {
     readonly selection: IBuliModelSelection
     readonly providerCatalogs?: readonly IBuliProviderCatalogStatus[]
     readonly selectedModelAvailable?: boolean
+    readonly preferencesWarning?: string
     // Present only when initial catalog discovery is required. Loading/error
     // hides provisional models and blocks generation; a ready message is advisory.
     // Until ready, selection may reference a provisional ID absent from models.

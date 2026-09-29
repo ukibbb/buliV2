@@ -1,4 +1,5 @@
 import { realpath } from "node:fs/promises"
+import { defaultModelPreferencesPath, loadModelPreferences, saveModelPreferences } from "@/app/preferences/model-preferences"
 import { dirname, resolve } from "node:path"
 
 import type {
@@ -17,7 +18,7 @@ import { createInjectedModelComposition } from "@/app/bootstrap/model-compositio
 import { createProviderModelComposition } from "@/app/bootstrap/create-provider-model-composition"
 import type { IKimiModelCatalog } from "@/providers/kimi"
 import type { IDeepSeekModelCatalog } from "@/providers/deepseek"
-import type { IBuliApplication } from "@/app/contracts"
+import type { IBuliApplication, IBuliModelSelection } from "@/app/contracts"
 import { BuliApplicationRuntime } from "@/app/runtime"
 import type { IOpenAiModelCatalog } from "@/providers/openai"
 import {
@@ -85,6 +86,7 @@ export interface IBuliApplicationOptions {
     readonly modelCatalog?: IOpenAiModelCatalog
     readonly kimiModelCatalog?: IKimiModelCatalog
     readonly deepseekModelCatalog?: IDeepSeekModelCatalog
+    readonly preferencesPath?: string
 }
 
 /** Composes provider, tools, persistence, sessions, and the UI boundary. */
@@ -135,7 +137,14 @@ export async function createBuliApplication(
             additionalTools: modelComposition.additionalTools,
         })
 
+        const preferencesPath = options.preferencesPath ?? defaultModelPreferencesPath()
+        const preferences = options.model === undefined ? loadModelPreferences(preferencesPath) : {}
         const applicationRuntime = new BuliApplicationRuntime({
+            ...(preferences.selection === undefined ? {} : { restoredSelection: preferences.selection }),
+            ...(preferences.warning === undefined ? {} : { preferencesWarning: preferences.warning }),
+            ...(options.model === undefined ? {
+                saveModelSelection: (selection: IBuliModelSelection) => saveModelPreferences(preferencesPath, selection),
+            } : {}),
             workspaceRoot,
             manager,
             agents: [buli],

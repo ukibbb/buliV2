@@ -328,7 +328,7 @@ test.each([40, 80])("keeps one activity snake above the editor at %i columns", a
         .slice(activity.y, activity.y + activity.height)
         .map((line) => line.trim()).join(" ")
       if (state.isCompacting) {
-        expect(activityText).toContain("Compacting context · Esc stop")
+        expect(activityText).toContain("Compacting context | Esc stop")
         expect(frame).not.toContain("Enter steer")
       } else if (state.isRunning) {
         expect(activityText).toContain("Enter steer | Alt+Enter follow-up | Esc stop")
@@ -399,7 +399,7 @@ test("keeps asynchronous path suggestions above the editor and completes the sel
       act(() => setup.resize(width, height))
       await render()
       expect(setup.captureCharFrame()).toContain("→ src/file-29.ts")
-      expect(setup.captureCharFrame()).toContain("Test / medium")
+      expect(setup.captureCharFrame()).toContain("[ Test : medium ]")
       checkMenuPosition()
     }
     act(() => setup.mockInput.pressEnter())
@@ -1773,7 +1773,7 @@ test("renders a submitted prompt and streamed response", async () => {
     expect(frame).toContain("Rendered prompt")
     expect(frame).toContain("Rendered response")
     expect(frame).not.toContain("model")
-    expect(frame).toContain("Test / medium")
+    expect(frame).toContain("[ Test : medium ]")
     expect(frame).not.toContain("reasoning")
   } finally {
     await runtime.dispose()

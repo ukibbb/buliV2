@@ -16,12 +16,15 @@ export function ChatFeedback(props: { readonly sessionId: string | undefined }) 
 
     return <>
         {/* Readiness blocks generation, not editing or commands used to recover it. */}
-        {feedback.catalogNotice ? <text
-            fg={feedback.catalogNotice.severity === "error" ? theme.red : theme.amber}
+        {feedback.catalogNotice?.severity === "warning" ? <text
+            fg={theme.amber}
             minWidth={0}
             flexShrink={0}
             wrapMode="word"
         >{feedback.catalogNotice.message}</text> : null}
+        {application.preferencesWarning ? <text fg={theme.amber} flexShrink={0} wrapMode="word">
+            {application.preferencesWarning}
+        </text> : null}
         {feedback.providerWarnings.map((warning) => (
             <text key={warning.providerId} fg={theme.amber} flexShrink={0} wrapMode="word">
                 {warning.message}

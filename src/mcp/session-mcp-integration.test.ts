@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { defineAgentTool, ToolAccess, type IAgentToolContext } from "@/agent"
+import { defineAgentTool, ToolAccess, ToolPolicy, type IAgentToolContext } from "@/agent"
 import { AgentSession } from "@/sessions/agent-session"
 import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
 import { SessionMcpController } from "@/mcp/session-mcp-controller"
@@ -40,7 +40,11 @@ test("real sessions enforce MCP execution policy without sharing activation", as
     try {
         expect(first.session.state.systemPrompt).toBe("Base")
         expect(first.session.state.tools).toEqual([])
-        first.controller.activate("novibe", { instructions: "Notes", tools: [tool] })
+        first.controller.activate("novibe", { instructions: "Notes", tools: [{ ...tool, sourceBinding: {
+            source: { kind: "mcp", serverId: "novibe" }, toolName: "write_note", policy: ToolPolicy.Full,
+        } }] })
+        expect(first.session.getSnapshot().activeMcpServers).toEqual([{ serverId: "novibe", toolNames: ["write_note"] }])
+        expect(second.session.getSnapshot().activeMcpServers).toBeUndefined()
         const executor = first.session.state.tools[0]!
         expect(second.session.state.systemPrompt).toBe("Base")
         expect(second.session.state.tools).toEqual([])
@@ -49,9 +53,11 @@ test("real sessions enforce MCP execution policy without sharing activation", as
         await expect(executor.validateAndExecute({}, { ...context, sessionId: "second" }))
             .rejects.toThrow("another session")
         first.session.createBranch()
+        expect(first.session.getSnapshot().activeMcpServers).toEqual([{ serverId: "novibe", toolNames: [] }])
         expect(first.session.state.tools).toEqual([])
         await expect(executor.validateAndExecute({}, context)).rejects.toThrow("not allowed")
         first.session.returnToParentBranch()
+        expect(first.session.getSnapshot().activeMcpServers?.[0]?.toolNames).toEqual(["write_note"])
         await expect(executor.validateAndExecute({}, {
             ...context, signal: AbortSignal.abort(new Error("Cancelled")),
         })).rejects.toThrow("Cancelled")

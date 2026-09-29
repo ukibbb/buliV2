@@ -122,7 +122,7 @@ test("recovers a queue viewport through zero and one available row", async () =>
   }
 })
 
-test("keeps errors readable beside a long model name", async () => {
+test("status leaves errors to the dedicated notice",  async () => {
   const setup = await testRender(
     <ChatStatus
       isRunning={false}
@@ -143,9 +143,9 @@ test("keeps errors readable beside a long model name", async () => {
     })
 
     const frame = setup.captureCharFrame()
-    expect(frame).toContain("Critical")
+    expect(frame).not.toContain("Critical")
     expect(frame).toContain("provider")
-    expect(frame).toContain("failure")
+    expect(frame).not.toContain("failure")
   } finally {
     act(() => {
       setup.renderer.destroy()
@@ -324,7 +324,7 @@ test.each([
         await setup.renderOnce()
       })
 
-      expect(setup.captureCharFrame().trim()).toBe(`Model / medium · ${expected}`)
+      expect(setup.captureCharFrame().trim()).toBe(`[ Model : medium ] | ${expected}`)
       const spans = setup.captureSpans().lines.flatMap((line) => line.spans)
       expect(spans.find((span) => span.text.includes("ctx ~"))?.fg.equals(
         RGBA.fromHex(theme.textMuted),
@@ -338,7 +338,7 @@ test.each([
       })
 
       const narrowFrame = setup.captureCharFrame()
-      expect(narrowFrame).toContain("Model / medium")
+      expect(narrowFrame).toContain("[ Model : medium ]")
       expect(narrowFrame.split("\n").map((line) => line.trim()).join(" "))
         .toContain(expected)
       expect(narrowFrame).not.toMatch(/NaN|Infinity|undefined/)
@@ -375,7 +375,7 @@ test.each([40, 80])("keeps the active Astra context estimate readable at %i colu
   try {
     await act(async () => { await setup.renderOnce() })
     const frame = setup.captureCharFrame().split("\n").map((line) => line.trim()).join(" ")
-    expect(frame).toContain("GPT-6 Astra Fast / high")
+    expect(frame).toContain("[ GPT-6 Astra Fast : high ]")
     expect(frame).toContain("ctx ~80k/200k (40%)")
     expect(frame.match(/ctx ~/g)).toHaveLength(1)
     expect(frame).not.toContain("compact")
@@ -410,7 +410,10 @@ test("recovers menu rows through notices, reopening and resizing in every frame"
     act(() => update(selectedMenu))
     await render("→ item-4")
     act(() => update({ ...selectedMenu, errorMessage: "Menu error" }))
-    await render("Menu error")
+    act(() => setup.resize(60, 14))
+    await act(async () => { await setup.renderOnce() })
+    expect(setup.captureCharFrame()).toContain("│ Menu error")
+    act(() => setup.resize(60, 12))
     act(() => update(selectedMenu))
     await render("→ item-4")
     expect(setup.captureCharFrame()).not.toContain("Menu error")

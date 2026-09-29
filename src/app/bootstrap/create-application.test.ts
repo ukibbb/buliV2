@@ -31,6 +31,8 @@ import {
   MODELS_DEV_ASTRA_REFERENCE,
 } from "../../../test/fixtures/openai-astra-reference"
 
+import { loadModelPreferences, saveModelPreferences } from "@/app/preferences/model-preferences"
+
 const TEST_CREDENTIAL: IOAuthCredential = {
   type: "oauth",
   access: "synthetic-access-token",
@@ -38,6 +40,25 @@ const TEST_CREDENTIAL: IOAuthCredential = {
   accountId: "synthetic-account-id",
   expires: 1_000_000,
 }
+
+test("bootstrap restores persisted selection and saves explicit changes for the next launch", async () => {
+  const first = await applicationFixture()
+  const second = await applicationFixture()
+  try {
+    const initial = await first.start()
+    const modelId = initial.runtime.getSnapshot().selection.modelId
+    initial.runtime.selectReasoningEffort("high")
+    const saved = loadModelPreferences(join(first.workspace, "preferences.json")).selection!
+    expect(saved).toEqual({ modelId, reasoningEffort: "high" })
+    saveModelPreferences(join(second.workspace, "preferences.json"), saved)
+    const restarted = await second.start()
+    expect(restarted.runtime.getSnapshot().selection).toEqual(saved)
+    expect(restarted.runtime.getSnapshot().selectedModelAvailable).toBe(true)
+  } finally {
+    await first.dispose()
+    await second.dispose()
+  }
+})
 
 test("does not attach OpenAI web search to an injected provider-neutral model", async () => {
   const fixture = await applicationFixture()
@@ -649,6 +670,7 @@ async function applicationFixture() {
       startupTask = createBuliApplication({
         signal: controller.signal,
         workspaceRoot: workspace,
+        preferencesPath: join(workspace, "preferences.json"),
         manager,
         authentication,
         modelCatalog,

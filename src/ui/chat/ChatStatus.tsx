@@ -24,37 +24,19 @@ export function ChatStatus(props: IChatStatusProps) {
             flexWrap="wrap"
             paddingLeft={1}
             paddingBottom={1}
-            gap={1}
+            columnGap={1}
+            rowGap={0}
         >
-            {!props.isRunning && !props.isCompacting && props.lastRunReason === "aborted" ? (
-                <text fg={theme.textMuted}>Operation aborted</text>
-            ) : null}
-            {!props.isCompacting && props.errorMessage ? (
-                <text
-                    fg={theme.red}
-                    minWidth={0}
-                    flexShrink={1}
-                    wrapMode="word"
-                >{props.errorMessage}</text>
-            ) : null}
-            {props.inputError ? (
-                <text
-                    fg={theme.red}
-                    minWidth={0}
-                    flexShrink={1}
-                    wrapMode="word"
-                >{props.inputError}</text>
-            ) : null}
             <text minWidth={0} flexShrink={1} truncate={false} wrapMode="word">
+                <span>[ </span>
                 <span fg={theme.green}>{props.selectedModelName}</span>
-                <span> / </span>
+                <span> : </span>
                 <span fg={theme.amber}>{props.reasoningEffort}</span>
-                {props.contextUsage ? (
-                    <span fg={theme.textMuted}>
-                        {` · ${formatContextUsage(props.contextUsage)}`}
-                    </span>
-                ) : null}
+                <span> ]</span>
             </text>
+            {props.contextUsage ? <text fg={theme.textMuted} minWidth={0} flexShrink={1} wrapMode="word">
+                {`| ${formatContextUsage(props.contextUsage)}`}
+            </text> : null}
         </box>
     )
 }

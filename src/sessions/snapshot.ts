@@ -10,9 +10,15 @@ import type { ICompactionCheckpoint } from "@/sessions/compaction/checkpoint"
 import type { IContextUsage } from "@/sessions/compaction/context-budget"
 import type { ICompactionProgress } from "@/sessions/compaction/session-compactor"
 
+export interface ISessionMcpStatus {
+    readonly serverId: string
+    readonly toolNames: readonly string[]
+}
+
 /** Immutable read model published by one live agent session. */
 export interface ISessionSnapshot {
     readonly activeBranchId: string
+    readonly activeMcpServers?: readonly ISessionMcpStatus[]
     readonly messages: readonly TAgentMessage[]
     readonly fileChangeProposals: readonly IFileChangeProposalRecord[]
     readonly pendingSteeringMessages: readonly IUserMessage[]
@@ -46,6 +52,9 @@ export function freezeSessionSnapshot(
     // reuse their frozen public copy while every publication gets a new shell.
     const frozen: ISessionSnapshot = Object.freeze({
         activeBranchId: snapshot.activeBranchId,
+        ...(snapshot.activeMcpServers === undefined ? {} : {
+            activeMcpServers: freezeBranch(snapshot.activeMcpServers, previousSource?.activeMcpServers, previousValue?.activeMcpServers),
+        }),
         messages: freezeBranch(
             snapshot.messages,
             previousSource?.messages,

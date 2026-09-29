@@ -1,3 +1,4 @@
+import { ErrorNotice } from "@/ui/chat/ErrorNotice"
 import { useTerminalDimensions } from "@opentui/react"
 import type { ReactNode } from "react"
 
@@ -70,9 +71,7 @@ export function InputMenu(props: IInputMenuProps): ReactNode {
             </text>
         ) : null}
         {menu.errorMessage ? (
-            <text selectable={false} flexShrink={0} wrapMode="word" fg={theme.red}>
-                {menu.errorMessage}
-            </text>
+            <ErrorNotice message={menu.errorMessage} />
         ) : null}
     </ClippedBox>
 }

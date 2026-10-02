@@ -101,7 +101,7 @@ export async function createBuliApplication(
         options.workspaceRoot ?? process.cwd(),
     )
     options.signal.throwIfAborted()
-    await loadWorkspaceInstructions(
+    const workspaceInstructions = await loadWorkspaceInstructions(
         workspaceRoot,
         options.signal,
     )
@@ -131,6 +131,7 @@ export async function createBuliApplication(
         const buli = createBuliAgentDefinition({
             workspaceRoot,
             toolOutputStore,
+            ...(workspaceInstructions === undefined ? {} : { workspaceInstructions }),
             ...defaultToolExecutablePaths(),
         }, {
             ...(options.tools === undefined ? {} : { tools: options.tools }),

@@ -60,7 +60,7 @@ test("bootstrap restores persisted selection and saves explicit changes for the 
   }
 })
 
-test("does not attach OpenAI web search to an injected provider-neutral model", async () => {
+test("passes workspace instructions to an injected model without attaching OpenAI web search", async () => {
   const fixture = await applicationFixture()
   let modelRequest: IAgentModelRequest | undefined
 
@@ -101,12 +101,12 @@ test("does not attach OpenAI web search to an injected provider-neutral model", 
     expect(modelRequest.systemPrompt).not.toContain("web_search")
     expect(modelRequest.systemPrompt).toContain("When a result contains outputId")
     expect(modelRequest.systemPrompt).not.toContain("generate immutable proposals")
-    expect(modelRequest.systemPrompt).not.toContain(
-      '<workspace_instructions source=".buli/AGENTS.md">',
-    )
-    expect(modelRequest.systemPrompt).not.toContain(
-      "Run the project checks before finishing.",
-    )
+    expect(modelRequest.systemPrompt).toContain(JSON.stringify({
+      workspaceInstructions: {
+        source: ".buli/AGENTS.md",
+        content: "Run the project checks before finishing.",
+      },
+    }))
     expect(startup.runtime.workspaceRoot).toBe(await realpath(fixture.workspace))
     const session = startup.runtime.openSession(promptRun.sessionId).getSnapshot()
     const assistant = startup.runtime.openSession(promptRun.sessionId).loadHistoryPage("main").messages.find((message) => message.role === "assistant")

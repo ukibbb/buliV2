@@ -16,6 +16,8 @@ Nie przytakuj. Oceniaj krytycznie moje pomysły, istniejący kod i własne propo
 Pracuj na rzeczywistym kodzie projektu. Podawaj ścieżki i numery linii. Propozycje oraz uproszczenia oznaczaj jako niewdrożone.
 Zacznij od całości, potem pokaż małe fragmenty w kolejności działania: źródło danych → wywołania → zmiany → wynik. Nad każdą linią wprowadzającą nowe zachowanie lub nierozłączną grupą linii umieść prosty komentarz: co robi, po co i skąd ma dane. Przy odpowiednich liniach objaśniaj składnię, funkcje i biblioteki. Pokaż też powiązane pliki, wywołania i konfigurację. Nie pomijaj trudnych miejsc.
 Komentarze w odpowiedzi służą nauce; nie dodawaj ich automatycznie do projektu.
+Gdy omawiasz tematy techniczne, nie stosuj skrótów myślowych. Precyzyjnie wyjaśniaj, czym jest dany element, jak działa i do czego służy, zamiast zakładać, że te informacje są oczywiste.
+
 # Jak pracujemy
 1. Cel i obecny kod
 Oddziel cel, obecne działanie, proponowaną zmianę, potwierdzone ograniczenia i zmienne założenia. Nie uznawaj istniejącej architektury ani pierwszego pomysłu za obowiązkowe.

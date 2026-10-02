@@ -1,9 +1,6 @@
-import type {
-    IFileChangeProposalRecord,
-    TAgentMessage,
-} from "@/agent"
-import type { ISessionBranchData } from "@/sessions/branches"
+import type { IUserPathReference } from "@/agent"
 import type { ICompactionCheckpoint } from "@/sessions/compaction/checkpoint"
+import type { IHistoryCursor, IHistoryPage, IRequiredContext, TAppendMessageResult, TStoredMessage } from "@/sessions/history-contracts"
 
 /** Lightweight session metadata used by navigation and persistence indexes. */
 export interface ISessionInfo {
@@ -14,44 +11,26 @@ export interface ISessionInfo {
     readonly updatedAt: number
 }
 
-export interface ISessionArchive {
-    readonly info: ISessionInfo
-    readonly activeBranchId: string
-    readonly branches: readonly ISessionBranchData[]
-    readonly fileChangeProposals: readonly IFileChangeProposalRecord[]
-}
-
-/** Defines storage operations required by live and persisted sessions. */
+/** Selective durable reads; callers never own a second archive. */
 export interface ISessionManager {
     readonly getActiveBranchId: (sessionId: string) => string
     readonly createBranch: (sessionId: string, branchId: string) => void
     readonly returnToParentBranch: (sessionId: string) => void
     readonly createSession: (info: ISessionInfo) => void
-    /** Acquires session ownership and reloads history; failure retains other ownership. */
-    readonly openSession?: (sessionId: string) => void
-    /** Releases ownership after the caller has disposed the live session. */
-    readonly releaseSession?: (sessionId: string) => void
+    readonly openSession: (sessionId: string) => void
+    readonly releaseSession: (sessionId: string) => void
     readonly getSessionInfo: (sessionId: string) => ISessionInfo | undefined
     readonly listSessions: () => readonly ISessionInfo[]
-    readonly getMessages: (sessionId: string) => readonly TAgentMessage[]
-    readonly appendMessage: (message: TAgentMessage) => void
-    /**
-     * Invalidates cached proposal/checkpoint presentation after history restoration or saves
-     * or session deletion/recreation, including same-ID replacements. Message
-     * appends do not change this revision: live Agent state owns that branch.
-     * Reading the revision must not clone the payload or perform storage I/O.
-     */
-    readonly getPresentationRevision: (sessionId: string) => number
-    /** Historical proposal records retained for transcript compatibility. */
-    readonly getFileChangeProposals: (
-        sessionId: string,
-    ) => readonly IFileChangeProposalRecord[]
-    readonly getCompactionCheckpoint: (
-        sessionId: string,
-    ) => ICompactionCheckpoint | undefined
-    readonly saveCompactionCheckpoint: (
-        checkpoint: ICompactionCheckpoint,
-    ) => void
+    readonly appendMessage: (message: TStoredMessage) => TAppendMessageResult
+    readonly recoverInterruptedTools: (sessionId: string) => void
+    readonly loadRequiredContext: (sessionId: string) => IRequiredContext
+    readonly loadRecentConversation: (sessionId: string) => readonly TStoredMessage[]
+    readonly loadSelectedPaths: (sessionId: string) => readonly IUserPathReference[]
+    readonly loadHistoryPage: (sessionId: string, branchId: string, cursor?: IHistoryCursor) => IHistoryPage
+    readonly getCompactionCheckpoint: (sessionId: string) => ICompactionCheckpoint | undefined
+    readonly saveCompactionCheckpoint: (checkpoint: ICompactionCheckpoint) => void
+    /** Atomically deletes only a creation with no committed messages/checkpoints in any branch. */
+    readonly deleteEmptySession: (sessionId: string) => boolean
     readonly deleteSession: (sessionId: string) => void
-    readonly dispose?: () => void | Promise<void>
+    readonly dispose: () => void | Promise<void>
 }

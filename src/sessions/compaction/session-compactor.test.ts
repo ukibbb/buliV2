@@ -11,6 +11,7 @@ import {
   type ICompactionProgress,
   projectAgentContext,
 } from "@/sessions"
+import { projectRequiredContext } from "@/sessions/compaction/context-projector"
 
 test("compactSessionMessages replaces completed history and retains an unprocessed user", async () => {
   const messages: readonly TAgentMessage[] = [
@@ -28,7 +29,7 @@ test("compactSessionMessages replaces completed history and retains an unprocess
 
   const checkpoint = await compactSessionMessages({
     sessionId: "session-1",
-    messages,
+    context: { messages },
     runConfiguration: configuration(requests, "Completed tool inspection"),
     reason: "automatic",
     signal: new AbortController().signal,
@@ -73,8 +74,7 @@ test("compactSessionMessages updates a previous checkpoint through all completed
 
   const checkpoint = await compactSessionMessages({
     sessionId: "session-1",
-    messages,
-    previousCheckpoint: previous,
+    context: projectRequiredContext(messages, previous),
     runConfiguration: configuration(requests, "Updated checkpoint"),
     reason: "automatic",
     signal: new AbortController().signal,
@@ -118,7 +118,7 @@ test("compactSessionMessages retains every trailing user not yet processed by a 
 
   const checkpoint = await compactSessionMessages({
     sessionId: "session-1",
-    messages,
+    context: { messages },
     runConfiguration: configuration([], "Old completed turn"),
     reason: "automatic",
     signal: new AbortController().signal,
@@ -146,7 +146,7 @@ test("compactSessionMessages rejects incomplete tool history before invoking the
 
   await expect(compactSessionMessages({
     sessionId: "session-1",
-    messages,
+    context: { messages },
     runConfiguration: {
       model: {
         async *stream() {
@@ -163,7 +163,7 @@ test("compactSessionMessages rejects incomplete tool history before invoking the
   expect(modelCalled).toBe(false)
 })
 
-test("compactSessionMessages rejects tool results from a different run or tool", async () => {
+test("compactSessionMessages rejects tool results from a different owner, run or tool", async () => {
   const toolAssistant = assistant("assistant-tools", [{
     type: "toolCall",
     toolCallId: "call-1",
@@ -171,6 +171,7 @@ test("compactSessionMessages rejects tool results from a different run or tool",
     input: { path: "README.md" },
   }])
   const invalidResults = [
+    toolResult("wrong-owner", "call-1", "Contents", toolAssistant.runId, "other-assistant"),
     toolResult("wrong-run", "call-1", "Contents", "other-run"),
     {
       ...toolResult(
@@ -187,7 +188,7 @@ test("compactSessionMessages rejects tool results from a different run or tool",
     let modelCalled = false
     await expect(compactSessionMessages({
       sessionId: "session-1",
-      messages: [user("user-1", "Inspect"), toolAssistant, result],
+      context: { messages: [user("user-1", "Inspect"), toolAssistant, result] },
       runConfiguration: {
         model: {
           async *stream() {
@@ -229,8 +230,7 @@ test("compactSessionMessages replaces a legacy checkpoint beyond the safe cutoff
 
   const checkpoint = await compactSessionMessages({
     sessionId: "session-1",
-    messages,
-    previousCheckpoint: previous,
+    context: projectRequiredContext(messages, previous),
     allowSummaryRecompression: true,
     runConfiguration: configuration([], "Migrated checkpoint"),
     reason: "automatic",
@@ -269,8 +269,7 @@ test("compactSessionMessages reuses an unstructured stored checkpoint", async ()
   const requests: IAgentModelRequest[] = []
   const checkpoint = await compactSessionMessages({
     sessionId: "session-1",
-    messages,
-    previousCheckpoint: previous,
+    context: projectRequiredContext(messages, previous),
     runConfiguration: configuration(requests, "Updated checkpoint"),
     reason: "manual",
     signal: new AbortController().signal,
@@ -318,6 +317,7 @@ test("compactSessionMessages prefers a tool summary over its full durable output
         "call-1",
         "R".repeat(3_000) + toolOutputMiddle + "R".repeat(3_000) + toolOutputTail,
         "run-tool-assistant",
+        "tool-assistant",
       ),
       outcome: "completed",
       summary: toolSummary,
@@ -328,7 +328,7 @@ test("compactSessionMessages prefers a tool summary over its full durable output
 
   const checkpoint = await compactSessionMessages({
     sessionId: "session-1",
-    messages,
+    context: { messages },
     runConfiguration: configuration(
       requests,
       "Safe cumulative checkpoint",
@@ -372,7 +372,7 @@ test("compactSessionMessages sends a 400 KB history in one 272k request", async 
 
   await compactSessionMessages({
     sessionId: "session-1",
-    messages,
+    context: { messages },
     runConfiguration: configuration(requests, "Large checkpoint", 272_000),
     reason: "automatic",
     signal: new AbortController().signal,
@@ -408,8 +408,7 @@ test("compactSessionMessages recompresses an existing checkpoint at the same anc
 
   const checkpoint = await compactSessionMessages({
     sessionId: "session-1",
-    messages,
-    previousCheckpoint: previous,
+    context: projectRequiredContext(messages, previous),
     allowSummaryRecompression: true,
     runConfiguration: configuration(requests, "Shorter checkpoint"),
     reason: "automatic",
@@ -443,8 +442,7 @@ test("compactSessionMessages rejects same-anchor recompression without size prog
 
   const checkpoint = await compactSessionMessages({
     sessionId: "session-1",
-    messages,
-    previousCheckpoint: previous,
+    context: projectRequiredContext(messages, previous),
     allowSummaryRecompression: true,
     runConfiguration: configuration([], "Stable checkpoint"),
     reason: "automatic",
@@ -475,8 +473,7 @@ test("compactSessionMessages accepts same-size text with smaller request seriali
 
   const checkpoint = await compactSessionMessages({
     sessionId: "session-1",
-    messages,
-    previousCheckpoint: previous,
+    context: projectRequiredContext(messages, previous),
     allowSummaryRecompression: true,
     runConfiguration: configuration([], "X".repeat(200)),
     reason: "automatic",
@@ -499,10 +496,10 @@ test("compactSessionMessages rejects oversized history without serial fallback",
 
   await expect(compactSessionMessages({
     sessionId: "session-1",
-    messages: [
+    context: { messages: [
       user("oversized-user", "X".repeat(600 * 1_024)),
       assistant("oversized-assistant", [{ type: "text", text: "Done" }]),
-    ],
+    ] },
     runConfiguration: {
       model,
       modelProfile: {
@@ -542,7 +539,7 @@ test("compactSessionMessages reports cumulative progress before completion with 
   let completed = false
   const task = compactSessionMessages({
     sessionId: "session-1",
-    messages: [...conversation(4), user("pending", "Not processed yet", 5)],
+    context: { messages: [...conversation(4), user("pending", "Not processed yet", 5)] },
     runConfiguration: { model, reasoningEffort: "low" },
     reason: "manual",
     signal: new AbortController().signal,
@@ -600,7 +597,7 @@ test("compactSessionMessages stops progress reporting when aborted by its observ
 
   await expect(compactSessionMessages({
     sessionId: "session-1",
-    messages: conversation(4),
+    context: { messages: conversation(4) },
     runConfiguration: { model, reasoningEffort: "low" },
     reason: "manual",
     signal: controller.signal,
@@ -623,7 +620,7 @@ test("compactSessionMessages rejects truncated or empty summaries", async () => 
   }
   await expect(compactSessionMessages({
     sessionId: "session-1",
-    messages: conversation(4),
+    context: { messages: conversation(4) },
     runConfiguration: { model: truncated, reasoningEffort: "low" },
     reason: "automatic",
     signal: new AbortController().signal,
@@ -641,7 +638,7 @@ test("compactSessionMessages rejects truncated or empty summaries", async () => 
   }
   await expect(compactSessionMessages({
     sessionId: "session-1",
-    messages: conversation(4),
+    context: { messages: conversation(4) },
     runConfiguration: { model: empty, reasoningEffort: "low" },
     reason: "automatic",
     signal: new AbortController().signal,
@@ -673,7 +670,7 @@ test("compactSessionMessages accepts completed summaries regardless of Markdown 
     const messages = conversation(4)
     const checkpoint = await compactSessionMessages({
       sessionId: "session-1",
-      messages,
+      context: { messages },
       runConfiguration: { model, reasoningEffort: "low" },
       reason: "automatic",
       signal: new AbortController().signal,
@@ -701,7 +698,7 @@ test("compactSessionMessages performs a final abort check", async () => {
 
   await expect(compactSessionMessages({
     sessionId: "session-1",
-    messages: conversation(4),
+    context: { messages: conversation(4) },
     runConfiguration: { model, reasoningEffort: "low" },
     reason: "manual",
     signal: controller.signal,
@@ -844,12 +841,14 @@ function toolResult(
   toolCallId: string,
   content: string,
   runId: string,
+  assistantMessageId = "assistant-tools",
 ): Extract<TAgentMessage, { role: "toolResult" }> {
   return {
     id,
     sessionId: "session-1",
     runId,
     role: "toolResult",
+    assistantMessageId,
     toolCallId,
     toolName: "read_file",
     content,

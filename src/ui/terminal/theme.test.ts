@@ -3,19 +3,20 @@ import { RGBA } from "@opentui/core"
 
 import { syntax, theme } from "@/ui/terminal/theme"
 
-test("keeps the classic Buli palette", () => {
+test("keeps the bright Buli palette", () => {
   expect(theme).toEqual({
     amber: "#F59E0B",
     red: "#EF4444",
     green: "#10B981",
     pink: "#EC4899",
     surface: "#000000",
-    text: "#E5E7EB",
-    textMuted: "#94A3B8",
+    text: "#FFFFFF",
+    textSecondary: "#A3A3A3",
+    violet: "#A78BFA",
   })
 })
 
-test("styles detailed code and markdown scopes with the classic palette", () => {
+test("styles detailed code and markdown scopes with the shared palette", () => {
   expect(syntax.getStyle("spell")?.fg).toBeUndefined()
   expect(syntax.getStyle("nospell")?.fg).toBeUndefined()
   expect(syntax.getStyle("none")?.fg).toBeUndefined()
@@ -36,7 +37,7 @@ test("styles detailed code and markdown scopes with the classic palette", () => 
   )).toBe(true)
 
   const comment = syntax.getStyle("comment.documentation")
-  expect(comment?.fg?.equals(RGBA.fromHex(theme.textMuted))).toBe(true)
+  expect(comment?.fg?.equals(RGBA.fromHex(theme.textSecondary))).toBe(true)
   expect(comment?.italic).toBe(true)
 
   const heading = syntax.getStyle("markup.heading.1")
@@ -49,7 +50,7 @@ test("styles detailed code and markdown scopes with the classic palette", () => 
   expect(inlineCode?.bg?.equals(RGBA.fromHex(theme.surface))).toBe(true)
 
   const link = syntax.getStyle("markup.link.url")
-  expect(link?.fg?.equals(RGBA.fromHex(theme.textMuted))).toBe(true)
+  expect(link?.fg?.equals(RGBA.fromHex(theme.textSecondary))).toBe(true)
   expect(link?.underline).toBe(true)
   expect(link?.dim).toBe(true)
 })

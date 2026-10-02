@@ -5,11 +5,10 @@ import type {
     IAgentRunConfiguration,
     IModelUsage,
 } from "@/agent"
-import {
-    assertCheckpointAnchor,
-    type ICompactionCheckpoint,
-} from "@/sessions/compaction/checkpoint"
+import type { ICompactionCheckpoint } from "@/sessions/compaction/checkpoint"
 import { ESTIMATED_BYTES_PER_TOKEN, type IContextEstimationPolicy } from "@/sessions/compaction/context-budget"
+import type { IRequiredContext } from "@/sessions/history-contracts"
+import { assertCompactionCheckpoint } from "@/sessions/validation"
 
 const COMPACTION_MAX_OUTPUT_HEADROOM_TOKENS = 16_384
 const COMPACTION_UNKNOWN_CONTEXT_INPUT_TOKENS = 64_000
@@ -47,11 +46,10 @@ export interface ICompactionProgress {
     readonly summary: string
 }
 
-/** Supplies durable history and model dependencies for one compaction pass. */
+/** Supplies a validated checkpoint with its complete suffix, or all history without a checkpoint. */
 export interface ICompactSessionMessagesOptions {
     readonly sessionId: string
-    readonly messages: readonly TAgentMessage[]
-    readonly previousCheckpoint?: ICompactionCheckpoint
+    readonly context: IRequiredContext
     readonly runConfiguration: IAgentRunConfiguration & {
         readonly estimationPolicy?: IContextEstimationPolicy
     }
@@ -69,25 +67,15 @@ export async function compactSessionMessages(
     options: ICompactSessionMessagesOptions,
 ): Promise<ICompactionCheckpoint | undefined> {
     options.signal.throwIfAborted()
-    if (options.messages.some((message) => message.sessionId !== options.sessionId)) {
-        throw new Error("Cannot compact messages from different sessions")
-    }
-
-    const storedPrevious = options.previousCheckpoint
-    if (storedPrevious) {
-        if (storedPrevious.sessionId !== options.sessionId) {
-            throw new Error("Compaction checkpoint belongs to another session")
-        }
-        assertCheckpointAnchor(storedPrevious, options.messages)
-    }
-
-    const cutoff = eligibleCompactionEnd(options.messages)
-    const previous = storedPrevious
-        && storedPrevious.compactedMessageCount <= cutoff
-        ? storedPrevious
-        : undefined
+    assertCompactionContext(options.context, options.sessionId)
+    const { messages, checkpoint: previous } = options.context
+    const cutoff = eligibleCompactionEnd(messages)
     const previousCount = previous?.compactedMessageCount ?? 0
-    const recompressing = cutoff === previousCount
+    const compactedMessageCount = previousCount + cutoff
+    if (!Number.isSafeInteger(compactedMessageCount)) {
+        throw new Error("Compacted message count exceeds the safe integer range")
+    }
+    const recompressing = cutoff === 0
     if (
         recompressing
         && (!previous || options.allowSummaryRecompression !== true)
@@ -97,19 +85,21 @@ export async function compactSessionMessages(
     const previousSummary = recompressing ? previous?.summary : undefined
     if (recompressing && previousSummary === undefined) return undefined
 
-    const anchor = options.messages[cutoff - 1]
-    if (!anchor) throw new Error("Compaction cutoff has no anchor message")
+    const throughMessageId = recompressing
+        ? previous?.throughMessageId
+        : messages[cutoff - 1]?.id
+    if (!throughMessageId) throw new Error("Compaction cutoff has no anchor message")
     const checkpointId = options.generateId()
     let history = recompressing
         ? previousSummary ?? ""
-        : serializeCompactionMessages(options.messages.slice(previousCount, cutoff))
+        : serializeCompactionMessages(messages.slice(0, cutoff))
     if (history.length === 0) {
         history = "[No provider-visible content in this history segment.]"
     }
     const result = await summarizeCompactionHistory(
         options,
         checkpointId,
-        anchor.id,
+        throughMessageId,
         history,
         recompressing ? undefined : previous?.summary,
         recompressing ? "recompress" : "history",
@@ -128,8 +118,8 @@ export async function compactSessionMessages(
         sessionId: options.sessionId,
         createdAt: options.now(),
         reason: options.reason,
-        compactedMessageCount: cutoff,
-        throughMessageId: anchor.id,
+        compactedMessageCount,
+        throughMessageId,
         summary: normalizedSummary,
         ...(options.runConfiguration.modelProfile === undefined
             ? {}
@@ -142,12 +132,38 @@ export async function compactSessionMessages(
     return checkpoint
 }
 
+function assertCompactionContext(context: IRequiredContext, sessionId: string): void {
+    if (context.messages.some((message) => message.sessionId !== sessionId)) {
+        throw new Error("Cannot compact messages from different sessions")
+    }
+    const previous = context.checkpoint
+    if (!previous) {
+        if (context.contextSummary !== undefined) {
+            throw new Error("Compaction summary requires its checkpoint boundary")
+        }
+        return
+    }
+    assertCompactionCheckpoint(previous)
+    if (previous.sessionId !== sessionId) {
+        throw new Error("Compaction checkpoint belongs to another session")
+    }
+    if (!Number.isSafeInteger(previous.compactedMessageCount)) {
+        throw new Error("Compacted message count exceeds the safe integer range")
+    }
+    if (context.contextSummary !== previous.summary) {
+        throw new Error("Compaction context summary disagrees with its checkpoint")
+    }
+    if (context.messages.some((message) => message.id === previous.throughMessageId)) {
+        throw new Error("Compaction context must contain only messages after its checkpoint")
+    }
+}
+
 /** Returns the complete prefix that a model has already had a chance to process. */
 export function eligibleCompactionEnd(messages: readonly TAgentMessage[]): number {
     let latestProviderAssistantIndex = -1
     let pendingToolCalls: ReadonlyMap<
         string,
-        { readonly runId: string; readonly toolName: string }
+        { readonly assistantMessageId: string; readonly sessionId: string; readonly runId: string; readonly toolName: string }
     > | undefined
     for (const [index, message] of messages.entries()) {
         if (pendingToolCalls) {
@@ -157,6 +173,8 @@ export function eligibleCompactionEnd(messages: readonly TAgentMessage[]): numbe
             if (
                 message.role !== "toolResult"
                 || expected === undefined
+                || expected.assistantMessageId !== message.assistantMessageId
+                || expected.sessionId !== message.sessionId
                 || expected.runId !== message.runId
                 || expected.toolName !== message.toolName
             ) {
@@ -177,6 +195,8 @@ export function eligibleCompactionEnd(messages: readonly TAgentMessage[]): numbe
             )
             if (toolCalls.length > 0) {
                 const calls = new Map<string, {
+                    readonly assistantMessageId: string
+                    readonly sessionId: string
                     readonly runId: string
                     readonly toolName: string
                 }>()
@@ -185,6 +205,8 @@ export function eligibleCompactionEnd(messages: readonly TAgentMessage[]): numbe
                         throw new Error("Invalid tool sequence in compaction history")
                     }
                     calls.set(content.toolCallId, {
+                        assistantMessageId: message.id,
+                        sessionId: message.sessionId,
                         runId: message.runId,
                         toolName: content.toolName,
                     })

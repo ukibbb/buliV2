@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test"
 import { defineAgentTool, ToolAccess, ToolPolicy, type IAgentToolContext } from "@/agent"
 import { AgentSession } from "@/sessions/agent-session"
-import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
+import { SQLiteSessionManager } from "@/sessions/sqlite/sqlite-session-manager"
 import { SessionMcpController } from "@/mcp/session-mcp-controller"
 
 function createSession(id: string) {
-    const manager = new InMemorySessionManager()
+    const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
     manager.createSession({ id, agentId: "agent", title: "Test", createdAt: 1, updatedAt: 1 })
     const session = new AgentSession({
         agentId: "agent", sessionId: id, manager,

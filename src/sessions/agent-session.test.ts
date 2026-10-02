@@ -4,26 +4,25 @@ import {
   type IAgentModel,
   type IAgentModelRequest,
   type IAssistantMessage,
-  type IFileChangeProposalRecord,
   type IToolResultMessage,
   type IUserMessage,
 } from "@/agent"
 import {
   AgentSession,
   freezeSessionSnapshot,
-  InMemorySessionManager,
+  SQLiteSessionManager,
   type ISessionManager,
   type ISessionSnapshot,
 } from "@/sessions"
 
 test("AgentSession restores history, persists completion barriers, and publishes stable snapshots", async () => {
-  const manager = new InMemorySessionManager()
+  const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
   manager.createSession(sessionInfo("session-1", "test-agent", "Restored"))
   manager.appendMessage(userMessage("Restored"))
   const persistedBeforeModel: number[] = []
   const model: IAgentModel = {
     async *stream() {
-      persistedBeforeModel.push(manager.getMessages("session-1").length)
+      persistedBeforeModel.push(manager.loadRequiredContext("session-1").messages.length)
       yield { type: "text-start", id: "answer" }
       yield { type: "text-delta", id: "answer", delta: "Response" }
       yield { type: "text-end", id: "answer" }
@@ -53,15 +52,15 @@ test("AgentSession restores history, persists completion barriers, and publishes
   await run.runFinished
 
   expect(persistedBeforeModel).toEqual([2])
-  expect(manager.getMessages("session-1")).toHaveLength(3)
+  expect(manager.loadRequiredContext("session-1").messages).toHaveLength(3)
   expect(session.getSnapshot()).not.toBe(initial)
   expect(session.getSnapshot()).toBe(session.getSnapshot())
-  expect(session.getSnapshot().messages.map((message) => message.role)).toEqual([
+  expect(session.loadHistoryPage("main").messages.map((message) => message.role)).toEqual([
     "user",
     "user",
     "assistant",
   ])
-  expect(session.getSnapshot().messages.slice(1).every((message) =>
+  expect(session.loadHistoryPage("main").messages.slice(1).every((message) =>
     message.runId === run.runId
   )).toBe(true)
   expect(session.getSnapshot().isRunning).toBe(false)
@@ -70,74 +69,12 @@ test("AgentSession restores history, persists completion barriers, and publishes
   await session.dispose()
 })
 
-test("AgentSession preserves historical pending proposals without making them actionable", async () => {
-  const manager = new InMemorySessionManager()
-  manager.createSession(sessionInfo("session-1", "test-agent", "Restored"))
-  manager.restoreFileChangeProposal({
-    id: "proposal-1",
-    sessionId: "session-1",
-    runId: "run-1",
-    toolCallId: "edit-1",
-    operation: "edit",
-    path: "src/example.ts",
-    diff: "--- a/src/example.ts\n+++ b/src/example.ts\n",
-    status: "pending",
-    createdAt: 10,
-  })
-
-  const session = new AgentSession({
-    agentId: "test-agent",
-    sessionId: "session-1",
-    manager,
-    systemPrompt: "System",
-    resolveRunConfiguration: () => ({
-      model: { async *stream() {} },
-      reasoningEffort: "medium",
-    }),
-    tools: [],
-    now: () => 20,
-  })
-
-  expect(manager.getFileChangeProposals("session-1")).toEqual([{
-    id: "proposal-1",
-    sessionId: "session-1",
-    runId: "run-1",
-    toolCallId: "edit-1",
-    operation: "edit",
-    path: "src/example.ts",
-    diff: "--- a/src/example.ts\n+++ b/src/example.ts\n",
-    status: "pending",
-    createdAt: 10,
-  }])
-  expect(session.getSnapshot().fileChangeProposals).toEqual(
-    manager.getFileChangeProposals("session-1"),
-  )
-  expect(session.getSnapshot()).not.toHaveProperty(
-    "pendingFileChangeProposal",
-  )
-
-  await session.dispose()
-})
-
 test.each([false, true])("AgentSession structurally shares immutable streaming branches (populated: %s)", async (populated) => {
-  const manager = new InMemorySessionManager()
+  const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
   manager.createSession(sessionInfo("session-1", "test-agent", "Streaming"))
   seedConversation(manager, 1)
   const checkpoint = compactionCheckpoint()
   manager.saveCompactionCheckpoint(checkpoint)
-  if (populated) {
-    manager.restoreFileChangeProposal({
-      id: "proposal-1",
-      status: "pending",
-      createdAt: 10,
-      sessionId: "session-1",
-      runId: "run-1",
-      toolCallId: "edit-1",
-      operation: "edit",
-      path: "src/example.ts",
-      diff: "-before\n+after\n",
-    })
-  }
   const releaseFirstDelta = Promise.withResolvers<void>()
   const releaseSecondDelta = Promise.withResolvers<void>()
   const releaseFinish = Promise.withResolvers<void>()
@@ -164,7 +101,7 @@ test.each([false, true])("AgentSession structurally shares immutable streaming b
       yield { type: "finish", reason: "error" }
     },
   }
-  const proposalReads = spyOn(manager, "getFileChangeProposals")
+  const contextReads = spyOn(manager, "loadRequiredContext")
   const session = new AgentSession({
     agentId: "test-agent",
     sessionId: "session-1",
@@ -197,7 +134,7 @@ test.each([false, true])("AgentSession structurally shares immutable streaming b
     const firstPublication = publication
     const first = firstPublication.snapshot
     const firstValue = structuredClone(first)
-    const readsBeforeDelta = proposalReads.mock.calls.length
+    const readsBeforeDelta = contextReads.mock.calls.length
     expect(readsBeforeDelta).toBeGreaterThan(0)
     releaseSecondDelta.resolve()
     await Promise.race([secondDeltaPublished.promise, run.runFinished])
@@ -209,25 +146,19 @@ test.each([false, true])("AgentSession structurally shares immutable streaming b
     expect(second.streamingMessage).not.toBe(first.streamingMessage)
     expect(first.streamingMessage).toBe(firstPublication.stateMessage)
     expect(second.streamingMessage).toBe(secondPublication.stateMessage)
-    expect(second.messages).toBe(first.messages)
+    expect(second).not.toHaveProperty("messages")
     expect(second.pendingToolCallIds).toBe(first.pendingToolCallIds)
     expect(second.contextUsage).toBe(first.contextUsage)
     // Equal-but-recloned branches still invalidate UI history/queue memoization.
-    expect(proposalReads.mock.calls.length).toBe(readsBeforeDelta)
+    expect(contextReads.mock.calls.length).toBe(readsBeforeDelta)
     for (const branch of [
-      "fileChangeProposals",
-      "compactionCheckpoint",
       "pendingSteeringMessages",
       "pendingFollowUpMessages",
     ] as const) {
       expect(second[branch]).toBe(first[branch])
       expect(Object.isFrozen(second[branch])).toBe(true)
     }
-    expect(first.compactionCheckpoint).toEqual(checkpoint)
-    expect(first.compactionCheckpoint).toBe(initial.compactionCheckpoint)
-    expect(first.fileChangeProposals).toBe(initial.fileChangeProposals)
     for (const items of [
-      first.fileChangeProposals,
       first.pendingSteeringMessages,
       first.pendingFollowUpMessages,
     ]) {
@@ -235,24 +166,14 @@ test.each([false, true])("AgentSession structurally shares immutable streaming b
       expect(items.every(Object.isFrozen)).toBe(true)
       expect(() => (items as unknown[]).push({})).toThrow()
     }
-    expect(second.messages).toHaveLength(3)
+    expect(session.loadHistoryPage("main").messages).toHaveLength(3)
     expect(streamingText(first)).toBe("First")
     expect(streamingText(second)).toBe("First second")
     expect(Object.isFrozen(second)).toBe(true)
-    expect(Object.isFrozen(second.messages)).toBe(true)
-    expect(Object.isFrozen(second.messages[0])).toBe(true)
-    expect(Object.isFrozen(second.messages[1])).toBe(true)
     expect(Object.isFrozen(second.contextUsage)).toBe(true)
-    const completedAssistant = second.messages[1]
-    if (completedAssistant?.role !== "assistant") {
-      throw new Error("Expected completed assistant history")
-    }
-    expect(Object.isFrozen(completedAssistant.content)).toBe(true)
-    expect(Object.isFrozen(completedAssistant.content[0])).toBe(true)
     expect(Object.isFrozen(second.streamingMessage)).toBe(true)
     expect(Object.isFrozen(second.streamingMessage?.content)).toBe(true)
     expect(second.streamingMessage?.content.every(Object.isFrozen)).toBe(true)
-    expect(() => (second.messages as unknown[]).push({})).toThrow()
     const streamedText = second.streamingMessage?.content.find(
       (item) => item.type === "text",
     )
@@ -288,9 +209,8 @@ test.each([false, true])("AgentSession structurally shares immutable streaming b
     expect(toolCall.input).toEqual({
       path: { directory: "src", file: "index.ts" },
     })
-    expect(settled.messages).not.toBe(second.messages)
-    expect(Object.isFrozen(settled.messages)).toBe(true)
-    expect(Object.isFrozen(settled.messages.at(-1))).toBe(true)
+    expect(settled).not.toHaveProperty("messages")
+    expect(session.loadHistoryPage("main").messages).toHaveLength(4)
 
     expect(session.clearQueuedMessages()).toEqual({
       steering: populated ? ["Adjust the answer"] : [],
@@ -313,7 +233,7 @@ test.each([false, true])("AgentSession structurally shares immutable streaming b
     releaseFirstDelta.resolve()
     releaseSecondDelta.resolve()
     releaseFinish.resolve()
-    proposalReads.mockRestore()
+    contextReads.mockRestore()
     await session.dispose()
   }
 
@@ -324,116 +244,32 @@ test.each([false, true])("AgentSession structurally shares immutable streaming b
   }
 })
 
-test("AgentSession refreshes grouped presentation after external same-ID saves and session recreation", async () => {
-  const manager = new InMemorySessionManager()
-  const info = sessionInfo("session-1", "test-agent", "External writes")
-  manager.createSession(info)
+test("AgentSession exposes immutable checkpoint records through page reads, not operational snapshots", async () => {
+  const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
+  manager.createSession(sessionInfo("session-1", "test-agent", "Checkpoint"))
   seedConversation(manager, 1)
   const checkpoint = compactionCheckpoint()
-  const proposal: IFileChangeProposalRecord = {
-    id: "proposal-1",
-    sessionId: "session-1",
-    runId: "run-1",
-    toolCallId: "edit-1",
-    operation: "edit",
-    path: "src/example.ts",
-    diff: "-before\n+after\n",
-    status: "expired",
-    createdAt: 10,
-    resolvedAt: 20,
-  }
-  manager.restoreFileChangeProposal(proposal)
   manager.saveCompactionCheckpoint(checkpoint)
   const session = openAgentSession(manager)
-
   try {
-    const initial = session.getSnapshot()
-    const initialValue = structuredClone(initial)
-    const replacement = { ...proposal, status: "applied" as const, resolvedAt: 30 }
-    manager.restoreFileChangeProposal(replacement)
-    expect(session.getSnapshot()).toBe(initial)
-    session.refreshContextUsage()
-    const afterProposal = session.getSnapshot()
-    const afterProposalValue = structuredClone(afterProposal)
-    expect(afterProposal.fileChangeProposals).toEqual([replacement])
-    expect(afterProposal.fileChangeProposals).not.toBe(initial.fileChangeProposals)
-    // One grouped revision intentionally refreshes both branches on either save.
-    expect(afterProposal.compactionCheckpoint).not.toBe(initial.compactionCheckpoint)
-    expect(afterProposal.compactionCheckpoint).toEqual(checkpoint)
-
-    const replacementCheckpoint = { ...checkpoint, summary: "Latest context" }
-    manager.saveCompactionCheckpoint(replacementCheckpoint)
-    expect(session.getSnapshot()).toBe(afterProposal)
-    session.refreshContextUsage()
-    const afterCheckpoint = session.getSnapshot()
-    expect(afterCheckpoint.compactionCheckpoint).toEqual(replacementCheckpoint)
-    expect(afterCheckpoint.compactionCheckpoint).not.toBe(afterProposal.compactionCheckpoint)
-    expect(afterCheckpoint.fileChangeProposals).not.toBe(afterProposal.fileChangeProposals)
-    expect(afterCheckpoint.fileChangeProposals).toEqual([replacement])
-    expect(Object.isFrozen(afterCheckpoint.fileChangeProposals[0])).toBe(true)
-    expect(Object.isFrozen(afterCheckpoint.compactionCheckpoint)).toBe(true)
-
-    // Recreate between publications: the cache never gets to observe the -1 token.
-    manager.deleteSession("session-1")
-    manager.createSession(info)
-    session.refreshContextUsage()
-    expect(session.getSnapshot().fileChangeProposals).toEqual([])
-    expect(session.getSnapshot().compactionCheckpoint).toBeUndefined()
-    expect(initial).toEqual(initialValue)
-    expect(afterProposal).toEqual(afterProposalValue)
-    expect(afterCheckpoint.fileChangeProposals).toEqual([replacement])
-    expect(afterCheckpoint.compactionCheckpoint).toEqual(replacementCheckpoint)
+    const first = session.loadHistoryPage("main")
+    expect(first.checkpoint).toEqual(checkpoint)
+    expect(session.getSnapshot()).not.toHaveProperty("compactionCheckpoint")
+    expect(session.getSnapshot()).not.toHaveProperty("fileChangeProposals")
+    expect(session.getSnapshot()).not.toHaveProperty("messages")
+    expect(() => manager.saveCompactionCheckpoint({ ...checkpoint, summary: "Changed" })).toThrow()
+    expect(session.loadHistoryPage("main").checkpoint).toEqual(checkpoint)
+    expect(first.checkpoint).toEqual(checkpoint)
   } finally {
     await session.dispose()
+    manager.dispose()
   }
-})
-
-test("freezeSessionSnapshot freezes and structurally shares checkpoints", () => {
-  const checkpoint = compactionCheckpoint()
-  const cache = {
-    source: undefined,
-    value: undefined,
-  }
-  const source = sessionSnapshotWithCheckpoint(checkpoint)
-
-  const first = freezeSessionSnapshot(source, cache)
-  const second = freezeSessionSnapshot({ ...source, isRunning: true }, cache)
-
-  expect(second).not.toBe(first)
-  expect(second.compactionCheckpoint).toBe(first.compactionCheckpoint)
-  expect(Object.isFrozen(first.compactionCheckpoint)).toBe(true)
-  expect(Object.isFrozen(first.compactionCheckpoint?.model)).toBe(true)
-  expect(Object.isFrozen(first.compactionCheckpoint?.usage)).toBe(true)
-  checkpoint.model.modelId = "mutated-model"
-  checkpoint.usage.totalTokens = 999
-  expect(first.compactionCheckpoint?.model?.modelId).toBe("model-1")
-  expect(first.compactionCheckpoint?.usage?.totalTokens).toBe(34)
-  expect(() => {
-    if (first.compactionCheckpoint?.model) {
-      (first.compactionCheckpoint.model as { modelId: string }).modelId =
-        "changed"
-    }
-  }).toThrow()
-
-  const replacementCheckpoint = {
-    ...checkpoint,
-    id: "checkpoint-2",
-    summary: "Latest preserved context",
-  }
-  const third = freezeSessionSnapshot(
-    sessionSnapshotWithCheckpoint(replacementCheckpoint),
-    cache,
-  )
-  expect(third.compactionCheckpoint).not.toBe(second.compactionCheckpoint)
-  expect(third.compactionCheckpoint?.summary).toBe("Latest preserved context")
-  expect(Object.isFrozen(third.compactionCheckpoint)).toBe(true)
 })
 
 test("freezeSessionSnapshot detaches, freezes and shares compaction progress", () => {
   const progress = { id: "candidate", throughMessageId: "anchor", summary: "First" }
-  const checkpoint = compactionCheckpoint()
   const source = {
-    ...sessionSnapshotWithCheckpoint(checkpoint),
+    ...operationalSnapshot(),
     compactionProgress: progress,
   }
   const cache = { source: undefined, value: undefined }
@@ -454,15 +290,14 @@ test("freezeSessionSnapshot detaches, freezes and shares compaction progress", (
   }, cache)
   expect(third.compactionProgress).not.toBe(first.compactionProgress)
   expect(third.compactionProgress?.summary).toBe("First second")
-  expect(third.messages).toBe(first.messages)
-  expect(third.compactionCheckpoint).toBe(first.compactionCheckpoint)
-  const cleared = freezeSessionSnapshot(sessionSnapshotWithCheckpoint(checkpoint), cache)
+  expect(third.pendingSteeringMessages).toBe(first.pendingSteeringMessages)
+  const cleared = freezeSessionSnapshot(operationalSnapshot(), cache)
   expect(cleared).not.toHaveProperty("compactionProgress")
   expect(third.compactionProgress?.summary).toBe("First second")
 })
 
 test("AgentSession persists steering and follow-up before each model request", async () => {
-  const manager = new InMemorySessionManager()
+  const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
   manager.createSession(sessionInfo("session-1", "test-agent", "Steering"))
   const firstStarted = Promise.withResolvers<void>()
   const releaseFirst = Promise.withResolvers<void>()
@@ -475,7 +310,7 @@ test("AgentSession persists steering and follow-up before each model request", a
         messages: structuredClone(request.messages),
         tools: structuredClone(request.tools),
       })
-      persistedBeforeRequest.push(manager.getMessages("session-1").length)
+      persistedBeforeRequest.push(manager.loadRequiredContext("session-1").messages.length)
       if (requests.length === 1) {
         firstStarted.resolve()
         await releaseFirst.promise
@@ -531,7 +366,7 @@ test("AgentSession persists steering and follow-up before each model request", a
     content: "Then summarize it",
   })
   expect(persistedBeforeRequest).toEqual([1, 3, 5])
-  expect(manager.getMessages("session-1").map((message) => message.role)).toEqual([
+  expect(manager.loadRequiredContext("session-1").messages.map((message) => message.role)).toEqual([
     "user",
     "assistant",
     "user",
@@ -539,12 +374,12 @@ test("AgentSession persists steering and follow-up before each model request", a
     "user",
     "assistant",
   ])
-  expect(manager.getMessages("session-1")[2]).toMatchObject({
+  expect(manager.loadRequiredContext("session-1").messages[2]).toMatchObject({
     runId: run.runId,
     source: "steer",
     content: "Adjust the answer",
   })
-  expect(manager.getMessages("session-1")[4]).toMatchObject({
+  expect(manager.loadRequiredContext("session-1").messages[4]).toMatchObject({
     runId: run.runId,
     source: "followUp",
     content: "Then summarize it",
@@ -556,7 +391,7 @@ test("AgentSession persists steering and follow-up before each model request", a
 })
 
 test("AgentSession restores steering to the queue when persistence fails", async () => {
-  const memory = new InMemorySessionManager()
+  const memory = new SQLiteSessionManager({ databasePath: ":memory:" })
   memory.createSession(sessionInfo("session-1", "test-agent", "Steering failure"))
   const persistenceFailure = new Error("Failed to persist steering")
   const manager: ISessionManager = {
@@ -566,15 +401,21 @@ test("AgentSession restores steering to the queue when persistence fails", async
     returnToParentBranch: memory.returnToParentBranch,
     getSessionInfo: memory.getSessionInfo,
     listSessions: memory.listSessions,
-    getMessages: memory.getMessages,
+    openSession: memory.openSession,
+    releaseSession: memory.releaseSession,
+    dispose: memory.dispose,
+    recoverInterruptedTools: memory.recoverInterruptedTools,
+    loadRequiredContext: memory.loadRequiredContext,
+    loadRecentConversation: memory.loadRecentConversation,
+    loadSelectedPaths: memory.loadSelectedPaths,
+    loadHistoryPage: memory.loadHistoryPage,
+    deleteEmptySession: memory.deleteEmptySession,
     appendMessage: (message) => {
       if (message.role === "user" && message.source === "steer") {
         throw persistenceFailure
       }
-      memory.appendMessage(message)
+      return memory.appendMessage(message)
     },
-    getPresentationRevision: memory.getPresentationRevision,
-    getFileChangeProposals: memory.getFileChangeProposals,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
     saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
     deleteSession: memory.deleteSession,
@@ -613,7 +454,7 @@ test("AgentSession restores steering to the queue when persistence fails", async
 
   expect(runFailure).toBe(persistenceFailure)
   expect(providerInvocations).toBe(1)
-  expect(memory.getMessages("session-1").map((message) => message.role)).toEqual([
+  expect(memory.loadRequiredContext("session-1").messages.map((message) => message.role)).toEqual([
     "user",
     "assistant",
   ])
@@ -633,7 +474,7 @@ test("AgentSession restores steering to the queue when persistence fails", async
 })
 
 test("AgentSession restores follow-up to the queue when persistence fails", async () => {
-  const memory = new InMemorySessionManager()
+  const memory = new SQLiteSessionManager({ databasePath: ":memory:" })
   memory.createSession(sessionInfo("session-1", "test-agent", "Follow-up failure"))
   const persistenceFailure = new Error("Failed to persist follow-up")
   const manager: ISessionManager = {
@@ -643,15 +484,21 @@ test("AgentSession restores follow-up to the queue when persistence fails", asyn
     returnToParentBranch: memory.returnToParentBranch,
     getSessionInfo: memory.getSessionInfo,
     listSessions: memory.listSessions,
-    getMessages: memory.getMessages,
+    openSession: memory.openSession,
+    releaseSession: memory.releaseSession,
+    dispose: memory.dispose,
+    recoverInterruptedTools: memory.recoverInterruptedTools,
+    loadRequiredContext: memory.loadRequiredContext,
+    loadRecentConversation: memory.loadRecentConversation,
+    loadSelectedPaths: memory.loadSelectedPaths,
+    loadHistoryPage: memory.loadHistoryPage,
+    deleteEmptySession: memory.deleteEmptySession,
     appendMessage: (message) => {
       if (message.role === "user" && message.source === "followUp") {
         throw persistenceFailure
       }
-      memory.appendMessage(message)
+      return memory.appendMessage(message)
     },
-    getPresentationRevision: memory.getPresentationRevision,
-    getFileChangeProposals: memory.getFileChangeProposals,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
     saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
     deleteSession: memory.deleteSession,
@@ -690,7 +537,7 @@ test("AgentSession restores follow-up to the queue when persistence fails", asyn
 
   expect(runFailure).toBe(persistenceFailure)
   expect(providerInvocations).toBe(1)
-  expect(memory.getMessages("session-1").map((message) => message.role)).toEqual([
+  expect(memory.loadRequiredContext("session-1").messages.map((message) => message.role)).toEqual([
     "user",
     "assistant",
   ])
@@ -710,7 +557,7 @@ test("AgentSession restores follow-up to the queue when persistence fails", asyn
 })
 
 test("AgentSession rejects acceptance without invoking the provider or diverging from durable state", async () => {
-  const memory = new InMemorySessionManager()
+  const memory = new SQLiteSessionManager({ databasePath: ":memory:" })
   memory.createSession(sessionInfo("session-1", "test-agent", "Failure"))
   const persistenceFailure = new Error("Disk write failed")
   const manager: ISessionManager = {
@@ -720,12 +567,18 @@ test("AgentSession rejects acceptance without invoking the provider or diverging
     returnToParentBranch: memory.returnToParentBranch,
     getSessionInfo: memory.getSessionInfo,
     listSessions: memory.listSessions,
-    getMessages: memory.getMessages,
+    openSession: memory.openSession,
+    releaseSession: memory.releaseSession,
+    dispose: memory.dispose,
+    recoverInterruptedTools: memory.recoverInterruptedTools,
+    loadRequiredContext: memory.loadRequiredContext,
+    loadRecentConversation: memory.loadRecentConversation,
+    loadSelectedPaths: memory.loadSelectedPaths,
+    loadHistoryPage: memory.loadHistoryPage,
+    deleteEmptySession: memory.deleteEmptySession,
     appendMessage: () => {
       throw persistenceFailure
     },
-    getPresentationRevision: memory.getPresentationRevision,
-    getFileChangeProposals: memory.getFileChangeProposals,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
     saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
     deleteSession: memory.deleteSession,
@@ -761,16 +614,101 @@ test("AgentSession rejects acceptance without invoking the provider or diverging
   expect(await runFailure).toBe(persistenceFailure)
 
   expect(providerInvocations).toBe(0)
-  expect(session.getSnapshot().messages).toEqual(
-    manager.getMessages("session-1"),
+  expect(session.loadHistoryPage("main").messages).toEqual(
+    manager.loadRequiredContext("session-1").messages,
   )
   expect(session.getSnapshot().isRunning).toBe(false)
 
   await session.dispose()
 })
 
+for (const committed of [false, true]) {
+  for (const failure of [new Error("Durable acceptance failed"), undefined]) {
+    test(`AgentSession retains the failure barrier after settlement: committed=${committed}, cause=${String(failure)}`, async () => {
+      const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
+      manager.createSession(sessionInfo("session-1", "test-agent", "Failure barrier"))
+      let providerInvocations = 0
+      const options = {
+        agentId: "test-agent",
+        sessionId: "session-1",
+        manager,
+        systemPrompt: "System",
+        resolveRunConfiguration: () => ({
+          model: {
+            async *stream() {
+              providerInvocations += 1
+              yield { type: "finish" as const, reason: "stop" as const }
+            },
+          },
+          reasoningEffort: "medium" as const,
+        }),
+        tools: [],
+      }
+      const session = new AgentSession(options)
+      const appendMessage = manager.appendMessage
+      const append = spyOn(manager, "appendMessage").mockImplementation((message) => {
+        if (committed) appendMessage(message)
+        throw failure
+      })
+      try {
+        const run = session.prompt("Preserve this committed prompt")
+        const results = await Promise.allSettled([
+          run.initialPromptProcessed,
+          run.runFinished,
+        ])
+        expect(results).toEqual([
+          { status: "rejected", reason: failure },
+          { status: "rejected", reason: failure },
+        ])
+        expect(providerInvocations).toBe(0)
+        expect(append).toHaveBeenCalledTimes(1)
+        expect(manager.loadRequiredContext("session-1").messages).toHaveLength(committed ? 1 : 0)
+        expect(session.loadHistoryPage("main").messages).toEqual(manager.loadRequiredContext("session-1").messages)
+        expect(session.getSnapshot().isRunning).toBe(false)
+
+        // A successful presentation reload must not authorize another model request.
+        const interactions = [
+          () => session.prompt("Must not run"),
+          () => session.steer("Must not queue"),
+          () => session.followUp("Must not queue"),
+          () => session.compact(),
+          () => session.createBranch(),
+          () => session.assertCanUpdateConfiguration(),
+        ]
+        for (const interact of interactions) {
+          expect(interact).toThrow("Session persistence failed. Reopen the session")
+        }
+        let nextPromptFailure: unknown
+        try {
+          session.prompt("Still blocked")
+        } catch (error) {
+          nextPromptFailure = error
+        }
+        expect(nextPromptFailure).toBeInstanceOf(Error)
+        expect((nextPromptFailure as Error).cause).toBe(failure)
+        expect(append).toHaveBeenCalledTimes(1)
+        expect(providerInvocations).toBe(0)
+      } finally {
+        append.mockRestore()
+        await session.dispose()
+      }
+
+      // Reopening reconstructs durable state instead of reusing the failed live session.
+      const reopened = new AgentSession(options)
+      try {
+        expect(reopened.loadHistoryPage("main").messages).toHaveLength(committed ? 1 : 0)
+        await reopened.prompt("Continue after reopening").runFinished
+        expect(providerInvocations).toBe(1)
+        expect(manager.loadRequiredContext("session-1").messages).toHaveLength(committed ? 3 : 2)
+      } finally {
+        await reopened.dispose()
+      }
+    })
+  }
+}
+
 test("AgentSession recovers one interrupted tool call deterministically without duplicating it on reopen", async () => {
-  const manager = new InMemorySessionManager()
+  const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
   manager.createSession(sessionInfo("session-1", "test-agent", "Interrupted"))
   const user = userMessage("Read the file")
   const assistant = interruptedAssistantMessage()
@@ -781,6 +719,7 @@ test("AgentSession recovers one interrupted tool call deterministically without 
     sessionId: "session-1",
     runId: "run-interrupted",
     role: "toolResult" as const,
+    assistantMessageId: assistant.id,
     toolCallId: "call-read",
     toolName: "read_file",
     content: "A durable tool result was not recorded. The tool may have produced side effects; inspect the current state before retrying.",
@@ -792,15 +731,15 @@ test("AgentSession recovers one interrupted tool call deterministically without 
 
   const first = openAgentSession(manager)
 
-  expect(manager.getMessages("session-1")).toEqual([user, assistant, recovery])
-  expect(first.getSnapshot().messages).toEqual([user, assistant, recovery])
+  expect(manager.loadRequiredContext("session-1").messages).toEqual([user, assistant, recovery])
+  expect(first.loadHistoryPage("main").messages).toEqual([user, assistant, recovery])
   await first.dispose()
 
   const reopened = openAgentSession(manager)
 
-  expect(manager.getMessages("session-1")).toEqual([user, assistant, recovery])
-  expect(reopened.getSnapshot().messages).toEqual([user, assistant, recovery])
-  expect(manager.getMessages("session-1").filter((message) =>
+  expect(manager.loadRequiredContext("session-1").messages).toEqual([user, assistant, recovery])
+  expect(reopened.loadHistoryPage("main").messages).toEqual([user, assistant, recovery])
+  expect(manager.loadRequiredContext("session-1").messages.filter((message) =>
     message.role === "toolResult" && message.toolCallId === "call-read"
   )).toHaveLength(1)
 
@@ -808,7 +747,7 @@ test("AgentSession recovers one interrupted tool call deterministically without 
 })
 
 test("AgentSession recovers a toolCallId reused by a later run", async () => {
-  const manager = new InMemorySessionManager()
+  const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
   manager.createSession(sessionInfo("session-1", "test-agent", "Reused call"))
   const firstUser = userMessage(
     "First run",
@@ -828,6 +767,7 @@ test("AgentSession recovers a toolCallId reused by a later run", async () => {
     sessionId: "session-1",
     runId: "run-1",
     role: "toolResult",
+    assistantMessageId: firstAssistant.id,
     toolCallId: "call-shared",
     toolName: "read_file",
     content: "First result",
@@ -859,11 +799,12 @@ test("AgentSession recovers a toolCallId reused by a later run", async () => {
 
   const session = openAgentSession(manager)
 
-  expect(manager.getMessages("session-1").at(-1)).toEqual({
+  expect(manager.loadRequiredContext("session-1").messages.at(-1)).toEqual({
     id: "recovered-assistant-run-2-call-shared",
     sessionId: "session-1",
     runId: "run-2",
     role: "toolResult",
+    assistantMessageId: secondAssistant.id,
     toolCallId: "call-shared",
     toolName: "read_file",
     content: "A durable tool result was not recorded. The tool may have produced side effects; inspect the current state before retrying.",
@@ -872,11 +813,11 @@ test("AgentSession recovers a toolCallId reused by a later run", async () => {
     summary: "Tool outcome is unknown; inspect state before retrying",
     createdAt: 5,
   })
-  expect(manager.getMessages("session-1").filter((message) =>
+  expect(manager.loadRequiredContext("session-1").messages.filter((message) =>
     message.role === "toolResult" && message.toolCallId === "call-shared"
   ).map((message) => message.runId)).toEqual(["run-1", "run-2"])
-  expect(session.getSnapshot().messages).toEqual(
-    manager.getMessages("session-1"),
+  expect(session.loadHistoryPage("main").messages).toEqual(
+    manager.loadRequiredContext("session-1").messages,
   )
 
   await session.dispose()
@@ -889,7 +830,7 @@ test("AgentSession rejects an interrupted tool turn followed by a later message"
   ]
 
   for (const laterMessage of laterMessages) {
-    const manager = new InMemorySessionManager()
+    const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
     manager.createSession(sessionInfo("session-1", "test-agent", "Invalid order"))
     manager.appendMessage(userMessage(
       "Use tool",
@@ -904,21 +845,18 @@ test("AgentSession rejects an interrupted tool turn followed by a later message"
       "call-read",
       2,
     ))
-    manager.appendMessage(laterMessage)
-    const durableBeforeOpen = manager.getMessages("session-1")
+    const durableBeforeOpen = manager.loadRequiredContext("session-1").messages
 
-    expect(() => openAgentSession(manager)).toThrow(
-      "Interrupted tool turn must be the final turn in session session-1",
-    )
-    expect(manager.getMessages("session-1")).toEqual(durableBeforeOpen)
-    expect(manager.getMessages("session-1").some((message) =>
+    expect(() => manager.appendMessage(laterMessage)).toThrow()
+    expect(manager.loadRequiredContext("session-1").messages).toEqual(durableBeforeOpen)
+    expect(manager.loadRequiredContext("session-1").messages.some((message) =>
       message.role === "toolResult"
     )).toBe(false)
   }
 })
 
 test("AgentSession suffixes a colliding recovery ID without replacing history", async () => {
-  const manager = new InMemorySessionManager()
+  const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
   manager.createSession(sessionInfo("session-1", "test-agent", "Collision"))
   const collidingId = "recovered-assistant-interrupted-call-read"
   const existing = userMessage(
@@ -934,7 +872,7 @@ test("AgentSession suffixes a colliding recovery ID without replacing history", 
 
   const session = openAgentSession(manager)
 
-  expect(manager.getMessages("session-1")).toEqual([
+  expect(manager.loadRequiredContext("session-1").messages).toEqual([
     existing,
     assistant,
     {
@@ -942,6 +880,7 @@ test("AgentSession suffixes a colliding recovery ID without replacing history", 
       sessionId: "session-1",
       runId: "run-interrupted",
       role: "toolResult",
+      assistantMessageId: assistant.id,
       toolCallId: "call-read",
       toolName: "read_file",
       content: "A durable tool result was not recorded. The tool may have produced side effects; inspect the current state before retrying.",
@@ -951,16 +890,16 @@ test("AgentSession suffixes a colliding recovery ID without replacing history", 
       createdAt: 2,
     },
   ])
-  expect(manager.getMessages("session-1")[0]).toEqual(existing)
-  expect(session.getSnapshot().messages).toEqual(
-    manager.getMessages("session-1"),
+  expect(manager.loadRequiredContext("session-1").messages[0]).toEqual(existing)
+  expect(session.loadHistoryPage("main").messages).toEqual(
+    manager.loadRequiredContext("session-1").messages,
   )
 
   await session.dispose()
 })
 
 test("AgentSession dispose times out and unsubscribes from a non-cooperative model", async () => {
-  const manager = new InMemorySessionManager()
+  const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
   manager.createSession(sessionInfo("session-1", "test-agent", "Blocked"))
   const modelStarted = Promise.withResolvers<void>()
   const releaseModel = Promise.withResolvers<void>()
@@ -1022,10 +961,10 @@ test("AgentSession dispose times out and unsubscribes from a non-cooperative mod
 })
 
 test("AgentSession does not persist a manual checkpoint that enlarges context", async () => {
-  const manager = new InMemorySessionManager()
+  const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
   manager.createSession(sessionInfo("session-1", "test-agent", "No progress"))
   seedConversation(manager, 1)
-  const original = manager.getMessages("session-1")
+  const original = manager.loadRequiredContext("session-1").messages
   const session = new AgentSession({
     agentId: "test-agent",
     sessionId: "session-1",
@@ -1049,18 +988,18 @@ test("AgentSession does not persist a manual checkpoint that enlarges context", 
 
   expect(await session.compact()).toBeUndefined()
   expect(manager.getCompactionCheckpoint("session-1")).toBeUndefined()
-  expect(manager.getMessages("session-1")).toEqual(original)
+  expect(session.loadHistoryPage("main").messages).toEqual(original)
 
   await session.dispose()
 })
 
 test.each([false, true])("AgentSession streams immutable compaction progress and installs it atomically (previous: %s)", async (hasPrevious) => {
-  const manager = new InMemorySessionManager()
+  const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
   manager.createSession(sessionInfo("session-1", "test-agent", "Progress"))
   seedConversation(manager, 2, "X".repeat(1_000))
   if (hasPrevious) manager.saveCompactionCheckpoint(compactionCheckpoint())
   const saves = spyOn(manager, "saveCompactionCheckpoint")
-  const proposalReads = spyOn(manager, "getFileChangeProposals")
+  const contextReads = spyOn(manager, "loadRequiredContext")
   const firstPublished = Promise.withResolvers<void>()
   const secondPublished = Promise.withResolvers<void>()
   const releaseSecond = Promise.withResolvers<void>()
@@ -1097,37 +1036,36 @@ test.each([false, true])("AgentSession streams immutable compaction progress and
     expect(session.getSnapshot().compactionProgress).toBeUndefined()
     await Promise.race([firstPublished.promise, task])
     const first = session.getSnapshot()
-    const readsBefore = proposalReads.mock.calls.length
+    const readsBefore = contextReads.mock.calls.length
     expect(first.compactionProgress).toEqual({
       id: "candidate", throughMessageId: "seed-assistant-1", summary: "## Goals\n\nFirst",
     })
     expect(Object.isFrozen(first.compactionProgress)).toBe(true)
     expect(first.streamingMessage).toBeUndefined()
     expect(saves).not.toHaveBeenCalled()
-    expect(first.compactionCheckpoint).toBe(initial.compactionCheckpoint)
+    expect(session.loadHistoryPage("main").checkpoint).toEqual(hasPrevious ? compactionCheckpoint() : undefined)
     releaseSecond.resolve()
     await Promise.race([secondPublished.promise, task])
     const second = session.getSnapshot()
     expect(second.compactionProgress?.summary).toBe("## Goals\n\nFirst second")
     expect(first.compactionProgress?.summary).toBe("## Goals\n\nFirst")
     expect(second.compactionProgress).not.toBe(first.compactionProgress)
-    for (const branch of ["messages", "fileChangeProposals", "compactionCheckpoint", "contextUsage"] as const) {
+    for (const branch of ["contextUsage"] as const) {
       expect(second[branch]).toBe(first[branch])
       expect(first[branch]).toBe(initial[branch])
     }
-    expect(proposalReads.mock.calls.length).toBe(readsBefore)
+    expect(contextReads.mock.calls.length).toBe(readsBefore)
     expect(saves).not.toHaveBeenCalled()
     releaseFinish.resolve()
     const checkpoint = await task
     expect(checkpoint?.id).toBe("candidate")
     expect(saves).toHaveBeenCalledTimes(1)
-    expect(session.getSnapshot()).toMatchObject({ isCompacting: false, compactionCheckpoint: checkpoint })
+    expect(session.getSnapshot()).toMatchObject({ isCompacting: false })
+    expect(session.loadHistoryPage("main").checkpoint).toEqual(checkpoint)
     expect(session.getSnapshot()).not.toHaveProperty("compactionProgress")
-    expect(publications.filter((snapshot) => snapshot.compactionCheckpoint?.id === "candidate")
-      .every((snapshot) => !snapshot.compactionProgress && !snapshot.isCompacting)).toBe(true)
     expect(publications.filter((snapshot) => snapshot.compactionProgress)
       .every((snapshot) => snapshot.isCompacting)).toBe(true)
-    expect(manager.getMessages("session-1")).toEqual(initial.messages)
+    expect(manager.loadRequiredContext("session-1").messages).toEqual([])
     expect(await session.compact()).toBeUndefined()
     expect(session.getSnapshot()).not.toHaveProperty("compactionProgress")
     expect(saves).toHaveBeenCalledTimes(1)
@@ -1136,21 +1074,26 @@ test.each([false, true])("AgentSession streams immutable compaction progress and
     releaseFinish.resolve()
     await task.catch(() => undefined)
     saves.mockRestore()
-    proposalReads.mockRestore()
+    contextReads.mockRestore()
     await session.dispose()
   }
 })
 
-test.each(["provider-error", "truncated", "unfinished", "empty", "oversized", "save-error"] as const)(
+test.each(["provider-error", "truncated", "unfinished", "empty", "oversized", "save-error", "save-undefined"] as const)(
   "AgentSession clears %s compaction previews without replacing the previous checkpoint",
   async (failure) => {
-    const manager = new InMemorySessionManager()
+    const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
     manager.createSession(sessionInfo("session-1", "test-agent", "Rejected progress"))
     seedConversation(manager, 2, "X".repeat(1_000))
     const previous = compactionCheckpoint()
     manager.saveCompactionCheckpoint(previous)
     const saves = spyOn(manager, "saveCompactionCheckpoint")
-    if (failure === "save-error") saves.mockImplementation(() => { throw new Error("Save failed") })
+    const saveFails = failure === "save-error" || failure === "save-undefined"
+    if (saveFails) {
+      saves.mockImplementation(() => {
+        throw failure === "save-undefined" ? undefined : new Error("Save failed")
+      })
+    }
     const published = Promise.withResolvers<void>()
     const releaseFinish = Promise.withResolvers<void>()
     const session = new AgentSession({
@@ -1178,10 +1121,10 @@ test.each(["provider-error", "truncated", "unfinished", "empty", "oversized", "s
       }),
       tools: [],
     })
-    const initial = session.getSnapshot()
+    const initialContext = manager.loadRequiredContext("session-1")
     const task = session.compact().then(
-      (checkpoint) => ({ checkpoint, error: undefined }),
-      (error: unknown) => ({ checkpoint: undefined, error }),
+      (checkpoint) => ({ rejected: false, checkpoint, error: undefined }),
+      (error: unknown) => ({ rejected: true, checkpoint: undefined, error }),
     )
     try {
       await Promise.race([published.promise, task])
@@ -1190,14 +1133,20 @@ test.each(["provider-error", "truncated", "unfinished", "empty", "oversized", "s
       releaseFinish.resolve()
       const result = await task
       expect(result.checkpoint).toBeUndefined()
-      if (failure === "oversized") expect(result.error).toBeUndefined()
+      expect(result.rejected).toBe(failure !== "oversized")
+      if (failure === "oversized" || failure === "save-undefined") expect(result.error).toBeUndefined()
       else expect(result.error).toBeInstanceOf(Error)
-      expect(saves).toHaveBeenCalledTimes(failure === "save-error" ? 1 : 0)
+      expect(saves).toHaveBeenCalledTimes(saveFails ? 1 : 0)
+      if (saveFails) {
+        expect(() => session.prompt("Must not run after failed checkpoint save"))
+          .toThrow("Session persistence failed. Reopen the session")
+        expect(() => session.compact()).toThrow("Session persistence failed. Reopen the session")
+      }
       expect(session.getSnapshot().isCompacting).toBe(false)
       expect(session.getSnapshot()).not.toHaveProperty("compactionProgress")
-      expect(session.getSnapshot().compactionCheckpoint).toBe(initial.compactionCheckpoint)
+      expect(session.loadHistoryPage("main").checkpoint).toEqual(previous)
       expect(manager.getCompactionCheckpoint("session-1")).toEqual(previous)
-      expect(manager.getMessages("session-1")).toEqual(initial.messages)
+      expect(manager.loadRequiredContext("session-1")).toEqual(initialContext)
     } finally {
       releaseFinish.resolve()
       await task
@@ -1208,7 +1157,7 @@ test.each(["provider-error", "truncated", "unfinished", "empty", "oversized", "s
 )
 
 test.each(["abort", "dispose"] as const)("AgentSession clears progress immediately on %s and ignores late deltas", async (action) => {
-  const manager = new InMemorySessionManager()
+  const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
   manager.createSession(sessionInfo("session-1", "test-agent", "Cancelled progress"))
   seedConversation(manager, 2, "X".repeat(1_000))
   manager.saveCompactionCheckpoint(compactionCheckpoint())
@@ -1262,10 +1211,10 @@ test.each(["abort", "dispose"] as const)("AgentSession clears progress immediate
 })
 
 test("AgentSession compacts durable history into one cumulative checkpoint", async () => {
-  const manager = new InMemorySessionManager()
+  const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
   manager.createSession(sessionInfo("session-1", "test-agent", "Compaction"))
   seedConversation(manager, 3, "x".repeat(50_000))
-  const original = manager.getMessages("session-1")
+  const original = manager.loadRequiredContext("session-1").messages
   const requests: IAgentModelRequest[] = []
   const model: IAgentModel = {
     async *stream(request) {
@@ -1322,7 +1271,7 @@ test("AgentSession compacts durable history into one cumulative checkpoint", asy
     throughMessageId: original[5]!.id,
     summary: structuredSummary("Earlier context"),
   })
-  expect(manager.getMessages("session-1")).toEqual(original)
+  expect(session.loadHistoryPage("main").messages).toEqual(original)
   expect(await session.compact()).toBeUndefined()
 
   const run = session.prompt("Continue")
@@ -1332,8 +1281,8 @@ test("AgentSession compacts durable history into one cumulative checkpoint", asy
   )
   expect(promptRequest?.contextSummary).toBe(structuredSummary("Earlier context"))
   expect(promptRequest?.messages.slice(0, -1)).toEqual(original.slice(6))
-  expect(manager.getMessages("session-1").slice(0, 6)).toEqual([...original])
-  expect(manager.getMessages("session-1").at(-1)).toMatchObject({
+  expect(session.loadHistoryPage("main").messages.slice(0, 6)).toEqual([...original])
+  expect(manager.loadRequiredContext("session-1").messages.at(-1)).toMatchObject({
     role: "assistant",
     model: {
       providerId: "test",
@@ -1347,7 +1296,7 @@ test("AgentSession compacts durable history into one cumulative checkpoint", asy
 })
 
 test("AgentSession does not compact after settlement from reported usage", async () => {
-  const manager = new InMemorySessionManager()
+  const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
   manager.createSession(sessionInfo("session-1", "test-agent", "Automatic"))
   seedConversation(manager, 3)
   let compactionRequests = 0
@@ -1395,7 +1344,7 @@ test("AgentSession does not compact after settlement from reported usage", async
     contextWindowTokens: 4_096,
     shouldCompact: false,
   })
-  expect(manager.getMessages("session-1")).toHaveLength(8)
+  expect(manager.loadRequiredContext("session-1").messages).toHaveLength(8)
 
   await session.dispose()
 })
@@ -1418,16 +1367,11 @@ function compactionCheckpoint() {
   }
 }
 
-function sessionSnapshotWithCheckpoint(
-  compactionCheckpoint: NonNullable<ISessionSnapshot["compactionCheckpoint"]>,
-): ISessionSnapshot {
+function operationalSnapshot(): ISessionSnapshot {
   return {
     activeBranchId: "main",
-    messages: [],
-    fileChangeProposals: [],
     pendingSteeringMessages: [],
     pendingFollowUpMessages: [],
-    compactionCheckpoint,
     isRunning: false,
     isCompacting: false,
     pendingToolCallIds: [],
@@ -1477,7 +1421,7 @@ function structuredSummary(label: string): string {
 }
 
 function seedConversation(
-  manager: InMemorySessionManager,
+  manager: SQLiteSessionManager,
   turns: number,
   padding = "",
 ): void {

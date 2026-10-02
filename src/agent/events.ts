@@ -15,7 +15,6 @@ type TAgentEventPayload =
     | {
         readonly type: "agent_end"
         readonly reason: TAgentRunEndReason
-        readonly messages: readonly TAgentMessage[]
     }
     | { readonly type: "turn_start"; readonly index: number }
     | {

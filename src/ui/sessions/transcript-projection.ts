@@ -1,17 +1,12 @@
 import type {
     TAgentMessage,
     IAssistantMessage,
-    IFileChangeProposalRecord,
     IToolCallContent,
     IToolResultMessage,
 } from "@/agent"
 
 export const EMPTY_TOOL_RESULTS: ReadonlyMap<string, IToolResultMessage> = new Map()
 export const EMPTY_TOOL_CALL_IDS: ReadonlySet<string> = new Set()
-
-export type TTranscriptItem =
-    | { readonly type: "message"; readonly message: TAgentMessage }
-    | { readonly type: "fileChangeProposal"; readonly proposal: IFileChangeProposalRecord }
 
 export interface IToolActivityProjection {
     readonly resultsByAssistantMessageId: ReadonlyMap<string, ReadonlyMap<string, IToolResultMessage>>
@@ -23,30 +18,6 @@ export interface IToolActivityProjection {
 interface IOpenToolBatch {
     readonly message: IAssistantMessage
     readonly callsById: Map<string, IToolCallContent>
-}
-
-/** Inserts file change proposals after their owning assistant and before later messages. */
-export function projectTranscriptItems(
-    messages: readonly TAgentMessage[],
-    proposals: readonly IFileChangeProposalRecord[],
-): readonly TTranscriptItem[] {
-    const items: TTranscriptItem[] = messages.map((message) => ({ type: "message", message }))
-    for (const proposal of proposals) {
-        const matchingAssistantIndex = items.findIndex((item) =>
-            item.type === "message"
-            && item.message.role === "assistant"
-            && item.message.content.some((content) =>
-                content.type === "toolCall"
-                && content.toolCallId === proposal.toolCallId
-            ))
-        const laterItemIndex = items.findIndex((item, index) =>
-            index > matchingAssistantIndex
-            && item.type === "message"
-            && item.message.createdAt > proposal.createdAt)
-        const insertionIndex = laterItemIndex < 0 ? items.length : laterItemIndex
-        items.splice(insertionIndex, 0, { type: "fileChangeProposal", proposal })
-    }
-    return items
 }
 
 /** Matches tool results within assistant batches and identifies the active batch. */
@@ -106,6 +77,7 @@ export function toolCallIds(message: IAssistantMessage): ReadonlySet<string> {
 }
 
 function belongsToBatch(result: IToolResultMessage, batch: IOpenToolBatch): boolean {
-    return result.sessionId === batch.message.sessionId
+    return result.assistantMessageId === batch.message.id
+        && result.sessionId === batch.message.sessionId
         && result.runId === batch.message.runId
 }

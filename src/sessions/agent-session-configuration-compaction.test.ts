@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test"
 import { AgentSession } from "@/sessions/agent-session"
-import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
+import { SQLiteSessionManager } from "@/sessions/sqlite/sqlite-session-manager"
 
 test("configuration cannot change while compaction is pending", async () => {
-    const manager = new InMemorySessionManager()
+    const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
     manager.createSession({ id: "session", agentId: "agent", title: "Test", createdAt: 1, updatedAt: 1 })
     const session = new AgentSession({
         agentId: "agent",

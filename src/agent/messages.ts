@@ -93,6 +93,7 @@ export interface IAssistantMessage extends IMessageBase {
 /** Durable result paired with one tool call from an assistant message. */
 export interface IToolResultMessage extends IMessageBase {
     readonly role: "toolResult"
+    readonly assistantMessageId: string
     readonly toolCallId: string
     readonly toolName: string
     readonly content: string
@@ -102,7 +103,7 @@ export interface IToolResultMessage extends IMessageBase {
     readonly diff?: string
 }
 
-/** Complete provider-neutral message history owned by an agent. */
+/** One durable provider-neutral conversation message. */
 export type TAgentMessage =
     | IUserMessage
     | IAssistantMessage

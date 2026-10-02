@@ -1,3 +1,4 @@
+import { Keycap } from "@/ui/components/Keycap"
 import { useEffect, useState, type ReactNode } from "react"
 
 import type { IBuliApplication } from "@/app/contracts"
@@ -62,13 +63,13 @@ export function BuliApplicationLifecycle(
     }, [props.runtimeTask])
 
     if (state.type === "startup") {
-        return <text fg={theme.textMuted}>Starting Buli...</text>
+        return <text fg={theme.textSecondary}>Starting Buli...</text>
     }
     if (state.type === "error") {
         return <box flexDirection="column">
             <text fg={theme.red}>Failed to start Buli</text>
             <text fg={theme.red}>{state.message}</text>
-            <text fg={theme.textMuted}>Press Ctrl+C to exit</text>
+            <text fg={theme.textSecondary}>Press <Keycap keys="Ctrl + C" /> to exit</text>
         </box>
     }
 

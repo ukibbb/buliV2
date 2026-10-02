@@ -2,8 +2,10 @@ import { expect, spyOn, test } from "bun:test"
 import { BuliApplicationRuntime } from "@/app/runtime"
 import { McpConnection } from "@/mcp/mcp-connection"
 import { NOVIBE_READ_TOOL_NAMES } from "@/mcp/novibe"
-import { InMemorySessionManager } from "@/sessions"
+import { SQLiteSessionManager } from "@/sessions"
 import type { IAgentModelRequest } from "@/agent/model"
+
+const locationToolNames = ["create_cabinet", "create_catalog", "create_category", "create_folder", "create_subfolder"]
 
 function fixture(options: { missingTool?: boolean; waitForList?: Promise<void> } = {}) {
     let initializations = 0
@@ -23,7 +25,7 @@ function fixture(options: { missingTool?: boolean; waitForList?: Promise<void> }
             if (message.method === "tools/list") {
                 listStarted.resolve()
                 await options.waitForList
-                const names = options.missingTool ? [] : [...NOVIBE_READ_TOOL_NAMES, "edit_document", "create_document", "future_tool"]
+                const names = options.missingTool ? [] : [...NOVIBE_READ_TOOL_NAMES, "edit_document", "create_document", ...locationToolNames, "future_tool"]
                 return respond({ tools: names.map((name) => ({ name, inputSchema: { type: "object" } })) })
             }
             return respond({ content: [{ type: "text", text: "Test note" }] })
@@ -39,7 +41,7 @@ function fixture(options: { missingTool?: boolean; waitForList?: Promise<void> }
     const requests: IAgentModelRequest[] = []
     let id = 0
     const runtime = new BuliApplicationRuntime({
-        workspaceRoot: "/workspace", manager: new InMemorySessionManager(),
+        workspaceRoot: "/workspace", manager: new SQLiteSessionManager({ databasePath: ":memory:" }),
         agents: [{ id: "test", name: "Test", systemPrompt: "Base", tools: [] }], defaultAgentId: "test",
         models: [{ id: "test", name: "Test", reasoningEfforts: ["medium"], defaultReasoningEffort: "medium",
             model: { async *stream(request) { requests.push(request); yield { type: "finish", reason: "stop" } } } }],
@@ -63,17 +65,17 @@ test("NoVibe activation discovers all tools, is session-local and idempotent; of
         await f.runtime.activateNovibe(f.first)
         expect(await f.runtime.activateNovibe(f.first)).toContain("aktywne")
         expect(f.initializations()).toBe(1)
-        expect(f.runtime.openSession(f.first).getSnapshot().messages).toHaveLength(0)
+        expect(f.runtime.openSession(f.first).loadHistoryPage("main").messages).toHaveLength(0)
         await f.prompt(f.first)
         expect(f.requests.at(-1)?.tools.map((tool) => tool.name)).toEqual(
-            [...NOVIBE_READ_TOOL_NAMES, "edit_document", "create_document", "future_tool"].map((name) => `novibe__${name}`),
+            [...NOVIBE_READ_TOOL_NAMES, "edit_document", "create_document", ...locationToolNames, "future_tool"].map((name) => `novibe__${name}`),
         )
         expect(f.requests.at(-1)?.systemPrompt).toContain("Test NoVibe instructions")
         await f.prompt(f.second)
         expect(f.requests.at(-1)?.tools).toHaveLength(0)
-        const history = f.runtime.openSession(f.first).getSnapshot().messages
+        const history = f.runtime.openSession(f.first).loadHistoryPage("main").messages
         await f.runtime.deactivateNovibe(f.first)
-        expect(f.runtime.openSession(f.first).getSnapshot().messages).toEqual(history)
+        expect(f.runtime.openSession(f.first).loadHistoryPage("main").messages).toEqual(history)
         expect(f.closes[0]).toHaveBeenCalledTimes(1)
         await f.prompt(f.first)
         expect(f.requests.at(-1)?.tools).toHaveLength(0)

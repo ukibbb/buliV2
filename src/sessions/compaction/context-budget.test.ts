@@ -3,6 +3,7 @@ import { Buffer } from "node:buffer"
 import { expect, test } from "bun:test"
 
 import type { TAgentMessage } from "@/agent"
+import { estimateCompactionProgressInputTokens } from "./context-budget"
 import {
   CONTEXT_COMPACTION_THRESHOLD,
   contextCompactionThresholdTokens,
@@ -140,7 +141,9 @@ test("includes preserved reasoning after the usage anchor without adding cache c
     + estimateContextInputTokens({ ...input, messages: [] }) * ESTIMATED_BYTES_PER_TOKEN
   const usage = estimateContextUsage(input, 100_000)
 
-  expect(usage.estimatedInputTokens).toBe(expected)
+  expect(usage.estimatedInputTokens).toBe(
+    measured.usage.inputTokens + estimateMessagesInputTokens(input.messages, policy),
+  )
   expect(usage.compactionInputTokens).toBe(expected)
   expect(usage.estimatedInputTokens).toBeGreaterThan(
     estimateContextUsage({ ...input, estimationPolicy: { reasoningHistory: "omit" } }).estimatedInputTokens,
@@ -224,18 +227,19 @@ test("uses cache-inclusive provider input plus safety margins without doubling t
       tools: input.tools,
     }) * ESTIMATED_BYTES_PER_TOKEN
   const usage = estimateContextUsage(input, 272_000)
+  const displayedInputTokens = 238_000 + estimateMessagesInputTokens([measured])
 
   expect(usage).toEqual({
-    estimatedInputTokens: expectedInputTokens,
+    estimatedInputTokens: displayedInputTokens,
     compactionInputTokens: expectedInputTokens,
     contextWindowTokens: 272_000,
     compactionThresholdTokens: 217_600,
-    remainingTokens: 272_000 - expectedInputTokens,
-    usageRatio: expectedInputTokens / 272_000,
+    remainingTokens: 272_000 - displayedInputTokens,
+    usageRatio: displayedInputTokens / 272_000,
     shouldCompact: true,
   })
   expect(estimateContextUsage(input)).toEqual({
-    estimatedInputTokens: expectedInputTokens,
+    estimatedInputTokens: displayedInputTokens,
     compactionInputTokens: expectedInputTokens,
     shouldCompact: false,
   })
@@ -251,8 +255,8 @@ test("uses cache-inclusive provider input plus safety margins without doubling t
     }],
     tools: [],
   }, 272_000)
-  expect(appendedOutput.estimatedInputTokens).toBeGreaterThan(217_600)
-  expect(appendedOutput.compactionInputTokens).toBe(appendedOutput.estimatedInputTokens)
+  expect(appendedOutput.estimatedInputTokens).toBeLessThan(217_600)
+  expect(appendedOutput.compactionInputTokens).toBeGreaterThan(217_600)
   expect(appendedOutput.shouldCompact).toBe(true)
 
   const changedPrefix = estimateContextUsage({
@@ -264,7 +268,7 @@ test("uses cache-inclusive provider input plus safety margins without doubling t
     }],
     tools: [],
   }, 100_000)
-  expect(changedPrefix.compactionInputTokens).toBe(changedPrefix.estimatedInputTokens)
+  expect(changedPrefix.compactionInputTokens).toBeGreaterThan(changedPrefix.estimatedInputTokens)
   expect(changedPrefix.shouldCompact).toBe(true)
 })
 
@@ -325,6 +329,29 @@ test("discards a provider usage anchor after the model changes", () => {
   expect(usage.shouldCompact).toBe(true)
 })
 
+test.each([undefined, 0, 50_000, 3_000_000])("preserves safety and compaction progress independently of display: %s", (inputTokens) => {
+  const measured = {
+    ...assistant("anchor", [{ type: "text" as const, text: "Answer" }]),
+    ...(inputTokens === undefined ? {} : { usage: { inputTokens } }),
+  }
+  const input = {
+    systemPrompt: "System".repeat(100),
+    messages: [measured, user("later", "X".repeat(10_000))],
+    tools: [],
+  }
+  const local = estimateContextInputTokens(input)
+  const appended = estimateMessagesInputTokens(input.messages)
+  const prefix = estimateContextInputTokens({ ...input, messages: [] })
+  const oldEstimate = Math.max(local, inputTokens === undefined ? 0 : inputTokens + (appended + prefix) * 2)
+  const usage = estimateContextUsage(input, 100_000)
+  expect(usage.compactionInputTokens).toBe(inputTokens === undefined ? local * 2 : oldEstimate)
+  expect(estimateCompactionProgressInputTokens(input)).toBe(oldEstimate)
+  expect(usage.estimatedInputTokens).toBe(Math.max(local, inputTokens === undefined ? 0 : inputTokens + appended))
+  expect(usage.shouldCompact).toBe(usage.compactionInputTokens >= 80_000)
+  expect(usage.usageRatio).toBe(usage.estimatedInputTokens / 100_000)
+  for (let index = 0; index < 10; index += 1) expect(estimateContextUsage(input, 100_000)).toEqual(usage)
+})
+
 function user(
   id: string,
   content: string,
@@ -361,6 +388,7 @@ function toolResult(id: string, content: string): TAgentMessage {
     sessionId: "session-1",
     runId: `run-${id}`,
     role: "toolResult",
+    assistantMessageId: "assistant-1",
     toolCallId: "call-1",
     toolName: "read_file",
     content,

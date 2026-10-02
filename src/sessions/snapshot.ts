@@ -1,12 +1,9 @@
 import {
     isImmutableAssistantSnapshot,
-    type TAgentMessage,
     type TAgentRunEndReason,
     type IAssistantMessage,
-    type IFileChangeProposalRecord,
     type IUserMessage,
 } from "@/agent"
-import type { ICompactionCheckpoint } from "@/sessions/compaction/checkpoint"
 import type { IContextUsage } from "@/sessions/compaction/context-budget"
 import type { ICompactionProgress } from "@/sessions/compaction/session-compactor"
 
@@ -19,12 +16,10 @@ export interface ISessionMcpStatus {
 export interface ISessionSnapshot {
     readonly activeBranchId: string
     readonly activeMcpServers?: readonly ISessionMcpStatus[]
-    readonly messages: readonly TAgentMessage[]
-    readonly fileChangeProposals: readonly IFileChangeProposalRecord[]
+    readonly assistantError?: { readonly id: string; readonly runId: string; readonly errorMessage: string }
     readonly pendingSteeringMessages: readonly IUserMessage[]
     readonly pendingFollowUpMessages: readonly IUserMessage[]
     readonly streamingMessage?: IAssistantMessage
-    readonly compactionCheckpoint?: ICompactionCheckpoint
     readonly compactionProgress?: ICompactionProgress
     readonly isRunning: boolean
     readonly isCompacting: boolean
@@ -55,16 +50,9 @@ export function freezeSessionSnapshot(
         ...(snapshot.activeMcpServers === undefined ? {} : {
             activeMcpServers: freezeBranch(snapshot.activeMcpServers, previousSource?.activeMcpServers, previousValue?.activeMcpServers),
         }),
-        messages: freezeBranch(
-            snapshot.messages,
-            previousSource?.messages,
-            previousValue?.messages,
-        ),
-        fileChangeProposals: freezeBranch(
-            snapshot.fileChangeProposals,
-            previousSource?.fileChangeProposals,
-            previousValue?.fileChangeProposals,
-        ),
+        ...(snapshot.assistantError === undefined ? {} : {
+            assistantError: freezeBranch(snapshot.assistantError, previousSource?.assistantError, previousValue?.assistantError),
+        }),
         pendingSteeringMessages: freezeBranch(
             snapshot.pendingSteeringMessages,
             previousSource?.pendingSteeringMessages,
@@ -82,15 +70,6 @@ export function freezeSessionSnapshot(
                     snapshot.streamingMessage,
                     previousSource?.streamingMessage,
                     previousValue?.streamingMessage,
-                ),
-            }),
-        ...(snapshot.compactionCheckpoint === undefined
-            ? {}
-            : {
-                compactionCheckpoint: freezeBranch(
-                    snapshot.compactionCheckpoint,
-                    previousSource?.compactionCheckpoint,
-                    previousValue?.compactionCheckpoint,
                 ),
             }),
         ...(snapshot.compactionProgress === undefined

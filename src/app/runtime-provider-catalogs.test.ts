@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { BuliApplicationRuntime, type IBuliModelRuntimeConfig, type TProviderCatalogResult } from "./runtime"
-import { InMemorySessionManager } from "@/sessions"
+import { SQLiteSessionManager } from "@/sessions"
 
 function model(id: string, providerId: string): IBuliModelRuntimeConfig {
     return {
@@ -16,7 +16,7 @@ const ready = (entry: IBuliModelRuntimeConfig): TProviderCatalogResult => ({ pro
 const unavailable = (providerId: string, status: "error" | "disconnected"): TProviderCatalogResult => ({ providerId, status, message: "Synthetic catalog failure" })
 function fixture(initial: readonly TProviderCatalogResult[]) {
     let results = initial
-    const manager = new InMemorySessionManager()
+    const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
     const runtime = new BuliApplicationRuntime({
         workspaceRoot: "/synthetic", manager,
         agents: [{ id: "agent", name: "Agent", systemPrompt: "System", tools: [] }], defaultAgentId: "agent",
@@ -106,7 +106,7 @@ test.each(["abort", "dispose"] as const)("%s prevents a late provider result fro
     const pending = Promise.withResolvers<readonly TProviderCatalogResult[]>()
     const controller = new AbortController()
     const runtime = new BuliApplicationRuntime({
-        workspaceRoot: "/synthetic", manager: new InMemorySessionManager(),
+        workspaceRoot: "/synthetic", manager: new SQLiteSessionManager({ databasePath: ":memory:" }),
         agents: [{ id: "agent", name: "Agent", systemPrompt: "System", tools: [] }], defaultAgentId: "agent",
         models: [openAi], selection: { modelId: openAi.id, reasoningEffort: "high" },
         preferredModelIds: [openAi.id], loadProviderCatalogs: async () => pending.promise,

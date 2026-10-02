@@ -4,6 +4,7 @@ import { Type } from "typebox"
 
 import type {
   TAgentEvent,
+  TAgentMessage,
   IAgentInputQueue,
   IAgentModel,
   TAgentModelEvent,
@@ -13,7 +14,8 @@ import type {
   IToolOutputStore,
   IUserMessage,
 } from "@/agent"
-import { defineAgentTool, runAgentLoop } from "@/agent"
+import { defineAgentTool } from "@/agent"
+import { runAgentLoopWithContext as runAgentLoop } from "../../../test/fixtures/agent-loop"
 import { EphemeralToolOutputStore } from "@/agent/tools"
 
 const RUN_ID = "run-1"
@@ -87,8 +89,13 @@ test("emits an explicit lifecycle for a text response", async () => {
     "agent_end",
   ])
   expect(events.every((event) => event.runId === RUN_ID)).toBe(true)
-  expect(result.reason).toBe("completed")
-  expect(result.messages.at(-1)).toEqual({
+  expect(result).toEqual({ reason: "completed" })
+  expect(events.at(-1)).toEqual({
+    type: "agent_end",
+    runId: RUN_ID,
+    reason: "completed",
+  })
+  expect(completedMessages(events).at(-1)).toEqual({
     id: "generated-1",
     sessionId: "session-1",
     runId: RUN_ID,
@@ -175,6 +182,7 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
     sessionId: "session-1",
     runId: RUN_ID,
     role: "toolResult" as const,
+    assistantMessageId: "generated-1",
     toolCallId: "call-readme",
     toolName: "read_file",
     content: "contents:README.md",
@@ -187,6 +195,7 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
     sessionId: "session-1",
     runId: RUN_ID,
     role: "toolResult" as const,
+    assistantMessageId: "generated-1",
     toolCallId: "call-package",
     toolName: "read_file",
     content: "contents:package.json",
@@ -276,7 +285,7 @@ test("executes multiple tools sequentially and emits each result lifecycle", asy
   ])
   expect(events.every((event) => event.runId === RUN_ID)).toBe(true)
   expect(result.reason).toBe("completed")
-  expect(result.messages.at(-1)).toMatchObject({
+  expect(completedMessages(events).at(-1)).toMatchObject({
     role: "assistant",
     content: [{ type: "text", text: "Finished" }],
     stopReason: "stop",
@@ -306,7 +315,8 @@ test("does not execute tool calls from an output-limited response", async () => 
     },
   })
 
-  const result = await runAgentLoop(
+  const messages: TAgentMessage[] = []
+  await runAgentLoop(
     userMessage("Write"),
     {
       systemPrompt: "System",
@@ -319,7 +329,9 @@ test("does not execute tool calls from an output-limited response", async () => 
       model,
       reasoningEffort: "medium",
       signal: new AbortController().signal,
-      emit: () => undefined,
+      emit: (event) => {
+        if (event.type === "message_end") messages.push(structuredClone(event.message))
+      },
       now: timeGenerator(),
       generateId: idGenerator(),
     },
@@ -327,7 +339,7 @@ test("does not execute tool calls from an output-limited response", async () => 
 
   expect(executions).toBe(0)
   expect(model.requests).toHaveLength(2)
-  expect(result.messages.find((message) => message.role === "toolResult"))
+  expect(messages.find((message) => message.role === "toolResult"))
     .toMatchObject({
       toolCallId: "call-truncated",
       isError: true,
@@ -807,7 +819,8 @@ test("executes each action call in a batch", async () => {
     },
   })
 
-  const result = await runAgentLoop(
+  const messages: TAgentMessage[] = []
+  await runAgentLoop(
     userMessage("Run both commands"),
     {
       systemPrompt: "System",
@@ -820,7 +833,9 @@ test("executes each action call in a batch", async () => {
       model,
       reasoningEffort: "medium",
       signal: new AbortController().signal,
-      emit: () => undefined,
+      emit: (event) => {
+        if (event.type === "message_end") messages.push(structuredClone(event.message))
+      },
       now: timeGenerator(),
       generateId: idGenerator(),
     },
@@ -833,9 +848,9 @@ test("executes each action call in a batch", async () => {
   expect(model.requests[1]?.tools.map((entry) => entry.name)).toEqual([
     "bash",
   ])
-  expect(result.messages.filter((message) => message.role === "toolResult"))
+  expect(messages.filter((message) => message.role === "toolResult"))
     .toHaveLength(2)
-  expect(result.messages.filter((message) => message.role === "toolResult")
+  expect(messages.filter((message) => message.role === "toolResult")
     .every((message) => !message.isError)).toBe(true)
 })
 
@@ -958,6 +973,7 @@ test("delivers follow-up only after tool continuation and steering", async () =>
     execute: async () => "contents",
   })
 
+  const messages: TAgentMessage[] = []
   const result = await runAgentLoop(
     userMessage("Read the file"),
     {
@@ -972,6 +988,7 @@ test("delivers follow-up only after tool continuation and steering", async () =>
       reasoningEffort: "medium",
       signal: new AbortController().signal,
       emit: (event) => {
+        if (event.type === "message_end") messages.push(structuredClone(event.message))
         if (event.type !== "tool_execution_start") return
         steering.push({
           id: "steering-1",
@@ -1015,7 +1032,7 @@ test("delivers follow-up only after tool continuation and steering", async () =>
     source: "followUp",
     content: "Then summarize everything",
   })
-  expect(result.messages.filter((message) => message.role === "user").map(
+  expect(messages.filter((message) => message.role === "user").map(
     (message) => message.source,
   )).toEqual(["prompt", "steer", "followUp"])
   expect(result.reason).toBe("completed")
@@ -1058,6 +1075,7 @@ test("turns an unknown local tool into a model-visible error", async () => {
     sessionId: "session-1",
     runId: RUN_ID,
     role: "toolResult",
+    assistantMessageId: "generated-1",
     toolCallId: "call-missing",
     toolName: "missing",
     content: "Unknown tool: missing",
@@ -1083,6 +1101,7 @@ test("gives abort precedence over a racing provider finish", async () => {
     },
   }
 
+  const messages: TAgentMessage[] = []
   const result = await runAgentLoop(
     userMessage("Question"),
     {
@@ -1096,13 +1115,15 @@ test("gives abort precedence over a racing provider finish", async () => {
       model,
       reasoningEffort: "medium",
       signal: controller.signal,
-      emit: () => undefined,
+      emit: (event) => {
+        if (event.type === "message_end") messages.push(structuredClone(event.message))
+      },
       now: timeGenerator(),
       generateId: idGenerator(),
     },
   )
 
-  const assistant = result.messages.at(-1)
+  const assistant = messages.at(-1)
   expect(result.reason).toBe("aborted")
   expect(assistant).toEqual({
     id: "generated-1",
@@ -1255,7 +1276,8 @@ test("turns invalid tool input into a model-visible result without executing", a
     },
   })
 
-  const result = await runAgentLoop(
+  const messages: TAgentMessage[] = []
+  await runAgentLoop(
     userMessage("Read"),
     {
       systemPrompt: "System",
@@ -1268,13 +1290,15 @@ test("turns invalid tool input into a model-visible result without executing", a
       model,
       reasoningEffort: "medium",
       signal: new AbortController().signal,
-      emit: () => {},
+      emit: (event) => {
+        if (event.type === "message_end") messages.push(structuredClone(event.message))
+      },
       now: timeGenerator(),
       generateId: idGenerator(),
     },
   )
 
-  const toolResult = result.messages.find((message) => message.role === "toolResult")
+  const toolResult = messages.find((message) => message.role === "toolResult")
   expect(executionCount).toBe(0)
   expect(toolResult).toMatchObject({
     role: "toolResult",
@@ -1444,7 +1468,8 @@ test("retains complete custom tool output before bounded persistence and continu
   })
 
   const store = new EphemeralToolOutputStore()
-  const result = await runAgentLoop(
+  const messages: TAgentMessage[] = []
+  await runAgentLoop(
     userMessage("Run"),
     {
       systemPrompt: "System",
@@ -1457,14 +1482,16 @@ test("retains complete custom tool output before bounded persistence and continu
       model,
       reasoningEffort: "medium",
       signal: new AbortController().signal,
-      emit: () => {},
+      emit: (event) => {
+        if (event.type === "message_end") messages.push(structuredClone(event.message))
+      },
       now: timeGenerator(),
       generateId: idGenerator(),
       toolOutputStore: store,
     },
   )
 
-  const persisted = result.messages.find((message) => message.role === "toolResult")
+  const persisted = messages.find((message) => message.role === "toolResult")
   const continued = model.requests[1]?.messages.find(
     (message) => message.role === "toolResult",
   )
@@ -1526,7 +1553,8 @@ test("returns a durable failure when oversized manual output cannot be stored", 
     }),
   })
 
-  const result = await runAgentLoop(
+  const messages: TAgentMessage[] = []
+  await runAgentLoop(
     userMessage("Run"),
     { systemPrompt: "System", messages: [], tools: [tool] },
     {
@@ -1535,13 +1563,15 @@ test("returns a durable failure when oversized manual output cannot be stored", 
       model,
       reasoningEffort: "medium",
       signal: new AbortController().signal,
-      emit: () => {},
+      emit: (event) => {
+        if (event.type === "message_end") messages.push(structuredClone(event.message))
+      },
       now: timeGenerator(),
       generateId: idGenerator(),
     },
   )
 
-  expect(result.messages.find((message) => message.role === "toolResult"))
+  expect(messages.find((message) => message.role === "toolResult"))
     .toMatchObject({
       role: "toolResult",
       isError: true,
@@ -1581,7 +1611,8 @@ test("bounds storage failure details and marks completed side effects unknown", 
     dispose: async () => {},
   }
 
-  const result = await runAgentLoop(
+  const messages: TAgentMessage[] = []
+  await runAgentLoop(
     userMessage("Run"),
     { systemPrompt: "System", messages: [], tools: [tool] },
     {
@@ -1590,14 +1621,16 @@ test("bounds storage failure details and marks completed side effects unknown", 
       model,
       reasoningEffort: "medium",
       signal: new AbortController().signal,
-      emit: () => {},
+      emit: (event) => {
+        if (event.type === "message_end") messages.push(structuredClone(event.message))
+      },
       now: timeGenerator(),
       generateId: idGenerator(),
       toolOutputStore: store,
     },
   )
 
-  const toolResult = result.messages.find((message) => message.role === "toolResult")
+  const toolResult = messages.find((message) => message.role === "toolResult")
   expect(toolResult).toMatchObject({
     role: "toolResult",
     isError: true,
@@ -1630,7 +1663,8 @@ test("keeps output from tools that declare their own truncation", async () => {
     execute: async () => content,
   })
 
-  const result = await runAgentLoop(
+  const messages: TAgentMessage[] = []
+  await runAgentLoop(
     userMessage("Run"),
     { systemPrompt: "System", messages: [], tools: [tool] },
     {
@@ -1639,13 +1673,15 @@ test("keeps output from tools that declare their own truncation", async () => {
       model,
       reasoningEffort: "medium",
       signal: new AbortController().signal,
-      emit: () => {},
+      emit: (event) => {
+        if (event.type === "message_end") messages.push(structuredClone(event.message))
+      },
       now: timeGenerator(),
       generateId: idGenerator(),
     },
   )
 
-  expect(result.messages.find((message) => message.role === "toolResult"))
+  expect(messages.find((message) => message.role === "toolResult"))
     .toMatchObject({ content, isError: false, outcome: "completed" })
 })
 
@@ -1671,6 +1707,7 @@ async function executeSingleTool(
     // @ts-expect-error This fake deliberately violates the adapter contract to test runtime result validation.
     validateAndExecute: execute,
   }
+  const messages: TAgentMessage[] = []
   const result = await runAgentLoop(
     userMessage("Run tool"),
     {
@@ -1684,14 +1721,22 @@ async function executeSingleTool(
       model,
       reasoningEffort: "medium",
       signal,
-      emit: () => undefined,
+      emit: (event) => {
+        if (event.type === "message_end") messages.push(structuredClone(event.message))
+      },
       now: timeGenerator(),
       generateId: idGenerator(),
     },
   )
-  const toolResult = result.messages.find((message) => message.role === "toolResult")
+  const toolResult = messages.find((message) => message.role === "toolResult")
   if (toolResult?.role !== "toolResult") throw new Error("Expected tool result")
   return { result, toolResult }
+}
+
+function completedMessages(events: readonly TAgentEvent[]): TAgentMessage[] {
+  return events
+    .filter((event) => event.type === "message_end")
+    .map((event) => event.message)
 }
 
 function testInputQueue(

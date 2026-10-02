@@ -12,7 +12,7 @@ const MARKDOWN_TABLE_OPTIONS = {
     borders: true,
     outerBorder: true,
     borderStyle: "single",
-    borderColor: theme.textMuted,
+    borderColor: theme.textSecondary,
     selectable: true,
 } as const
 

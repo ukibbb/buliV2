@@ -1,5 +1,5 @@
 import type { AssistantContent, ModelMessage } from "ai"
-import type { TAgentMessage } from "@/agent"
+import type { TAgentMessage, IToolResultMessage } from "@/agent"
 import type { TDeepSeekModelId } from "./deepseek-model-definitions"
 
 type AssistantPart = Exclude<AssistantContent, string>[number]
@@ -11,7 +11,8 @@ export function toDeepSeekModelMessages(
     contextSummary?: string,
 ): ModelMessage[] {
     const projected: ModelMessage[] = []
-    const pending = new Map<string, string>()
+    const pending = new Map<string, Pick<IToolResultMessage,
+        "assistantMessageId" | "sessionId" | "runId" | "toolName">>()
     const seen = new Set<string>()
     if (contextSummary) projected.push({
         role: "user",
@@ -43,15 +44,23 @@ export function toDeepSeekModelMessages(
                             if (message.stopReason !== "tool-calls") throw new Error("DeepSeek history contains incomplete tool calls")
                             if (seen.has(part.toolCallId)) throw new Error("DeepSeek history contains duplicate tool call IDs")
                             seen.add(part.toolCallId)
-                            pending.set(part.toolCallId, part.toolName)
+                            pending.set(part.toolCallId, {
+                                assistantMessageId: message.id, sessionId: message.sessionId,
+                                runId: message.runId, toolName: part.toolName,
+                            })
                             return { type: "tool-call", toolCallId: part.toolCallId, toolName: part.toolName, input: structuredClone(part.input) }
                     }
                 })
                 if (content.length) projected.push({ role: "assistant", content })
                 break
             }
-            case "toolResult":
-                if (!pending.has(message.toolCallId) || pending.get(message.toolCallId) !== message.toolName) {
+            case "toolResult": {
+                const expected = pending.get(message.toolCallId)
+                if (!expected
+                    || expected.assistantMessageId !== message.assistantMessageId
+                    || expected.sessionId !== message.sessionId
+                    || expected.runId !== message.runId
+                    || expected.toolName !== message.toolName) {
                     throw new Error("DeepSeek history contains an unpaired tool result; start a new session")
                 }
                 pending.delete(message.toolCallId)
@@ -60,6 +69,7 @@ export function toDeepSeekModelMessages(
                     output: { type: message.isError ? "error-text" : "text", value: message.content },
                 }] })
                 break
+            }
         }
     }
     if (pending.size) throw new Error("DeepSeek history contains unresolved tool calls; start a new session")

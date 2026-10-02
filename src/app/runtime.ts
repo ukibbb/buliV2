@@ -16,7 +16,7 @@ import type {
     IBuliPromptInput,
     IBuliPromptRun,
     IBuliSessionCreationOptions,
-    ISnapshotSource,
+    ISessionSource,
 } from "@/app/contracts"
 import { generateRandomId } from "@/common/ids"
 import { version as applicationVersion } from "../../package.json"
@@ -28,7 +28,6 @@ import {
     type IContextEstimationPolicy,
     type ISessionInfo,
     type ISessionManager,
-    type ISessionSnapshot,
 } from "@/sessions"
 
 type TBuliRuntimeListener = () => void
@@ -199,8 +198,8 @@ export class BuliApplicationRuntime implements IBuliApplication {
             this.sessions.set(id, session)
         } catch (error) {
             try {
-                this.manager.deleteSession(id)
-                this.manager.releaseSession?.(id)
+                this.manager.deleteEmptySession(id)
+                this.manager.releaseSession(id)
             } catch (cleanupError) {
                 throw new AggregateError(
                     [error, cleanupError],
@@ -215,7 +214,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
 
     readonly openSession = (
         sessionId: string,
-    ): ISnapshotSource<ISessionSnapshot> => {
+    ): ISessionSource => {
         if (this.disposed) throw new Error("Buli runtime is disposed")
 
         return this.getOrOpenAgentSession(sessionId)
@@ -235,7 +234,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
             this.sessionMcpControllers.get(sessionId)?.dispose()
             await Promise.all([session.dispose(), this.closeNovibeConnection(sessionId)])
             this.sessionMcpControllers.delete(sessionId)
-            this.manager.releaseSession?.(sessionId)
+            this.manager.releaseSession(sessionId)
             this.sessions.delete(sessionId)
             this.sessionCloseTasks.delete(sessionId)
         })
@@ -532,7 +531,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
             errors.push(error)
         }
         try {
-            await this.manager.dispose?.()
+            await this.manager.dispose()
         } catch (error) {
             errors.push(error)
         }
@@ -793,7 +792,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
         const existing = this.sessions.get(sessionId)
         if (existing) return existing
 
-        this.manager.openSession?.(sessionId)
+        this.manager.openSession(sessionId)
         try {
             const info = this.manager.getSessionInfo(sessionId)
             if (!info) throw new Error(`Session does not exist: ${sessionId}`)
@@ -804,7 +803,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
             return session
         } catch (error) {
             try {
-                this.manager.releaseSession?.(sessionId)
+                this.manager.releaseSession(sessionId)
             } catch (cleanupError) {
                 throw new AggregateError(
                     [error, cleanupError],
@@ -824,8 +823,9 @@ export class BuliApplicationRuntime implements IBuliApplication {
         }
         const task = Promise.resolve().then(async () => {
             await session.dispose()
-            this.manager.deleteSession(sessionId)
-            this.manager.releaseSession?.(sessionId)
+            // A failed acknowledgement may follow a successful durable write.
+            this.manager.deleteEmptySession(sessionId)
+            this.manager.releaseSession(sessionId)
             this.sessions.delete(sessionId)
             this.sessionCloseTasks.delete(sessionId)
         })

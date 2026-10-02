@@ -12,7 +12,7 @@ import {
   TextareaRenderable,
   TextRenderable,
 } from "@opentui/core"
-import { testRender } from "@opentui/react/test-utils"
+import { testRender as createTestRender } from "@opentui/react/test-utils"
 import { expect, spyOn, test } from "bun:test"
 import { act } from "react"
 
@@ -28,7 +28,7 @@ import {
 } from "@/ui/shell/SessionCompletionNotifier"
 import { SessionScreen } from "@/ui/shell/SessionScreen"
 import { BuliUiController } from "@/ui/ui-controller"
-import type { IAssistantMessage, IUserInputContent, IUserMessage } from "@/agent"
+import type { IAssistantMessage, IUserInputContent, IUserMessage, TAgentMessage } from "@/agent"
 import * as ChatView from "@/ui/chat/Chat"
 import * as ScreenView from "@/ui/shell/SessionScreen"
 import * as MenuView from "@/ui/chat/InputMenu"
@@ -36,8 +36,16 @@ import * as QueueView from "@/ui/chat/QueuedMessages"
 import * as EditorView from "@/ui/chat/PromptEditor"
 import * as StatusView from "@/ui/chat/ChatStatus"
 import * as TranscriptView from "@/ui/sessions/Transcript"
-import type { ICompactionCheckpoint, ISessionSnapshot } from "@/sessions"
+import type { ICompactionCheckpoint } from "@/sessions"
 import { theme } from "@/ui/terminal/theme"
+
+import { createSessionTestSource, type ISessionTestData } from "../../../test/fixtures/session-source"
+
+async function testRender(...args: Parameters<typeof createTestRender>) {
+  let setup!: Awaited<ReturnType<typeof createTestRender>>
+  await act(async () => { setup = await createTestRender(...args) })
+  return setup
+}
 
 const SESSION_ID = "session-screen-test"
 
@@ -56,12 +64,11 @@ const APPLICATION_SNAPSHOT: IBuliApplicationSnapshot = {
 }
 
 function sessionSnapshot(
-  overrides: Partial<ISessionSnapshot> = {},
-): ISessionSnapshot {
+  overrides: Partial<ISessionTestData> = {},
+): ISessionTestData {
   return {
     activeBranchId: "main",
     messages: [],
-    fileChangeProposals: [],
     pendingSteeringMessages: [],
     pendingFollowUpMessages: [],
     isRunning: false,
@@ -83,16 +90,9 @@ function transcriptMessages(count: number): IUserMessage[] {
   }))
 }
 
-function createSessionHarness(initialSnapshot: ISessionSnapshot) {
-  let snapshot = initialSnapshot
-  const sessionListeners = new Set<() => void>()
-  const session = {
-    subscribe: (listener: () => void) => {
-      sessionListeners.add(listener)
-      return () => sessionListeners.delete(listener)
-    },
-    getSnapshot: () => snapshot,
-  }
+function createSessionHarness(initialSnapshot: ISessionTestData) {
+  const fixture = createSessionTestSource(initialSnapshot)
+  const session = fixture.source
   const application: IBuliApplication = {
     workspaceRoot: "/workspace",
     subscribe: () => () => undefined,
@@ -138,11 +138,8 @@ function createSessionHarness(initialSnapshot: ISessionSnapshot) {
   return {
     application,
     controller,
-    getSnapshot: () => snapshot,
-    setSnapshot(nextSnapshot: ISessionSnapshot): void {
-      snapshot = nextSnapshot
-      for (const listener of [...sessionListeners]) listener()
-    },
+    getSnapshot: fixture.getData,
+    setSnapshot: fixture.setData,
   }
 }
 
@@ -362,6 +359,7 @@ test("branch indicator and transcript follow session snapshots", async () => {
       harness.setSnapshot(sessionSnapshot())
       await setup.renderOnce()
     })
+    await act(async () => { await setup.renderOnce() })
     expect(setup.captureCharFrame()).not.toContain("BRANCH")
     expect(setup.captureCharFrame()).not.toContain("Transcript line 0")
   } finally {
@@ -429,6 +427,7 @@ test.each(["screen", "notifier"] as const)(
       const freshSnapshot = sessionSnapshot({ messages: transcriptMessages(2) })
       let freshSnapshotReadCount = 0
       source = {
+        ...createSessionTestSource(freshSnapshot).source,
         subscribe: () => () => undefined,
         getSnapshot: () => {
           freshSnapshotReadCount += 1
@@ -477,7 +476,7 @@ test("configures a culled sticky transcript with restrained mouse scrolling", as
       RGBA.fromHex(theme.surface),
     )).toBe(true)
     expect(transcript.verticalScrollBar.slider.foregroundColor.equals(
-      RGBA.fromHex(theme.textMuted),
+      RGBA.fromHex(theme.textSecondary),
     )).toBe(true)
     expect(initialMaximum).toBeGreaterThan(0)
     expect(transcript.scrollTop).toBe(initialMaximum)
@@ -492,6 +491,7 @@ test("configures a culled sticky transcript with restrained mouse scrolling", as
       }))
       await setup.renderOnce()
     })
+    await act(async () => { await setup.renderOnce() })
     const expandedMaximum = maximumScrollTop(transcript)
     expect(expandedMaximum).toBeGreaterThan(initialMaximum)
     expect(transcript.scrollTop).toBe(expandedMaximum)
@@ -505,6 +505,98 @@ test("configures a culled sticky transcript with restrained mouse scrolling", as
       await setup.renderOnce()
     })
     expect(transcript.scrollTop).toBeLessThan(expandedMaximum)
+  } finally {
+    harness.controller.dispose()
+    act(() => setup.renderer.destroy())
+  }
+})
+
+test("draws only visible history cards while streaming compaction and scrolling", async () => {
+  const messages: IAssistantMessage[] = Array.from({ length: 100 }, (_, index) => ({
+    id: `assistant-${index}`,
+    sessionId: SESSION_ID,
+    runId: "history",
+    role: "assistant",
+    createdAt: index,
+    stopReason: "stop",
+    content: [{ type: "text", text: `## Answer ${index}\n\nDurable detail ${index}` }],
+  }))
+  const progress = {
+    id: "candidate", throughMessageId: messages.at(-1)!.id,
+    summary: "## Goals\n\nStreaming checkpoint summary",
+  }
+  const harness = createSessionHarness(sessionSnapshot({
+    messages, compactionProgress: progress, isCompacting: true,
+  }))
+  const setup = await testRender(sessionElement(harness), { width: 80, height: 22 })
+  try {
+    await act(async () => { await setup.renderOnce() })
+    const transcript = scrollBoxRenderable(setup.renderer.root)
+    const history = markdownRenderables(setup.renderer.root)
+    const draws = history.map((markdown) => spyOn(markdown, "render"))
+    try {
+      expect(history).toHaveLength(messages.length)
+      expect(transcript.content.getChildren()).toHaveLength(messages.length + 1)
+      const assertVisibleHistoryOnly = async () => {
+        await act(async () => {
+          await Promise.all(codeRenderables(setup.renderer.root).map(
+            (renderable) => renderable.highlightingDone,
+          ))
+        })
+        for (const draw of draws) draw.mockClear()
+        await act(async () => { await setup.renderOnce() })
+        const top = transcript.viewport.screenY
+        const bottom = top + transcript.viewport.height
+        for (const [index, markdown] of history.entries()) {
+          const card = markdown.parent!
+          expect(card.parent).toBe(transcript.content)
+          const visible = card.screenY < bottom && card.screenY + card.height > top
+          expect(draws[index]!.mock.calls.length > 0).toBe(visible)
+        }
+        const drawnCount = draws.filter((draw) => draw.mock.calls.length > 0).length
+        expect(drawnCount).toBeGreaterThan(0)
+        expect(drawnCount).toBeLessThan(messages.length)
+      }
+      await assertVisibleHistoryOnly()
+      expect(setup.captureCharFrame()).toContain("Streaming checkpoint summary")
+      await act(async () => {
+        harness.setSnapshot(sessionSnapshot({
+          messages, isCompacting: true,
+          compactionProgress: { ...progress, summary: progress.summary + "\n\nNext fragment" },
+        }))
+        await setup.renderOnce()
+      })
+      await assertVisibleHistoryOnly()
+      expect(setup.captureCharFrame()).toContain("Next fragment")
+      await act(async () => {
+        transcript.scrollTo(0)
+        await setup.renderOnce()
+      })
+      await assertVisibleHistoryOnly()
+      expect(setup.captureCharFrame()).toContain("Durable detail 0")
+      const firstDetail = codeRenderables(history[0]!).find(
+        (renderable) => renderable.content === "Durable detail 0",
+      )!
+      await act(async () => {
+        await setup.mockMouse.drag(
+          firstDetail.screenX, firstDetail.screenY,
+          firstDetail.screenX + firstDetail.plainText.length - 1, firstDetail.screenY,
+        )
+      })
+      expect(setup.renderer.getSelection()?.getSelectedText()).toBe("Durable detail 0")
+      act(() => setup.renderer.clearSelection())
+      await act(async () => {
+        transcript.scrollTo(maximumScrollTop(transcript))
+        await setup.renderOnce()
+      })
+      await assertVisibleHistoryOnly()
+      expect(setup.captureCharFrame()).toContain("Next fragment")
+      const after = markdownRenderables(setup.renderer.root)
+      expect(after).toHaveLength(history.length)
+      for (const [index, markdown] of after.entries()) expect(markdown).toBe(history[index]!)
+    } finally {
+      for (const draw of draws) draw.mockRestore()
+    }
   } finally {
     harness.controller.dispose()
     act(() => setup.renderer.destroy())
@@ -552,14 +644,13 @@ test("scrolls and resizes full-width user cards without repainting the header or
       const startLines = startFrame.split("\n")
       const startSpans = setup.captureSpans()
       const viewportBottom = transcript.viewport.y + transcript.viewport.height
-      const activity = setup.renderer.root.findDescendantById("chat-activity")!
       const status = setup.renderer.root.findDescendantById("chat-status")!
-      expect(transcript.viewport.y).toBe(1)
+      expect(transcript.viewport.y).toBe(2)
       expect(transcript.viewport.width).toBe(width - 1)
       expect(transcript.viewport.height).toBeGreaterThan(0)
-      expect(viewportBottom).toBeLessThanOrEqual(activity.y)
+      expect(viewportBottom).toBeLessThanOrEqual(status.y)
       expect(viewportBottom).toBeLessThanOrEqual(editor.y)
-      expect(editor.y + editor.height).toBeLessThanOrEqual(status.y)
+      expect(editor.parent!.y + editor.parent!.height).toBeLessThanOrEqual(status.y)
       expect(status.y + status.height).toBeLessThanOrEqual(height)
       expect(startLines[0]!.trim()).toBe("Fixed workspace header")
       for (const [index, card] of cards.entries()) {
@@ -656,7 +747,7 @@ test("renders and replaces the latest session checkpoint", async () => {
   }
 })
 
-test("streams compaction snapshots in place, follows the bottom and respects scrolling away", async () => {
+test.each([false, true])("streams compaction as plain text and preserves scrolling through final formatting (scroll away: %s)", async (scrollAway) => {
   const messages = transcriptMessages(40)
   const previous = checkpoint({ summary: "Previous checkpoint summary" })
   const progress = {
@@ -671,9 +762,10 @@ test("streams compaction snapshots in place, follows the bottom and respects scr
   try {
     await act(async () => { await setup.renderOnce() })
     const transcript = scrollBoxRenderable(setup.renderer.root)
-    const preview = checkpointMarkdown(setup.renderer.root)
-    expect(preview?.streaming).toBe(true)
-    expect(preview?.content).toBe(progress.summary)
+    const preview = checkpointPreview(setup.renderer.root)
+    expect(preview).toBeInstanceOf(TextRenderable)
+    expect(preview?.plainText).toBe(progress.summary)
+    expect(markdownRenderables(setup.renderer.root)).toHaveLength(0)
     expect(setup.captureCharFrame()).toContain("First fragment")
     expect(setup.captureCharFrame()).toContain("Compacting context")
     expect(setup.captureCharFrame()).not.toContain(previous.summary)
@@ -689,16 +781,20 @@ test("streams compaction snapshots in place, follows the bottom and respects scr
       }))
       await setup.renderOnce()
     })
-    expect(checkpointMarkdown(setup.renderer.root)).toBe(preview)
+    expect(checkpointPreview(setup.renderer.root)).toBe(preview)
+    expect(preview?.plainText).toBe(expanded.summary)
+    expect(markdownRenderables(setup.renderer.root)).toHaveLength(0)
     expect(maximumScrollTop(transcript)).toBeGreaterThan(initialMaximum)
     expect(transcript.scrollTop).toBe(maximumScrollTop(transcript))
     expect(setup.captureCharFrame()).toContain("Progress line 19")
-    await act(async () => {
-      await setup.mockMouse.scroll(transcript.x + 1, transcript.y + 1, "up")
-      await setup.renderOnce()
-    })
-    const scrolledAway = transcript.scrollTop
-    expect(scrolledAway).toBeLessThan(maximumScrollTop(transcript))
+    if (scrollAway) {
+      await act(async () => {
+        await setup.mockMouse.scroll(transcript.x + 1, transcript.y + 1, "up")
+        await setup.renderOnce()
+      })
+      expect(transcript.scrollTop).toBeLessThan(maximumScrollTop(transcript))
+    }
+    const previousScrollTop = transcript.scrollTop
     const final = { ...expanded, summary: expanded.summary + "\n\nFinal fragment" }
     await act(async () => {
       harness.setSnapshot(sessionSnapshot({
@@ -706,19 +802,32 @@ test("streams compaction snapshots in place, follows the bottom and respects scr
       }))
       await setup.renderOnce()
     })
-    expect(transcript.scrollTop).toBe(scrolledAway)
-    expect(checkpointMarkdown(setup.renderer.root)).toBe(preview)
+    expect(transcript.scrollTop).toBe(scrollAway ? previousScrollTop : maximumScrollTop(transcript))
+    expect(checkpointPreview(setup.renderer.root)).toBe(preview)
+    expect(preview?.plainText).toBe(final.summary)
+    const card = preview?.parent
     await act(async () => {
       harness.setSnapshot(sessionSnapshot({
         messages, compactionCheckpoint: checkpoint({ ...final, compactedMessageCount: 39 }),
       }))
       await setup.renderOnce()
     })
-    expect(checkpointMarkdown(setup.renderer.root)).toBe(preview)
-    expect(preview?.streaming).toBe(false)
-    expect(preview?.content).toBe(final.summary)
+    if (scrollAway) {
+      expect(checkpointPreview(setup.renderer.root)).toBeUndefined()
+      expect(checkpointMarkdown(setup.renderer.root)?.content).toBe(final.summary)
+      expect(transcript.scrollTop).toBe(previousScrollTop)
+      await act(async () => {
+        pressKey(setup.renderer, "end", { meta: true })
+        await setup.renderOnce()
+      })
+    }
+    const completed = checkpointMarkdown(setup.renderer.root)
+    expect(completed?.parent).toBe(card)
+    expect(completed?.streaming).toBe(false)
+    expect(completed?.content).toBe(final.summary)
+    expect(preview?.isDestroyed).toBe(true)
     expect(markdownRenderables(setup.renderer.root)).toHaveLength(1)
-    expect(transcript.scrollTop).toBe(scrolledAway)
+    expect(transcript.scrollTop).toBe(maximumScrollTop(transcript))
   } finally {
     harness.controller.dispose()
     act(() => setup.renderer.destroy())
@@ -777,6 +886,7 @@ test("navigates only modified transcript keys", async () => {
     })
     expect(end.defaultPrevented).toBe(true)
     expect(end.propagationStopped).toBe(true)
+    await act(async () => { await setup.renderOnce() })
     expect(transcript.scrollTop).toBe(maximumScrollTop(transcript))
 
     const unhandled = pressKey(setup.renderer, "f12", { meta: true })
@@ -789,29 +899,25 @@ test("navigates only modified transcript keys", async () => {
   }
 })
 
-test("shows proposed changes in transcript order while keeping the prompt active", async () => {
+function editToolMessages(diff: string, path: string): TAgentMessage[] {
+  return [{
+    id: "edit-assistant", sessionId: SESSION_ID, runId: "run-history", createdAt: 1,
+    role: "assistant", stopReason: "tool_use",
+    content: [{ type: "toolCall", toolCallId: "edit-call", toolName: "edit", input: { path } }],
+  }, {
+    id: "edit-result", sessionId: SESSION_ID, runId: "run-history", createdAt: 2,
+    role: "toolResult", assistantMessageId: "edit-assistant", toolCallId: "edit-call",
+    toolName: "edit", content: "Changes applied", isError: false, diff,
+  }]
+}
+
+test("shows committed tool diffs in transcript order while keeping the prompt active", async () => {
   const messages = transcriptMessages(3)
   const harness = createSessionHarness(sessionSnapshot({
-    messages,
-    fileChangeProposals: [{
-      id: "proposal-1",
-      sessionId: SESSION_ID,
-      runId: "run-history",
-      toolCallId: "edit-1",
-      operation: "edit",
-      path: "src/example.ts",
-      diff: [
-        "--- a/src/example.ts",
-        "+++ b/src/example.ts",
-        "@@ -1,1 +1,1 @@",
-        "-const value = 1",
-        "+const value = 2",
-        "",
-      ].join("\n"),
-      status: "applied",
-      createdAt: 1,
-      resolvedAt: 3,
-    }],
+    messages: [messages[0]!, messages[1]!, ...editToolMessages([
+      "--- a/src/example.ts", "+++ b/src/example.ts", "@@ -1,1 +1,1 @@",
+      "-const value = 1", "+const value = 2", "",
+    ].join("\n"), "src/example.ts"), messages[2]!],
   }))
   const setup = await testRender(sessionElement(harness), {
     width: 70,
@@ -861,15 +967,7 @@ test("preserves Unicode diff text and colors when resizing and scrolling the ses
   const addedLine = `const value0 = "${unicodeText} changed";`
   const laterMessage = "Message after the Unicode diff"
   const harness = createSessionHarness(sessionSnapshot({
-    messages: [{ ...transcriptMessages(1)[0]!, content: laterMessage, createdAt: 2 }],
-    fileChangeProposals: [{
-      id: "unicode-proposal",
-      sessionId: SESSION_ID,
-      runId: "run-history",
-      toolCallId: "edit-unicode",
-      operation: "edit",
-      path: "example.ts",
-      diff: [
+    messages: [...editToolMessages([
         "--- a/example.ts",
         "+++ b/example.ts",
         `@@ -1,${changedLines} +1,${changedLines} @@`,
@@ -878,10 +976,8 @@ test("preserves Unicode diff text and colors when resizing and scrolling the ses
           `+const value${index} = "${unicodeText} changed";`,
         ]).flat(),
         "",
-      ].join("\n"),
-      status: "applied",
-      createdAt: 1,
-    }],
+      ].join("\n"), "example.ts"),
+      { ...transcriptMessages(1)[0]!, content: laterMessage, createdAt: 3 }],
   }))
   const setup = await testRender(sessionElement(harness), {
     width: wideWidth,
@@ -1000,6 +1096,84 @@ test("notifies only for long runs completed while the terminal is blurred", asyn
   }
 })
 
+test.each([40, 80])("moves the latest failure above the editor and restores history on retry at %i columns", async (width) => {
+  const failure: IAssistantMessage = {
+    id: "failure", sessionId: SESSION_ID, runId: "failed-run", role: "assistant",
+    createdAt: 1, stopReason: "error", content: [{ type: "text", text: "Partial answer" }],
+    errorMessage: "Provider unavailable",
+  }
+  const harness = createSessionHarness(sessionSnapshot({
+    messages: [failure], errorMessage: "Provider unavailable", lastRunReason: "error",
+  }))
+  const setup = await testRender(sessionElement(harness), { width, height: 20 })
+  try {
+    await act(async () => { await setup.renderOnce() })
+    const transcript = scrollBoxRenderable(setup.renderer.root)
+    const editor = textareaRenderable(setup.renderer.root)
+    const chat = setup.renderer.root.findDescendantById("chat")!
+    const errors = chat.getChildren().filter(child => child instanceof BoxRenderable && child.title === "Error")
+    expect(errors).toHaveLength(1)
+    const error = errors[0]!
+    expect(error.y + error.height).toBe(editor.parent!.y)
+    expect(setup.captureCharFrame().match(/Provider unavailable/g)).toHaveLength(1)
+    expect(transcript.findDescendantById("message-error-failure")).toBeUndefined()
+    const status = setup.renderer.root.findDescendantById("chat-status")!
+    expect(chat.getChildren().at(-1)).toBe(status)
+    expect(editor.parent!.y + editor.parent!.height).toBeLessThanOrEqual(status.y)
+    await act(async () => {
+      harness.setSnapshot(sessionSnapshot({ messages: [failure], isRunning: true, activeRunId: "retry" }))
+      await setup.renderOnce()
+    })
+    expect(transcript.findDescendantById("message-error-failure")).toBeDefined()
+    expect(chat.getChildren().filter(child => child instanceof BoxRenderable && child.title === "Error")).toHaveLength(0)
+    expect(setup.captureCharFrame().match(/Provider unavailable/g)).toHaveLength(1)
+    const activity = setup.renderer.root.findDescendantById("chat-activity") as BoxRenderable
+    expect(activity.border).toBe(false)
+    expect(editor.parent!.y + editor.parent!.height).toBeLessThanOrEqual(status.y)
+    const snake = setup.renderer.root.findDescendantById("chat-activity-snake")!
+    expect(activity.y).toBe(snake.y)
+    expect(activity.x).toBe(snake.x + snake.width + 1)
+    expect(activity.y + activity.height).toBeLessThanOrEqual(editor.parent!.y)
+    expect(snake.y + snake.height).toBeLessThanOrEqual(editor.parent!.y)
+    expect(status.y + status.height).toBeLessThanOrEqual(20)
+    expect(setup.captureCharFrame()).toContain("[ Enter ]")
+    expect(setup.captureCharFrame().replace(/[│\s]+/g, " ")).toContain("[ Alt + Enter ]")
+    expect(setup.captureCharFrame()).toContain("[ Esc ]")
+  } finally {
+    harness.controller.dispose()
+    act(() => setup.renderer.destroy())
+  }
+})
+
+test.each([
+  { width: 80, height: 20, isCompacting: false },
+  { width: 40, height: 20, isCompacting: true },
+  { width: 40, height: 10, isCompacting: false },
+  { width: 40, height: 10, isCompacting: true },
+])("keeps activity borderless beside Snake at $width × $height (compacting: $isCompacting)", async ({ width, height, isCompacting }) => {
+  const harness = createSessionHarness(sessionSnapshot({
+    isRunning: !isCompacting,
+    isCompacting,
+  }))
+  const setup = await testRender(sessionElement(harness), { width, height })
+  try {
+    await act(async () => { await setup.renderOnce() })
+    const activity = setup.renderer.root.findDescendantById("chat-activity") as BoxRenderable
+    const snake = setup.renderer.root.findDescendantById("chat-activity-snake")!
+    expect(activity.border).toBe(false)
+    expect(activity.y).toBe(snake.y)
+    expect(activity.x).toBe(snake.x + snake.width + 1)
+    expect(activity.x + activity.width).toBeLessThanOrEqual(width)
+    const frame = setup.captureCharFrame()
+    expect(frame).toContain("[ Esc ]")
+    if (height <= 12) expect(frame).not.toContain("[ Enter ]")
+    if (isCompacting && height > 12) expect(frame).toContain("Compacting context")
+  } finally {
+    harness.controller.dispose()
+    act(() => setup.renderer.destroy())
+  }
+})
+
 async function updateRunning(
   harness: ReturnType<typeof createSessionHarness>,
   setup: Awaited<ReturnType<typeof testRender>>,
@@ -1078,6 +1252,15 @@ function checkpoint(
     summary: "Checkpoint summary",
     ...overrides,
   }
+}
+
+function checkpointPreview(root: Renderable): TextRenderable | undefined {
+  if (root instanceof TextRenderable && root.plainText.includes("checkpoint summary")) return root
+  for (const child of root.getChildren()) {
+    const preview = checkpointPreview(child)
+    if (preview) return preview
+  }
+  return undefined
 }
 
 function checkpointMarkdown(root: Renderable): MarkdownRenderable | undefined {

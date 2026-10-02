@@ -30,15 +30,9 @@ export {
     type ICompactSessionMessagesOptions,
     type ICompactionProgress,
 } from "@/sessions/compaction/session-compactor"
-export { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
-export {
-    defaultSessionFilePath,
-    JsonlSessionManager,
-} from "@/sessions/jsonl/jsonl-session-manager"
-export {
-    defaultSessionDirectoryPath,
-    WorkspaceSessionManager,
-} from "@/sessions/jsonl/workspace-session-manager"
+export { SQLiteSessionManager } from "@/sessions/sqlite/sqlite-session-manager"
+export { defaultHistoryDirectoryPath } from "@/sessions/session-lock"
+export type { IHistoryCursor, IHistoryPage, IRequiredContext } from "@/sessions/history-contracts"
 export { createInterruptedToolResults } from "@/sessions/recovery"
 export type {
     ISessionInfo,
@@ -51,6 +45,5 @@ export {
 export {
     assertCompactionCheckpoint,
     assertDurableSessionMessage,
-    assertFileChangeProposalRecord,
     assertSessionInfo,
 } from "@/sessions/validation"

@@ -1,6 +1,6 @@
 import { pathToFiletype } from "@opentui/core"
 import { parsePatch } from "diff"
-import type { ReactNode } from "react"
+import { useMemo, type ReactNode } from "react"
 
 import { syntax, theme } from "@/ui/terminal/theme"
 
@@ -11,7 +11,7 @@ interface IFileChangeDiffProps {
 
 /** Displays file changes independently of their operation or approval status. */
 export function FileChangeDiff(props: IFileChangeDiffProps): ReactNode {
-    const path = props.path ?? diffPath(props.diff)
+    const path = useMemo(() => props.path ?? diffPath(props.diff), [props.path, props.diff])
     const filetype = path === undefined ? undefined : pathToFiletype(path)
     return <diff
         diff={props.diff}

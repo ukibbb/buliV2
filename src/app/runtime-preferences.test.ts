@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import type { IBuliModelSelection } from "@/app/contracts"
 import { BuliApplicationRuntime, type IBuliModelRuntimeConfig, type IBuliRuntimeOptions } from "@/app/runtime"
-import { InMemorySessionManager } from "@/sessions"
+import { SQLiteSessionManager } from "@/sessions"
 
 function model(id: string, providerId: string): IBuliModelRuntimeConfig {
     return {
@@ -13,7 +13,7 @@ function model(id: string, providerId: string): IBuliModelRuntimeConfig {
 
 function runtime(options: Partial<IBuliRuntimeOptions> = {}) {
     return new BuliApplicationRuntime({
-        workspaceRoot: "/workspace", manager: new InMemorySessionManager(),
+        workspaceRoot: "/workspace", manager: new SQLiteSessionManager({ databasePath: ":memory:" }),
         agents: [{ id: "agent", name: "Agent", systemPrompt: "System", tools: [] }],
         defaultAgentId: "agent", models: [model("default", "openai")],
         selection: { modelId: "default", reasoningEffort: "medium" },

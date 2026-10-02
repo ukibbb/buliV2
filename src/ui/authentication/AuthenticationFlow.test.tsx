@@ -363,7 +363,7 @@ test("an empty provider picker closes cleanly on Enter", async () => {
       await setup.renderOnce()
     })
     expect(setup.captureCharFrame()).toContain("No authentication providers")
-    expect(setup.captureCharFrame()).toContain("enter or esc close")
+    expect(setup.captureCharFrame()).toContain("[ Enter ] or [ Esc ] close")
 
     await pressKey(setup, "\r")
     expect(outcomes).toEqual(["success"])
@@ -402,7 +402,7 @@ test("scrolls authentication choices inside a short card", async () => {
     expect(setup.captureCharFrame()).toContain("Select a provider")
 
     await pressKey(setup, "\u001b[6~")
-    expect(setup.captureCharFrame()).toContain("enter select  esc close")
+    expect(setup.captureCharFrame().replace(/[│\s]+/g, " ")).toContain("[ Enter ] select [ Esc ] close")
   } finally {
     act(() => {
       setup.renderer.destroy()

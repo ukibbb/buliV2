@@ -10,7 +10,7 @@ const assistant: IAssistantMessage = {
 const call: IAssistantMessage = { ...assistant, stopReason: "tool-calls", content: [
     { type: "reasoning", text: "original" }, { type: "toolCall", toolCallId: "c", toolName: "inspect", input: { path: "x" } },
 ] }
-const result: TAgentMessage = { ...base, role: "toolResult", toolCallId: "c", toolName: "inspect", content: "interrupted", isError: true }
+const result: TAgentMessage = { ...base, id: "result", role: "toolResult", assistantMessageId: call.id, toolCallId: "c", toolName: "inspect", content: "interrupted", isError: true }
 const project = (messages: TAgentMessage[], tools = true, summary?: string) => toDeepSeekModelMessages(messages, "deepseek-flash", tools, summary)
 
 test("checkpoint is user context and original reasoning survives a second user turn without mutation", () => {
@@ -44,6 +44,8 @@ test("accepts paired failed tool results without inventing calls; clones inputs"
 
 test.each([
     [call], [result], [call, { ...result, toolName: "wrong" }], [call, result, call, result],
+    [call, { ...result, assistantMessageId: "other-assistant" }],
+    [call, { ...result, runId: "other-run" }], [call, { ...result, sessionId: "other-session" }],
     [call, assistant, result], [{ ...call, stopReason: "length" }, result],
     [{ ...call, stopReason: "aborted" }, result], [{ ...call, stopReason: "error" }, result],
 ] satisfies TAgentMessage[][])("rejects broken call history %j", (...messages) => {

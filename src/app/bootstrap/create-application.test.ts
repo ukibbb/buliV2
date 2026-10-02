@@ -25,7 +25,7 @@ import {
   OPENAI_CODEX_RESPONSES_URL,
   OPENAI_CODEX_SEARCH_URL,
 } from "@/providers/openai/constants"
-import { InMemorySessionManager } from "@/sessions"
+import { SQLiteSessionManager } from "@/sessions"
 import {
   CODEX_ASTRA_REFERENCE,
   MODELS_DEV_ASTRA_REFERENCE,
@@ -109,7 +109,7 @@ test("does not attach OpenAI web search to an injected provider-neutral model", 
     )
     expect(startup.runtime.workspaceRoot).toBe(await realpath(fixture.workspace))
     const session = startup.runtime.openSession(promptRun.sessionId).getSnapshot()
-    const assistant = session.messages.find((message) => message.role === "assistant")
+    const assistant = startup.runtime.openSession(promptRun.sessionId).loadHistoryPage("main").messages.find((message) => message.role === "assistant")
     expect(assistant).toMatchObject({ role: "assistant", stopReason: "stop" })
     expect(assistant).not.toHaveProperty("model")
     expect(session.contextUsage).not.toHaveProperty("contextWindowTokens")
@@ -207,7 +207,7 @@ test.each(["Fast", "Standard"] as const)(
         // The account's active 272k window, not its 872k maximum or the public
         // API's 1050k limit, must reach both telemetry and persisted provenance.
         expect(session.contextUsage?.contextWindowTokens).toBe(272_000)
-        expect(session.messages.at(-1)).toMatchObject({
+        expect(runtime.openSession(run.sessionId).loadHistoryPage("main").messages.at(-1)).toMatchObject({
           role: "assistant",
           stopReason: "stop",
           content: [{ type: "text", text: "Hello" }],
@@ -299,7 +299,7 @@ test("forwards catalog reasoning capability for an unknown ID without synthesizi
     expect(body.reasoning).toEqual({ effort: "high", summary: "detailed" })
     expect(body).not.toHaveProperty("service_tier")
     expect(body).not.toHaveProperty("max_output_tokens")
-    expect(fixture.manager.getMessages(run.sessionId).at(-1)).toMatchObject({
+    expect(fixture.manager.loadRequiredContext(run.sessionId).messages.at(-1)).toMatchObject({
       role: "assistant",
       stopReason: "stop",
     })
@@ -352,7 +352,7 @@ test.each(["missing authentication", "catalog HTTP 503"] as const)(
       expect(() => runtime.submitPrompt({ text: "Still not ready" })).toThrow("Selected model unavailable")
       expect(fixture.manager.createSession).not.toHaveBeenCalled()
       expect(fixture.manager.appendMessage).not.toHaveBeenCalled()
-      expect(fixture.manager.getAllMessages()).toEqual([])
+      expect(fixture.manager.listSessions()).toEqual([])
       expect(fixture.modelRequests).toEqual([])
 
       retryResponse.resolve(Response.json({ models: [CODEX_ASTRA_REFERENCE] }))
@@ -369,9 +369,9 @@ test.each(["missing authentication", "catalog HTTP 503"] as const)(
       await Promise.all([run.promptPersisted, run.runFinished])
       expect(fixture.modelRequests).toHaveLength(1)
       expect(fixture.manager.createSession).toHaveBeenCalledTimes(1)
-      expect(fixture.manager.getMessages(run.sessionId).map((entry) => entry.role))
+      expect(fixture.manager.loadRequiredContext(run.sessionId).messages.map((entry) => entry.role))
         .toEqual(["user", "assistant"])
-      expect(fixture.manager.getMessages(run.sessionId).at(-1)).toMatchObject({ stopReason: "stop" })
+      expect(fixture.manager.loadRequiredContext(run.sessionId).messages.at(-1)).toMatchObject({ stopReason: "stop" })
     } finally {
       retryResponse.resolve(Response.json({ models: [] }))
       await fixture.dispose()
@@ -504,7 +504,7 @@ for (const removal of ["logout", "empty catalog"] as const) {
       runtime.selectModel("deepseek/deepseek-flash")
       const run = runtime.submitPrompt({ text: "Hello" })
       await run.runFinished
-      expect(fixture.manager.getMessages(run.sessionId).at(-1)).toMatchObject({ stopReason: "stop" })
+      expect(fixture.manager.loadRequiredContext(run.sessionId).messages.at(-1)).toMatchObject({ stopReason: "stop" })
       expect(runtime.openSession(run.sessionId).getSnapshot().contextUsage?.compactionThresholdTokens).toBe(655_360)
       expect(fixture.deepseekRequests).toHaveLength(1)
       if (removal === "logout") await fixture.authentication.deepseek.logout(fixture.controller.signal)
@@ -539,7 +539,7 @@ test("OpenAI and Kimi discovery failures do not block DeepSeek conversation", as
     runtime.selectModel("deepseek/deepseek-flash")
     const run = runtime.submitPrompt({ text: "Hello" })
     await run.runFinished
-    expect(fixture.manager.getMessages(run.sessionId).at(-1)).toMatchObject({ stopReason: "stop" })
+    expect(fixture.manager.loadRequiredContext(run.sessionId).messages.at(-1)).toMatchObject({ stopReason: "stop" })
     expect(fixture.deepseekRequests).toHaveLength(1)
     expect(fixture.modelRequests).toEqual([])
   } finally { await fixture.dispose() }
@@ -554,6 +554,8 @@ test("bootstrap carries DeepSeek reserve through session telemetry and manual su
     runtime.selectModel("deepseek/deepseek-flash")
     for (const size of [1_400_000, 20_000]) {
       const session = runtime.createSession({ agentId: runtime.getSnapshot().defaultAgentId, title: "Reserve test" })
+      await runtime.closeSession(session.id)
+      fixture.manager.openSession(session.id)
       fixture.manager.appendMessage({
         id: `answer-${size}`, sessionId: session.id, runId: "old", role: "assistant", createdAt: 1,
         model: { providerId: "deepseek", modelId: "deepseek-flash" }, stopReason: "stop",
@@ -589,10 +591,10 @@ test("DeepSeek tool execution uses independent OpenAI web search credentials", a
       expect(request.headers.get("authorization")).toBe("Bearer synthetic-deepseek")
     }
     expect(fixture.modelRequests).toEqual([])
-    expect(fixture.manager.getMessages(run.sessionId)).toEqual(expect.arrayContaining([
+    expect(fixture.manager.loadRequiredContext(run.sessionId).messages).toEqual(expect.arrayContaining([
       expect.objectContaining({ role: "toolResult", toolName: "web_search", isError: false, content: expect.stringContaining("Synthetic search result") }),
     ]))
-    expect(fixture.manager.getMessages(run.sessionId).at(-1)).toMatchObject({ stopReason: "stop" })
+    expect(fixture.manager.loadRequiredContext(run.sessionId).messages.at(-1)).toMatchObject({ stopReason: "stop" })
   } finally { await fixture.dispose() }
 })
 
@@ -600,7 +602,7 @@ async function applicationFixture() {
   const workspace = await mkdtemp(join(tmpdir(), "buli-application-"))
   const controller = new AbortController()
   const store = memoryAuthStore()
-  const memory = new InMemorySessionManager()
+  const memory = new SQLiteSessionManager({ databasePath: ":memory:" })
   const manager = Object.assign(memory, {
     createSession: mock(memory.createSession),
     appendMessage: mock(memory.appendMessage),

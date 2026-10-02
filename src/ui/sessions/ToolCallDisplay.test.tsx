@@ -1,15 +1,26 @@
 import { expect, test } from "bun:test"
 import { RGBA } from "@opentui/core"
 import { testRender } from "@opentui/react/test-utils"
-import { act, isValidElement, type ReactNode } from "react"
+import { act, isValidElement, type ComponentProps, type ReactNode } from "react"
 
 import type { IToolResultMessage } from "@/agent"
 import { FileChangeDiff } from "@/ui/sessions/FileChangeDiff"
-import { ToolCallDisplay } from "@/ui/sessions/ToolCallDisplay"
-import { glyphs } from "@/ui/terminal/theme"
+import { ToolCallDisplay, ToolCallView } from "@/ui/sessions/ToolCallDisplay"
+import { glyphs, theme } from "@/ui/terminal/theme"
 
-// The component has no hooks. Reading its intrinsic JSX keeps work counters scoped
-// to one presentation, without renderer scheduling or global serialization mocks.
+// Only the presentation wrapper and the hook-free view are evaluated here.
+// This scopes input-read counters to one presentation; native rendering and memo
+// behavior are covered separately through React.
+function toolTree(props: ComponentProps<typeof ToolCallDisplay>): ReactNode {
+    const node = ToolCallDisplay(props)
+    if (!isValidElement<ComponentProps<typeof ToolCallView>>(node)) return node
+    expect(node.type).toBe(ToolCallView)
+    const view = ToolCallView as typeof ToolCallView & {
+        type: (props: ComponentProps<typeof ToolCallView>) => ReactNode
+    }
+    return view.type(node.props)
+}
+
 function textContent(node: ReactNode): string {
     if (typeof node === "string" || typeof node === "number") return String(node)
     if (Array.isArray(node)) return node.map(textContent).join("")
@@ -24,7 +35,7 @@ function activity(
     input: Record<string, unknown>,
     result?: IToolResultMessage,
 ): string {
-    return textContent(ToolCallDisplay({
+    return textContent(toolTree({
         call: { type: "toolCall", toolCallId: "call", toolName, input },
         phase: "running",
         ...(result === undefined ? {} : { result }),
@@ -38,6 +49,7 @@ function toolResult(overrides: Partial<IToolResultMessage>): IToolResultMessage 
         runId: "run",
         createdAt: 1,
         role: "toolResult",
+        assistantMessageId: "assistant",
         toolCallId: "call",
         toolName: "read",
         content: "",
@@ -48,7 +60,7 @@ function toolResult(overrides: Partial<IToolResultMessage>): IToolResultMessage 
 
 test.each([false, true])("renders an OpenTUI diff even when isError=%s", (isError) => {
     const diff = "--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-before\n+after\n"
-    const node = ToolCallDisplay({ result: toolResult({ diff, isError }) })
+    const node = toolTree({ result: toolResult({ diff, isError }) })
     if (!isValidElement<{ children: ReactNode[] }>(node)) {
         throw new Error("Expected tool activity element")
     }
@@ -67,7 +79,7 @@ test.each([false, true])("renders an OpenTUI diff even when isError=%s", (isErro
 
 test("keeps a compact left-rail card without a nonempty diff or disclosure controls", () => {
     for (const result of [toolResult({}), toolResult({ diff: "" })]) {
-        const node = ToolCallDisplay({ result })
+        const node = toolTree({ result })
         if (!isValidElement<{ children: ReactNode }>(node)) throw new Error("Expected card")
         expect(node.type).toBe("box")
         expect(node.props).toMatchObject({
@@ -90,9 +102,9 @@ test.each([
     ["pending", undefined, "#F59E0B"],
     [undefined, toolResult({ isError: false }), "#10B981"],
     [undefined, toolResult({ isError: true }), "#EF4444"],
-    [undefined, toolResult({ isError: false, outcome: "rejected" }), "#94A3B8"],
+    [undefined, toolResult({ isError: false, outcome: "rejected" }), theme.textSecondary],
     [undefined, toolResult({ isError: false, outcome: "manual" }), "#F59E0B"],
-] as const)("renders legacy rail and text colors for phase %s and result %j", async (phase, result, accent) => {
+] as const)("renders shared rail and text colors for phase %s and result %j", async (phase, result, accent) => {
     const setup = await testRender(<ToolCallDisplay
         call={{ type: "toolCall", toolCallId: "call", toolName: "read", input: { path: "src/example.ts" } }}
         {...(phase === undefined ? {} : { phase })}
@@ -105,7 +117,7 @@ test.each([
         expect(frame).not.toContain("[+]")
         expect(frame).not.toContain("[-]")
         const spans = setup.captureSpans().lines.flatMap(line => line.spans)
-        for (const [text, color] of [["┃", accent], ["[", accent], ["Read", "#FFFFFF"], ["src/example.ts", "#64748B"]]) {
+        for (const [text, color] of [["┃", accent], ["[", accent], ["Read", "#FFFFFF"], ["src/example.ts", theme.textSecondary]]) {
             expect(spans.some(span => span.text.includes(text!) && span.fg.equals(RGBA.fromHex(color!)))).toBe(true)
         }
     } finally {

@@ -21,9 +21,9 @@ import type {
     TUserMessageSource,
     IUserPathReference,
 } from "@/agent/messages"
-import { USER_PATH_REFERENCES_PER_SESSION_MAX } from "@/agent/messages"
 import type {
-    TAgentContextProjector,
+    IAgentContextProjection,
+    IAssistantError,
     TAgentRunEndReason,
     IAgentRunHandle,
     IAgentState,
@@ -38,8 +38,12 @@ export interface IAgentOptions {
     readonly systemPrompt: string
     readonly resolveRunConfiguration: TAgentRunConfigurationResolver
     readonly tools: readonly IRuntimeAgentTool[]
-    readonly initialMessages?: readonly TAgentMessage[]
-    readonly projectContext?: TAgentContextProjector
+    /** Complete accepted context owned by the caller; never reconstructed from Agent state. */
+    readonly getContext: () => IAgentContextProjection
+    readonly initialAssistantError?: IAssistantError
+    /** Historical capabilities may precede a checkpoint; resolved once per run if an active tool needs them. */
+    readonly getSelectedPathReferences: () => readonly IUserPathReference[]
+    readonly getRecentConversation: () => readonly TAgentMessage[]
     readonly criticalEventSink?: TAgentCriticalEventSink
     readonly onObserverError?: (error: unknown) => void
     readonly now?: () => number
@@ -75,7 +79,9 @@ export class Agent {
     private readonly listeners = new Set<TAgentEventListener>()
     private readonly now: () => number
     private readonly generateId: () => string
-    private readonly projectContext: TAgentContextProjector | undefined
+    private readonly getContext: () => IAgentContextProjection
+    private readonly getSelectedPathReferences: () => readonly IUserPathReference[]
+    private readonly getRecentConversation: () => readonly TAgentMessage[]
     private readonly toolOutputStore: IToolOutputStore | undefined
     private steeringQueue: IUserMessage[] = []
     private followUpQueue: IUserMessage[] = []
@@ -88,13 +94,15 @@ export class Agent {
         this.onObserverError = options.onObserverError
         this.now = options.now ?? Date.now
         this.generateId = options.generateId ?? generateRandomId
-        this.projectContext = options.projectContext
+        this.getContext = options.getContext
+        this.getSelectedPathReferences = options.getSelectedPathReferences
         this.toolOutputStore = options.toolOutputStore
+        this.getRecentConversation = options.getRecentConversation
         this.stateValue = {
             sessionId: options.sessionId,
             systemPrompt: options.systemPrompt,
             tools: [...options.tools],
-            messages: structuredClone(options.initialMessages ?? []),
+            assistantError: options.initialAssistantError ? { ...options.initialAssistantError } : undefined,
             isRunning: false,
             activeRunId: undefined,
             streamingMessage: undefined,
@@ -146,9 +154,6 @@ export class Agent {
         }
 
         const runConfiguration: IAgentRunConfiguration = this.resolveRunConfiguration()
-        const context = this.projectContext?.(this.stateValue.messages) ?? {
-            messages: this.stateValue.messages,
-        }
         const runId = this.generateId()
         const prompt = this.createUserMessage(normalizedInput, runId, "prompt")
         const abortController = new AbortController()
@@ -185,7 +190,6 @@ export class Agent {
             activeRun,
             prompt,
             runConfiguration,
-            context,
         )
 
         return {
@@ -262,25 +266,13 @@ export class Agent {
         this.followUpQueue = []
         this.stateValue = {
             ...this.stateValue,
-            messages: [],
+            assistantError: undefined,
             isRunning: false,
             activeRunId: undefined,
             streamingMessage: undefined,
             pendingToolCallIds: new Set(),
             errorMessage: undefined,
             lastRunReason: undefined,
-        }
-    }
-
-    restoreMessages(messages: readonly TAgentMessage[]): void {
-        if (this.activeRun) {
-            throw new Error("Cannot restore messages while Agent is running")
-        }
-        this.stateValue = {
-            ...this.stateValue,
-            messages: structuredClone(messages),
-            streamingMessage: undefined,
-            pendingToolCallIds: new Set(),
         }
     }
 
@@ -302,8 +294,8 @@ export class Agent {
     }
 
     replaceContext(
-        messages: readonly TAgentMessage[],
         tools: readonly IRuntimeAgentTool[],
+        assistantError?: IAssistantError,
     ): void {
         if (this.activeRun) {
             throw new Error("Cannot replace context while Agent is running")
@@ -314,7 +306,7 @@ export class Agent {
 
         const nextState: IAgentState = {
             ...this.stateValue,
-            messages: structuredClone(messages),
+            assistantError: assistantError ? { ...assistantError } : undefined,
             tools: [...tools],
             isRunning: false,
             activeRunId: undefined,
@@ -330,7 +322,6 @@ export class Agent {
         activeRun: IActiveAgentRun,
         prompt: IUserMessage,
         runConfiguration: IAgentRunConfiguration,
-        context: ReturnType<TAgentContextProjector>,
     ): Promise<void> {
         let reason: TAgentRunEndReason = "internal-error"
         let failed = false
@@ -339,15 +330,12 @@ export class Agent {
         try {
             const agentContext: IAgentContext = {
                 systemPrompt: this.stateValue.systemPrompt,
-                messages: context.messages,
-                ...(context.contextSummary === undefined
-                    ? {}
-                    : { contextSummary: context.contextSummary }),
+                getContext: this.getContext,
                 tools: this.stateValue.tools,
-                selectedPathReferences: collectPathReferences(
-                    this.stateValue.messages,
-                    prompt,
-                ),
+                selectedPathReferences: this.stateValue.tools.some((tool) => tool.acceptsSelectedPathReferences)
+                    ? this.getSelectedPathReferences()
+                    : [],
+                getRecentConversation: this.getRecentConversation,
             }
             const inputQueue: IAgentInputQueue = {
                 hasSteering: () => this.hasSteeringMessages(activeRun),
@@ -576,36 +564,6 @@ function normalizeUserInput(input: TUserInput): IUserInputContent {
             ? { attachments: structuredClone(input.attachments) }
             : {}),
     }
-}
-
-function collectPathReferences(
-    messages: readonly TAgentMessage[],
-    prompt: IUserMessage,
-): IUserPathReference[] {
-    const references: IUserPathReference[] = []
-    const seen = new Set<string>()
-    const conversation = [...messages, prompt]
-    outer: for (let messageIndex = conversation.length - 1; messageIndex >= 0; messageIndex -= 1) {
-        const message = conversation[messageIndex]
-        if (!message || message.role !== "user") continue
-        const messageReferences = message.references ?? []
-        for (
-            let referenceIndex = messageReferences.length - 1;
-            referenceIndex >= 0;
-            referenceIndex -= 1
-        ) {
-            const reference = messageReferences[referenceIndex]
-            if (!reference) continue
-            const key = `${reference.kind}\0${reference.path}`
-            if (seen.has(key)) continue
-            seen.add(key)
-            references.push(structuredClone(reference))
-            if (references.length === USER_PATH_REFERENCES_PER_SESSION_MAX) {
-                break outer
-            }
-        }
-    }
-    return references.reverse()
 }
 
 function toErrorMessage(error: unknown): string {

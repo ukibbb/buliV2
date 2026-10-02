@@ -28,8 +28,8 @@ import { BuliRuntimeProvider } from "@/ui/context/application-context"
 import type {
   IAgentModel,
 } from "@/agent"
-import type { ISessionSnapshot } from "@/sessions"
-import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
+import { createSessionTestSource, type ISessionTestData } from "./fixtures/session-source"
+import { SQLiteSessionManager } from "@/sessions/sqlite/sqlite-session-manager"
 import { BuliTui } from "@/ui/shell/BuliTui"
 import { COMPLETION_NOTIFICATION_MIN_DURATION_MS } from "@/ui/shell/SessionCompletionNotifier"
 import { BuliUiController } from "@/ui/ui-controller"
@@ -98,7 +98,7 @@ interface IFakeApplicationOptions {
   readonly workspaceRoot?: string
   readonly searchPaths?: IBuliApplication["searchPaths"]
   readonly applicationSnapshot?: IBuliApplicationSnapshot
-  readonly sessionSnapshot?: ISessionSnapshot
+  readonly sessionSnapshot?: ISessionTestData
   readonly submitPrompt?: (prompt: IBuliPromptInput) => IBuliPromptRun
   readonly steer?: (sessionId: string, text: string) => void
   readonly followUp?: (sessionId: string, text: string) => void
@@ -111,11 +111,9 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
   const steering: Array<{ sessionId: string; text: string }> = []
   const followUps: Array<{ sessionId: string; text: string }> = []
   const aborted: string[] = []
-  const sessionListeners = new Set<() => void>()
-  let sessionSnapshot: ISessionSnapshot = options.sessionSnapshot ?? {
+  const sessionSnapshot: ISessionTestData = options.sessionSnapshot ?? {
     activeBranchId: "main",
     messages: [],
-    fileChangeProposals: [],
     pendingSteeringMessages: [],
     pendingFollowUpMessages: [],
     isRunning: false,
@@ -123,13 +121,8 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
     pendingToolCallIds: [],
   }
   let runCount = 0
-  const session = {
-    subscribe: (listener: () => void) => {
-      sessionListeners.add(listener)
-      return () => sessionListeners.delete(listener)
-    },
-    getSnapshot: () => sessionSnapshot,
-  }
+  const fixture = createSessionTestSource(sessionSnapshot)
+  const session = fixture.source
   const application: IBuliApplication = {
     workspaceRoot: options.workspaceRoot ?? WORKSPACE_ROOT,
     ...(options.searchPaths ? { searchPaths: options.searchPaths } : {}),
@@ -188,9 +181,9 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
     steering,
     followUps,
     aborted,
-    setSessionSnapshot(snapshot: ISessionSnapshot) {
-      sessionSnapshot = snapshot
-      for (const listener of [...sessionListeners]) listener()
+    getSessionData: fixture.getData,
+    setSessionSnapshot(snapshot: ISessionTestData) {
+      fixture.setData(snapshot)
     },
   }
 }
@@ -294,13 +287,13 @@ test.each([WORKSPACE_ROOT, `${WORKSPACE_ROOT}/${"long-directory/".repeat(12)}`])
   },
 )
 
-test.each([40, 80])("keeps one activity snake above the editor at %i columns", async (width) => {
+test.each([[40, 8], [40, 10], [40, 12], [40, 13], [40, 14], [80, 14], [80, 24], [120, 30]])("keeps shortcuts beside one snake above the editor, with model status below at %i × %i", async (width, height) => {
   const fake = fakeApplication()
   const controller = new BuliUiController({ application: fake.application })
   await controller.activateSession("default")
-  const idle = fake.application.openSession("default").getSnapshot()
+  const idle = fake.getSessionData()
   const setup = await testRender(buliElementWithController(fake.application, controller), {
-    width, height: 14,
+    width, height,
   })
   try {
     await act(async () => { await setup.renderOnce() })
@@ -315,26 +308,56 @@ test.each([40, 80])("keeps one activity snake above the editor at %i columns", a
       act(() => fake.setSessionSnapshot({ ...idle, ...state }))
       await act(async () => { await setup.renderOnce() })
       await act(async () => { await setup.renderOnce() })
-      const activity = setup.renderer.root.findDescendantById("chat-activity")!
-      expect(activity.height).toBeGreaterThanOrEqual(1)
-      expect(activity.y + activity.height).toBeLessThan(textarea.y)
+      const activity = setup.renderer.root.findDescendantById("chat-activity")
+      const snake = setup.renderer.root.findDescendantById("chat-activity-snake")
+      const status = setup.renderer.root.findDescendantById("chat-status")!
+      const active = state.isRunning || state.isCompacting
+      expect(Boolean(activity)).toBe(active)
+      expect(Boolean(snake)).toBe(active)
+      expect(textarea.parent!.y + textarea.parent!.height).toBeLessThanOrEqual(status.y)
+      expect(status.y + status.height).toBeLessThanOrEqual(height)
+      if (activity) {
+        if (height <= 12) expect(activity.height).toBe(1)
+        else expect(activity.height).toBeGreaterThanOrEqual(1)
+        expect(activity.y).toBeGreaterThanOrEqual(0)
+        expect(activity.y).toBe(snake!.y)
+        expect(snake!.x + snake!.width).toBeLessThanOrEqual(activity.x)
+        expect(activity.y + activity.height).toBeLessThanOrEqual(textarea.parent!.y)
+        expect(snake!.y + snake!.height).toBeLessThanOrEqual(textarea.parent!.y)
+        const children = activity.getChildren()
+        expect(children).toHaveLength(1)
+        expect(children[0]).toBeInstanceOf(TextRenderable)
+        expect(snake).toBeInstanceOf(BoxRenderable)
+        expect(snake!.parent).toBe(activity.parent)
+        expect(snake!.height).toBe(activity.height)
+        expect(snake!.getChildren()[0]!.height).toBe(1)
+        expect(setup.captureCharFrame().split("\n")[snake!.y]).toContain(glyphs.snakeHead)
+      }
+      expect(textarea.y + textarea.height).toBeLessThan(height)
       expect(textareaRenderable(setup.renderer.root)).toBe(textarea)
       expect(textarea.focused).toBe(true)
       expect((textarea.parent as BoxRenderable).borderColor.equals(RGBA.fromHex(theme.green))).toBe(true)
       const frame = setup.captureCharFrame()
-      const active = state.isRunning || state.isCompacting
+      expect(frame).toContain("[ Test : medium ]")
+      expect(frame).not.toContain("During generation")
       expect(frame.split(glyphs.snakeHead).length - 1).toBe(active ? 1 : 0)
       const activityText = frame.split("\n")
-        .slice(activity.y, activity.y + activity.height)
-        .map((line) => line.trim()).join(" ")
-      if (state.isCompacting) {
-        expect(activityText).toContain("Compacting context | Esc stop")
-        expect(frame).not.toContain("Enter steer")
+        .slice(activity?.y ?? 0, activity ? activity.y + activity.height : 0)
+        .map((line) => line.slice(activity?.x ?? 0, activity ? activity.x + activity.width : 0))
+        .join(" ").replace(/[│\s]+/g, " ")
+      if (active && height <= 12) {
+        expect(activityText.trim()).toStartWith("[ Esc ] stop")
+        expect(activityText).not.toMatch(/[┌┐└┘]/)
+        expect(activityText).not.toContain("[ Enter ]")
+      } else if (state.isCompacting) {
+        expect(activityText).toContain("Compacting context")
+        expect(activityText).toContain("[ Esc ] stop")
+        expect(frame).not.toContain("[ Enter ] steer")
       } else if (state.isRunning) {
-        expect(activityText).toContain("Enter steer | Alt+Enter follow-up | Esc stop")
+        expect(activityText).toContain("[ Enter ] steer [ Alt + Enter ] follow-up [ Esc ] stop")
         expect(frame).not.toContain("Compacting context")
       } else {
-        expect(activity.height).toBe(1)
+        expect(activity).toBeUndefined()
         expect(activityText).toBe("")
       }
     }
@@ -370,11 +393,9 @@ test("keeps asynchronous path suggestions above the editor and completes the sel
   }
   const checkMenuPosition = () => {
     const menu = setup.renderer.root.findDescendantById("command-menu")!
-    const activity = setup.renderer.root.findDescendantById("chat-activity")!
     const textarea = textareaRenderable(setup.renderer.root)
     expect(menu.y).toBeGreaterThanOrEqual(1)
-    expect(menu.y + menu.height).toBeLessThanOrEqual(activity.y)
-    expect(activity.y + activity.height).toBeLessThan(textarea.y)
+    expect(menu.y + menu.height).toBeLessThan(textarea.y)
     expect(textarea.focused).toBe(true)
   }
 
@@ -559,7 +580,7 @@ test("provides the runtime above Buli", async () => {
   const startup = await createBuliApplication({
     signal: new AbortController().signal,
     workspaceRoot: workspace,
-    manager: new InMemorySessionManager(),
+    manager: new SQLiteSessionManager({ databasePath: ":memory:" }),
     model: { async *stream() {} },
     tools: [],
   })
@@ -691,7 +712,7 @@ test("two Escape keypresses close the menu before interrupting an active respons
   const fake = fakeApplication({
     sessionSnapshot: {
       activeBranchId: "main",
-      messages: [], fileChangeProposals: [],
+      messages: [],
       pendingSteeringMessages: [{
         id: "steer-1", sessionId: "default", runId: "run-1", role: "user",
         source: "steer", content: "Queued steering", createdAt: 1,
@@ -1026,7 +1047,6 @@ test("submits textarea input as steering while the session is running", async ()
     sessionSnapshot: {
       activeBranchId: "main",
       messages: [],
-      fileChangeProposals: [],
       pendingSteeringMessages: [],
       pendingFollowUpMessages: [],
       isRunning: true,
@@ -1068,7 +1088,6 @@ test("notifies when a run finishes while authentication replaces the session", a
     sessionSnapshot: {
       activeBranchId: "main",
       messages: [],
-      fileChangeProposals: [],
       pendingSteeringMessages: [],
       pendingFollowUpMessages: [],
       isRunning: true,
@@ -1105,7 +1124,6 @@ test("notifies when a run finishes while authentication replaces the session", a
       fake.setSessionSnapshot({
         activeBranchId: "main",
         messages: [],
-        fileChangeProposals: [],
         pendingSteeringMessages: [],
         pendingFollowUpMessages: [],
         isRunning: false,
@@ -1133,7 +1151,6 @@ test("retains textarea input and allows Escape while compacting", async () => {
     sessionSnapshot: {
       activeBranchId: "main",
       messages: [],
-      fileChangeProposals: [],
       pendingSteeringMessages: [],
       pendingFollowUpMessages: [],
       isRunning: false,
@@ -1182,7 +1199,6 @@ test("submits Alt+Enter input as follow-up while the session is running", async 
     sessionSnapshot: {
       activeBranchId: "main",
       messages: [],
-      fileChangeProposals: [],
       pendingSteeringMessages: [],
       pendingFollowUpMessages: [],
       isRunning: true,
@@ -1224,7 +1240,6 @@ test("retains textarea input when a finishing run rejects steering", async () =>
     sessionSnapshot: {
       activeBranchId: "main",
       messages: [],
-      fileChangeProposals: [],
       pendingSteeringMessages: [],
       pendingFollowUpMessages: [],
       isRunning: true,
@@ -1268,7 +1283,6 @@ test("renders running and failed session status", async () => {
     sessionSnapshot: {
       activeBranchId: "main",
       messages: [],
-      fileChangeProposals: [],
       pendingSteeringMessages: [{
         id: "steering-1",
         sessionId: "default",
@@ -1303,11 +1317,11 @@ test("renders running and failed session status", async () => {
       await setup.renderOnce()
     })
     await act(async () => { await setup.renderOnce() })
-    const runningFrame = setup.captureCharFrame()
+    const runningFrame = setup.captureCharFrame().replace(/[│\s]+/g, " ")
     expect(runningFrame).not.toContain("Working...")
-    expect(runningFrame).toContain("Enter steer")
-    expect(runningFrame).toContain("Alt+Enter follow-up")
-    expect(runningFrame).toContain("Esc stop")
+    expect(runningFrame).toContain("[ Enter ] steer")
+    expect(runningFrame).toContain("[ Alt + Enter ] follow-up")
+    expect(runningFrame).toContain("[ Esc ] stop")
     expect(runningFrame).toContain(glyphs.snakeHead)
     expect(runningFrame).toContain(glyphs.snakeBody)
     expect(runningFrame).toContain(glyphs.snakeEmptyTrack)
@@ -1316,14 +1330,13 @@ test("renders running and failed session status", async () => {
     expect(runningFrame).toContain("answer")
     expect(runningFrame).toContain("Follow-up")
     expect(runningFrame).toContain("summarize it")
-    expect(runningFrame).toContain("Esc restores")
+    expect(runningFrame.replace(/[│\s]+/g, " ")).toContain("stop and restore queued input")
     expect(runningFrame).toContain("queued input")
 
     await act(async () => {
       fake.setSessionSnapshot({
         activeBranchId: "main",
         messages: [],
-        fileChangeProposals: [],
         pendingSteeringMessages: [],
         pendingFollowUpMessages: [],
         isRunning: false,
@@ -1355,7 +1368,7 @@ test("keeps a long scrollable queue above menus without displacing the editor an
       models: [{ id: "test", name: "GPT-6 Astra Fast", reasoningEfforts: ["medium"] }],
     },
   })
-  const initial = fake.application.openSession("default").getSnapshot()
+  const initial = fake.getSessionData()
   const pending = Array.from({ length: 6 }, (_, index) => ({
     id: `queued-${index}`,
     sessionId: "default",
@@ -1365,7 +1378,7 @@ test("keeps a long scrollable queue above menus without displacing the editor an
     content: `Queued message ${index}\n${"Complete wrapped text ".repeat(15)}\nqueue-end-${index}`,
     createdAt: index,
   }))
-  const activeSession: ISessionSnapshot = {
+  const activeSession: ISessionTestData = {
     ...initial,
     isRunning: true,
     pendingSteeringMessages: [{ ...pending[0]!, source: "steer" }],
@@ -1411,15 +1424,21 @@ test("keeps a long scrollable queue above menus without displacing the editor an
         act(() => setup.resize(width, height))
         await render()
         const queue = setup.renderer.root.findDescendantById("queued-messages")!
-        const hint = setup.renderer.root.findDescendantById("queued-messages-hint")!
+        expect(setup.renderer.root.findDescendantById("queued-messages-hint")).toBeUndefined()
         const menu = setup.renderer.root.findDescendantById("command-menu")!
         const activity = setup.renderer.root.findDescendantById("chat-activity")!
         const status = setup.renderer.root.findDescendantById("chat-status")!
         const queueRows = queue.getLayoutNode().getComputedHeight()
         const scrollRows = scroll.getLayoutNode().getComputedHeight()
         expect(queue.y + queueRows).toBeLessThanOrEqual(menu.y)
+        expect(menu.y + menu.height).toBeLessThanOrEqual(textarea.parent!.y)
+        expect(textarea.parent!.y + textarea.parent!.height).toBeLessThanOrEqual(status.y)
+        const snake = setup.renderer.root.findDescendantById("chat-activity-snake")!
         expect(menu.y + menu.height).toBeLessThanOrEqual(activity.y)
-        expect(activity.y + activity.height).toBeLessThan(textarea.y)
+        expect(activity.y).toBe(snake.y)
+        expect(snake.x + snake.width).toBeLessThanOrEqual(activity.x)
+        expect(activity.y + activity.height).toBeLessThanOrEqual(textarea.parent!.y)
+        expect(snake.y + snake.height).toBeLessThanOrEqual(textarea.parent!.y)
         expect(status.y + status.height).toBeLessThanOrEqual(height)
         expect(scrollRows).toBeLessThanOrEqual(Math.min(10, Math.floor(height / 3)))
         expect(textareaRenderable(setup.renderer.root)).toBe(textarea)
@@ -1432,10 +1451,10 @@ test("keeps a long scrollable queue above menus without displacing the editor an
         expect(frame.match(/ctx ~/g)).toHaveLength(1)
         expect(frame.split(glyphs.snakeHead).length - 1).toBe(1)
         expect(frame).not.toContain("budget)")
-        if (isCompacting) expect(frame).toContain("Compacting context")
+        if (isCompacting && height > 12) expect(frame).toContain("Compacting context")
+        expect(textarea.y + textarea.height).toBeLessThan(height)
         if (scrollRows > 0) {
-          expect(scroll.y + scrollRows).toBeLessThanOrEqual(hint.y)
-          expect(frame.split("\n")[hint.y]!.trim()).toBe("Esc restores queued input")
+          expect(scroll.y + scrollRows).toBeLessThanOrEqual(menu.y)
           act(() => scroll.scrollTo(scroll.scrollHeight))
           await render()
           // At one row, the bottom of a complete card is its border, not its text.
@@ -1446,7 +1465,7 @@ test("keeps a long scrollable queue above menus without displacing the editor an
           expect(setup.captureCharFrame()).toContain("queue-end-5")
           expect(setup.captureCharFrame().split("\n")[0]!.trim()).toBe(WORKSPACE_ROOT)
         } else {
-          expect(frame).not.toMatch(/[│┌┐└┘]/)
+          expect(frame).not.toContain("queue-end-")
         }
       }
     }
@@ -1471,7 +1490,6 @@ test("keeps slash commands above the focused editor through narrow terminal resi
     sessionSnapshot: {
       activeBranchId: "main",
       messages: [],
-      fileChangeProposals: [],
       pendingSteeringMessages: [],
       pendingFollowUpMessages: [],
       isRunning: true,
@@ -1514,15 +1532,35 @@ test("keeps slash commands above the focused editor through narrow terminal resi
     const checkLayout = (height: number) => {
       const frame = setup.captureCharFrame()
       const menu = setup.renderer.root.findDescendantById("command-menu")!
-      const activity = setup.renderer.root.findDescendantById("chat-activity")!
+      const activity = setup.renderer.root.findDescendantById("chat-activity")
+      const status = setup.renderer.root.findDescendantById("chat-status")!
+      expect(Boolean(activity)).toBe(fake.application.openSession("default").getSnapshot().isRunning)
       expect(frame).toContain("→ novibe")
       expect(frame.replace(/\s+/g, ""))
         .toContain("ctx~142k/200k(71%)")
       expect(frame).not.toContain("budget)")
       expect(frame.match(/ctx ~/g)).toHaveLength(1)
       expect(menu.y).toBeGreaterThanOrEqual(1)
-      expect(menu.y + menu.height).toBeLessThanOrEqual(activity.y)
-      expect(activity.y + activity.height).toBeLessThan(textarea.y)
+      expect(menu.y + menu.height).toBeLessThanOrEqual(textarea.parent!.y)
+      expect(textarea.parent!.y + textarea.parent!.height).toBeLessThanOrEqual(status.y)
+      expect(status.y + status.height).toBeLessThanOrEqual(height)
+      if (activity) {
+        const snake = setup.renderer.root.findDescendantById("chat-activity-snake")!
+        expect(menu.y + menu.height).toBeLessThanOrEqual(activity.y)
+        expect(activity.y).toBe(snake.y)
+        expect(snake.x + snake.width).toBeLessThanOrEqual(activity.x)
+        expect(activity.y + activity.height).toBeLessThanOrEqual(textarea.parent!.y)
+        expect(snake.y + snake.height).toBeLessThanOrEqual(textarea.parent!.y)
+        expect(frame).not.toContain("During generation")
+        if (height <= 12) {
+          expect(activity.height).toBe(1)
+          expect(frame).toContain("[ Esc ] close menu")
+          expect(frame).not.toContain("[ Enter ]")
+        } else {
+          expect(activity.height).toBeGreaterThanOrEqual(1)
+          expect(frame.replace(/[│\s]+/g, " ")).toContain("[ Alt + Enter ]")
+        }
+      }
       expect(textarea.y + textarea.height).toBeLessThan(height)
       expect(textareaRenderable(setup.renderer.root)).toBe(textarea)
       expect(textarea.focused).toBe(true)
@@ -1530,7 +1568,7 @@ test("keeps slash commands above the focused editor through narrow terminal resi
     }
     checkLayout(14)
 
-    for (const [width, height] of [[40, 14], [40, 10], [120, 30], [80, 14]] as const) {
+    for (const [width, height] of [[40, 14], [40, 12], [40, 13], [40, 10], [120, 30], [80, 14]] as const) {
       act(() => setup.resize(width, height))
       await render()
       checkLayout(height)
@@ -1547,7 +1585,7 @@ test("keeps slash commands above the focused editor through narrow terminal resi
       }
     }
 
-    const activeSession = fake.application.openSession("default").getSnapshot()
+    const activeSession = fake.getSessionData()
     act(() => fake.setSessionSnapshot({ ...activeSession, isRunning: false }))
     await render()
     checkLayout(14)
@@ -1570,7 +1608,7 @@ test("keeps slash commands above the focused editor through narrow terminal resi
 test("shows slash commands and executes the selected new command", async () => {
   const runtime = new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,
-    manager: new InMemorySessionManager(),
+    manager: new SQLiteSessionManager({ databasePath: ":memory:" }),
     agents: TEST_AGENTS,
     defaultAgentId: TEST_AGENT_ID,
     models: [{
@@ -1624,7 +1662,7 @@ test("shows slash commands and executes the selected new command", async () => {
     })
 
     expect(setup.captureCharFrame()).not.toContain("Old prompt")
-    expect(runtime.openSession(session.id).getSnapshot().messages).toHaveLength(2)
+    expect(runtime.openSession(session.id).loadHistoryPage("main").messages).toHaveLength(2)
   } finally {
     await runtime.dispose()
     act(() => {
@@ -1637,7 +1675,7 @@ test("selects a model from the picker and updates the status row", async () => {
   const model: IAgentModel = { async *stream() {} }
   const runtime = new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,
-    manager: new InMemorySessionManager(),
+    manager: new SQLiteSessionManager({ databasePath: ":memory:" }),
     agents: TEST_AGENTS,
     defaultAgentId: TEST_AGENT_ID,
     models: [
@@ -1728,7 +1766,7 @@ test("renders a submitted prompt and streamed response", async () => {
   }
   const runtime = new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,
-    manager: new InMemorySessionManager(),
+    manager: new SQLiteSessionManager({ databasePath: ":memory:" }),
     agents: TEST_AGENTS,
     defaultAgentId: TEST_AGENT_ID,
     models: [{
@@ -1787,7 +1825,7 @@ test("renders the sessions picker and switches transcripts", async () => {
   let sessionNumber = 0
   const runtime = new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,
-    manager: new InMemorySessionManager(),
+    manager: new SQLiteSessionManager({ databasePath: ":memory:" }),
     agents: TEST_AGENTS,
     defaultAgentId: TEST_AGENT_ID,
     models: [{

@@ -7,14 +7,14 @@ import { act } from "react"
 
 import { createBuliApplication } from "@/app"
 import { BuliRuntimeProvider } from "@/ui/context/application-context"
-import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
+import { SQLiteSessionManager } from "@/sessions/sqlite/sqlite-session-manager"
 
 test("renders provider children without creating root-level text", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "buli-provider-"))
   const startup = await createBuliApplication({
     signal: new AbortController().signal,
     workspaceRoot: workspace,
-    manager: new InMemorySessionManager(),
+    manager: new SQLiteSessionManager({ databasePath: ":memory:" }),
     model: { async *stream() {} },
     tools: [],
   })

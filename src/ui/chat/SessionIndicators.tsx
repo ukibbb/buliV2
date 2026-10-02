@@ -20,7 +20,7 @@ export function SessionIndicatorContent(props: Pick<ISessionSnapshot, "activeBra
             <text fg={theme.green} wrapMode="word">
                 {`MCP: ${server.serverId === "novibe" ? "NoVibe | /novibe off — wyłącz" : server.serverId}`}
             </text>
-            <text fg={theme.textMuted} wrapMode="word">
+            <text fg={theme.textSecondary} wrapMode="word">
                 {server.toolNames.length ? `Narzędzia: ${server.toolNames.join(", ")}` : "Brak dostępnych narzędzi w tej gałęzi"}
             </text>
         </box>)}

@@ -4,7 +4,7 @@ import { isAbsolute } from "node:path"
 import type {
     TAgentMessage,
     IAssistantMessage,
-    IFileChangeProposalRecord,
+    IUserPathReference,
     TToolExecutionOutcome,
 } from "@/agent"
 import {
@@ -83,52 +83,6 @@ export function assertSessionInfo(
     }
 }
 
-/** Asserts that a value is an exact durable file-change proposal. */
-export function assertFileChangeProposalRecord(
-    value: unknown,
-): asserts value is IFileChangeProposalRecord {
-    if (
-        !isRecord(value)
-        || !hasExactKeys(value, [
-            "id",
-            "sessionId",
-            "runId",
-            "toolCallId",
-            "operation",
-            "path",
-            "diff",
-            "status",
-            "createdAt",
-            ...(value.resolvedAt === undefined ? [] : ["resolvedAt"]),
-        ])
-        || typeof value.id !== "string"
-        || value.id.trim().length === 0
-        || typeof value.sessionId !== "string"
-        || value.sessionId.trim().length === 0
-        || typeof value.runId !== "string"
-        || value.runId.trim().length === 0
-        || typeof value.toolCallId !== "string"
-        || value.toolCallId.trim().length === 0
-        || (value.operation !== "edit" && value.operation !== "write")
-        || typeof value.path !== "string"
-        || value.path.trim().length === 0
-        || typeof value.diff !== "string"
-        || value.diff.length === 0
-        || !isFileChangeProposalStatus(value.status)
-        || typeof value.createdAt !== "number"
-        || !Number.isFinite(value.createdAt)
-        || (
-            value.status === "pending"
-                ? value.resolvedAt !== undefined
-                : typeof value.resolvedAt !== "number"
-                    || !Number.isFinite(value.resolvedAt)
-                    || value.resolvedAt < value.createdAt
-        )
-    ) {
-        throw new Error("Invalid file-change proposal")
-    }
-}
-
 /** Asserts that a value is a complete provider-neutral session message. */
 export function assertDurableSessionMessage(
     value: unknown,
@@ -192,6 +146,7 @@ export function assertDurableSessionMessage(
                     "sessionId",
                     "runId",
                     "role",
+                    "assistantMessageId",
                     "toolCallId",
                     "toolName",
                     "content",
@@ -201,6 +156,8 @@ export function assertDurableSessionMessage(
                     ...(value.diff === undefined ? [] : ["diff"]),
                     "createdAt",
                 ])
+                || typeof value.assistantMessageId !== "string"
+                || value.assistantMessageId.trim().length === 0
                 || typeof value.toolCallId !== "string"
                 || value.toolCallId.trim().length === 0
                 || typeof value.toolName !== "string"
@@ -232,7 +189,7 @@ export function assertDurableSessionMessage(
     }
 }
 
-function assertUserPathReferences(value: unknown, content: string): void {
+export function assertUserPathReferences(value: unknown, content?: string): asserts value is readonly IUserPathReference[] | undefined {
     if (value === undefined) return
     if (
         !Array.isArray(value)
@@ -293,7 +250,7 @@ function assertUserImageAttachments(value: unknown, content: string): void {
     }
 }
 
-function assertUserSourceText(value: unknown, content: string): void {
+function assertUserSourceText(value: unknown, content?: string): void {
     if (
         !isRecord(value)
         || !hasExactKeys(value, ["value", "start", "end"])
@@ -305,7 +262,8 @@ function assertUserSourceText(value: unknown, content: string): void {
         || Number(value.end) <= Number(value.start)
     ) throw new Error("Invalid user resource source")
     if (
-        displayTextSlice(content, Number(value.start), Number(value.end))
+        content !== undefined
+        && displayTextSlice(content, Number(value.start), Number(value.end))
         !== value.value
     ) throw new Error("User resource source does not match message content")
 }
@@ -429,13 +387,6 @@ function isNonNegativeInteger(value: unknown, allowZero: boolean): boolean {
     return typeof value === "number"
         && Number.isSafeInteger(value)
         && (allowZero ? value >= 0 : value > 0)
-}
-
-function isFileChangeProposalStatus(value: unknown): boolean {
-    return value === "pending"
-        || value === "applied"
-        || value === "rejected"
-        || value === "expired"
 }
 
 function isToolExecutionOutcome(value: unknown): value is TToolExecutionOutcome {

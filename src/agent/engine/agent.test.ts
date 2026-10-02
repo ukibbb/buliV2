@@ -6,10 +6,13 @@ import {
   type TAgentEvent,
   type IAgentModel,
   type IAgentModelRequest,
+  type IAgentOptions,
+  type TAgentMessage,
 } from "@/agent"
+import { AgentWorkingContext } from "@/sessions/agent-working-context"
 
-test("Agent.prompt returns a synchronous handle and Agent owns live state", async () => {
-  const agent = new Agent({
+test("Agent.prompt returns a synchronous handle and publishes only after context acceptance", async () => {
+  const { agent, owner } = createAgentFixture({
     sessionId: "session-1",
     systemPrompt: "System",
     resolveRunConfiguration: () => ({
@@ -23,7 +26,7 @@ test("Agent.prompt returns a synchronous handle and Agent owns live state", asyn
     if (event.type !== "message_end" || event.message.role !== "assistant") {
       return
     }
-    stateObservedDuringMessageEnd = agent.state.messages.at(-1)?.id
+    stateObservedDuringMessageEnd = owner.getContext().messages.at(-1)?.id
       === event.message.id
   })
 
@@ -39,17 +42,17 @@ test("Agent.prompt returns a synchronous handle and Agent owns live state", asyn
 
   expect(stateObservedDuringMessageEnd).toBe(true)
   expect(agent.state.isRunning).toBe(false)
-  expect(agent.state.messages.map((message) => message.role)).toEqual([
+  expect(owner.getContext().messages.map((message) => message.role)).toEqual([
     "user",
     "assistant",
   ])
-  expect(agent.state.messages[0]).toMatchObject({
+  expect(owner.getContext().messages[0]).toMatchObject({
     runId: run.runId,
     role: "user",
     source: "prompt",
     content: "Question",
   })
-  expect(agent.state.messages[1]).toMatchObject({
+  expect(owner.getContext().messages[1]).toMatchObject({
     runId: run.runId,
     role: "assistant",
   })
@@ -59,7 +62,7 @@ test("initial prompt processing finishes after the critical sink handles the use
   const sinkEntered = Promise.withResolvers<void>()
   const releaseSink = Promise.withResolvers<void>()
   let sinkHandled = false
-  const agent = new Agent({
+  const { agent, owner } = createAgentFixture({
     sessionId: "session-1",
     systemPrompt: "System",
     resolveRunConfiguration: () => ({
@@ -83,13 +86,15 @@ test("initial prompt processing finishes after the critical sink handles the use
   await sinkEntered.promise
 
   expect(initialPromptProcessed).toBe(false)
-  expect(agent.state.messages).toEqual([])
+  expect(owner.getContext().messages).toEqual([])
+  expect(owner.getContext().messages).toEqual([])
 
   releaseSink.resolve()
   await run.initialPromptProcessed
 
   expect(sinkHandled).toBe(true)
-  expect(agent.state.messages[0]).toMatchObject({
+  expect(owner.getContext().messages[0]).toMatchObject({ source: "prompt", content: "Question" })
+  expect(owner.getContext().messages[0]).toMatchObject({
     runId: run.runId,
     role: "user",
     source: "prompt",
@@ -101,7 +106,7 @@ test("initial prompt processing finishes after the critical sink handles the use
 
 test("critical sink failure rejects initial prompt processing and run completion without adding the user message", async () => {
   const sinkFailure = new Error("Failed to persist prompt")
-  const agent = new Agent({
+  const { agent, owner } = createAgentFixture({
     sessionId: "session-1",
     systemPrompt: "System",
     resolveRunConfiguration: () => ({
@@ -129,12 +134,12 @@ test("critical sink failure rejects initial prompt processing and run completion
   expect(await initialPromptFailure).toBe(sinkFailure)
   expect(await runFailure).toBe(sinkFailure)
 
-  expect(agent.state.messages).toEqual([])
+  expect(owner.getContext().messages).toEqual([])
   expect(agent.state.isRunning).toBe(false)
 })
 
 test("critical sink throwing undefined rejects initial prompt processing and run completion", async () => {
-  const agent = new Agent({
+  const { agent, owner } = createAgentFixture({
     sessionId: "session-1",
     systemPrompt: "System",
     resolveRunConfiguration: () => ({
@@ -165,13 +170,13 @@ test("critical sink throwing undefined rejects initial prompt processing and run
   expect(abortResult.status).toBe("rejected")
   expect(agent.state.isRunning).toBe(false)
   expect(agent.state.lastRunReason).toBe("internal-error")
-  expect(agent.state.messages).toEqual([])
+  expect(owner.getContext().messages).toEqual([])
 })
 
 test("public observer exceptions do not fail the run", async () => {
   const observerFailure = new Error("Observer failed")
   const observerErrors: unknown[] = []
-  const agent = new Agent({
+  const { agent, owner } = createAgentFixture({
     sessionId: "session-1",
     systemPrompt: "System",
     resolveRunConfiguration: () => ({
@@ -194,7 +199,7 @@ test("public observer exceptions do not fail the run", async () => {
   await run.runFinished
 
   expect(observerErrors).toEqual([observerFailure])
-  expect(agent.state.messages.map((message) => message.role)).toEqual([
+  expect(owner.getContext().messages.map((message) => message.role)).toEqual([
     "user",
     "assistant",
   ])
@@ -203,7 +208,7 @@ test("public observer exceptions do not fail the run", async () => {
 
 test("agent_settled appears exactly once and all events carry the runId", async () => {
   const events: TAgentEvent[] = []
-  const agent = new Agent({
+  const { agent } = createAgentFixture({
     sessionId: "session-1",
     systemPrompt: "System",
     resolveRunConfiguration: () => ({
@@ -231,7 +236,7 @@ test("agent_settled appears exactly once and all events carry the runId", async 
 })
 
 test("agent_settled observers can start a new run immediately", async () => {
-  const agent = new Agent({
+  const { agent, owner } = createAgentFixture({
     sessionId: "session-1",
     systemPrompt: "System",
     resolveRunConfiguration: () => ({
@@ -254,7 +259,7 @@ test("agent_settled observers can start a new run immediately", async () => {
   await idle
   await continuation?.runFinished
 
-  expect(agent.state.messages.filter((message) => message.role === "user"))
+  expect(owner.getContext().messages.filter((message) => message.role === "user"))
     .toHaveLength(2)
   expect(agent.state.isRunning).toBe(false)
 })
@@ -284,7 +289,7 @@ test("Agent delivers queued steering FIFO one message per response", async () =>
       yield { type: "finish", reason: "stop" }
     },
   }
-  const agent = new Agent({
+  const { agent, owner } = createAgentFixture({
     sessionId: "session-1",
     systemPrompt: "System",
     resolveRunConfiguration: () => ({
@@ -336,7 +341,7 @@ test("Agent delivers queued steering FIFO one message per response", async () =>
     content: "Second steering",
   })
   expect(agent.pendingSteeringMessages).toEqual([])
-  expect(agent.state.messages.filter((message) => message.role === "user").map(
+  expect(owner.getContext().messages.filter((message) => message.role === "user").map(
     (message) => message.source,
   )).toEqual(["prompt", "steer", "steer"])
 })
@@ -345,7 +350,7 @@ test("Agent delivers follow-ups FIFO only after it would otherwise stop", async 
   const firstStarted = Promise.withResolvers<void>()
   const releaseFirst = Promise.withResolvers<void>()
   const requests: IAgentModelRequest[] = []
-  const agent = new Agent({
+  const { agent, owner } = createAgentFixture({
     sessionId: "session-1",
     systemPrompt: "System",
     resolveRunConfiguration: () => ({
@@ -401,7 +406,7 @@ test("Agent delivers follow-ups FIFO only after it would otherwise stop", async 
     content: "Second follow-up",
   })
   expect(agent.pendingFollowUpMessages).toEqual([])
-  expect(agent.state.messages.filter((message) => message.role === "user").map(
+  expect(owner.getContext().messages.filter((message) => message.role === "user").map(
     (message) => message.source,
   )).toEqual(["prompt", "followUp", "followUp"])
 })
@@ -412,7 +417,7 @@ test("Agent rejects steering until the initial prompt is durable", async () => {
   const firstRequestStarted = Promise.withResolvers<void>()
   const releaseFirstRequest = Promise.withResolvers<void>()
   const requests: IAgentModelRequest[] = []
-  const agent = new Agent({
+  const { agent } = createAgentFixture({
     sessionId: "session-1",
     systemPrompt: "System",
     resolveRunConfiguration: () => ({
@@ -480,7 +485,7 @@ test("Agent rejects overlap, abort settles the active run, and can reset when id
       yield { type: "abort", reason: "Stopped" }
     },
   }
-  const agent = new Agent({
+  const { agent, owner } = createAgentFixture({
     sessionId: "session-1",
     systemPrompt: "System",
     resolveRunConfiguration: () => ({
@@ -503,13 +508,15 @@ test("Agent rejects overlap, abort settles the active run, and can reset when id
   expect(agent.state.isRunning).toBe(false)
   expect(agent.state.lastRunReason).toBe("aborted")
 
+  const acceptedContext = owner.getContext()
   agent.reset()
 
-  expect(agent.state.messages).toEqual([])
+  expect(owner.getContext()).toBe(acceptedContext)
+  expect("messages" in agent.state).toBe(false)
   await expect(agent.abort()).resolves.toBeUndefined()
 })
 
-test("selected path capabilities survive projection and reach only opted-in tools", async () => {
+test("selected path capabilities preceding the working context reach only opted-in tools", async () => {
   const received: unknown[] = []
   const ordinary: unknown[] = []
   const selectedTool = defineAgentTool({
@@ -555,22 +562,13 @@ test("selected path capabilities survive projection and reach only opted-in tool
   }
   const previousReference = pathReference("/outside/previous.ts")
   const currentReference = pathReference("/outside/current.ts")
-  const agent = new Agent({
+  let selectedPathReads = 0
+  const { agent } = createAgentFixture({
     sessionId: "session-1",
     systemPrompt: "System",
     resolveRunConfiguration: () => ({ model, reasoningEffort: "medium" }),
     tools: [selectedTool, ordinaryTool],
-    initialMessages: [{
-      id: "previous",
-      sessionId: "session-1",
-      runId: "previous-run",
-      role: "user",
-      source: "prompt",
-      content: "@path previous",
-      references: [previousReference],
-      createdAt: 1,
-    }],
-    projectContext: () => ({ messages: [] }),
+    getSelectedPathReferences: () => { selectedPathReads++; return [previousReference] },
   })
 
   await agent.prompt({
@@ -580,6 +578,8 @@ test("selected path capabilities survive projection and reach only opted-in tool
 
   expect(received).toEqual([[previousReference, currentReference]])
   expect(ordinary).toEqual([undefined])
+  expect(turn).toBe(2)
+  expect(selectedPathReads).toBe(1)
 })
 
 test("selected path capability limit retains the newest prompt", async () => {
@@ -620,12 +620,13 @@ test("selected path capability limit retains the newest prompt", async () => {
     references: [pathReference(`/outside/previous-${index}.ts`)],
     createdAt: index,
   }))
-  const agent = new Agent({
+  const { agent } = createAgentFixture({
     sessionId: "session-1",
     systemPrompt: "System",
     resolveRunConfiguration: () => ({ model, reasoningEffort: "medium" }),
     tools: [selectedTool],
     initialMessages,
+    getSelectedPathReferences: () => initialMessages.flatMap((message) => message.references),
   })
 
   await agent.prompt({
@@ -639,7 +640,7 @@ test("selected path capability limit retains the newest prompt", async () => {
   expect(references.at(-1)?.path).toBe("/outside/current.ts")
 })
 
-test("replaceContext replaces history and tools used by the next run", async () => {
+test("external context replacement and tool configuration reach the next run", async () => {
   const requests: IAgentModelRequest[] = []
   const executed: string[] = []
   const makeTool = (name: string) => defineAgentTool({
@@ -674,7 +675,7 @@ test("replaceContext replaces history and tools used by the next run", async () 
     role: "user" as const, source: "prompt" as const,
     content: "Inherited history", createdAt: 1,
   }]
-  const agent = new Agent({
+  const { agent, owner } = createAgentFixture({
     sessionId: "session-1",
     systemPrompt: "System",
     resolveRunConfiguration: () => ({ model, reasoningEffort: "medium" }),
@@ -682,10 +683,11 @@ test("replaceContext replaces history and tools used by the next run", async () 
     initialMessages: [{ ...messages[0]!, id: "old", content: "Old history" }],
   })
   const tools = [newTool]
-  agent.replaceContext(messages, tools)
+  owner.replaceContext({ messages })
+  agent.replaceContext(tools)
 
-  expect(agent.state.messages).toEqual(messages)
-  expect(agent.state.messages).not.toBe(messages)
+  expect(owner.getContext().messages).toEqual(messages)
+  expect(owner.getContext().messages).not.toBe(messages)
   expect(agent.state.tools).toEqual([newTool])
   messages[0]!.content = "Changed outside Agent"
   tools.length = 0
@@ -706,7 +708,7 @@ test("replaceContext replaces history and tools used by the next run", async () 
 for (const queue of ["steer", "followUp"] as const) {
   test(`replaceContext rejects active runs and pending ${queue} without changing state`, async () => {
     const started = Promise.withResolvers<void>()
-    const agent = new Agent({
+    const { agent } = createAgentFixture({
       sessionId: "session-1",
       systemPrompt: "System",
       resolveRunConfiguration: () => ({
@@ -728,7 +730,7 @@ for (const queue of ["steer", "followUp"] as const) {
     await run.initialPromptProcessed
     await started.promise
     const runningState = agent.state
-    expect(() => agent.replaceContext([], [])).toThrow(
+    expect(() => agent.replaceContext([])).toThrow(
       "Cannot replace context while Agent is running",
     )
     expect(agent.state).toBe(runningState)
@@ -737,7 +739,7 @@ for (const queue of ["steer", "followUp"] as const) {
 
     const idleState = agent.state
     const revision = agent.queuedMessagesRevision
-    expect(() => agent.replaceContext([], [])).toThrow(
+    expect(() => agent.replaceContext([])).toThrow(
       "Restore queued messages before replacing context",
     )
     expect(agent.state).toBe(idleState)
@@ -747,9 +749,9 @@ for (const queue of ["steer", "followUp"] as const) {
     expect(queued.map((message) => message.content)).toEqual(["Keep this input"])
 
     agent.clearQueuedMessages()
-    agent.replaceContext([], [])
+    agent.replaceContext([])
     expect(agent.state).toMatchObject({
-      messages: [], tools: [], isRunning: false,
+      tools: [], isRunning: false,
       activeRunId: undefined, streamingMessage: undefined,
       errorMessage: undefined, lastRunReason: undefined,
     })
@@ -757,14 +759,15 @@ for (const queue of ["steer", "followUp"] as const) {
   })
 }
 
-test("replaceContext preserves the previous state when cloning fails", () => {
-  const agent = new Agent({
+test("working-context preparation preserves both previous views when cloning fails", () => {
+  const { agent, owner } = createAgentFixture({
     sessionId: "session-1",
     systemPrompt: "System",
     resolveRunConfiguration: () => ({ model: completedModel(), reasoningEffort: "medium" }),
     tools: [],
   })
   const previousState = agent.state
+  const previousContext = owner.getContext()
   const messages = [{
     id: "invalid", sessionId: "session-1", runId: "previous-run",
     role: "user" as const, source: "prompt" as const,
@@ -772,9 +775,184 @@ test("replaceContext preserves the previous state when cloning fails", () => {
     nonCloneable: () => undefined,
   }]
 
-  expect(() => agent.replaceContext(messages, [])).toThrow()
+  expect(() => owner.replaceContext({ messages })).toThrow()
+  expect(owner.getContext()).toBe(previousContext)
   expect(agent.state).toBe(previousState)
 })
+
+test("Agent requests include all external accepted context without a presentation archive", async () => {
+  const requests: IAgentModelRequest[] = []
+  const history = Array.from({ length: 1_050 }, (_, index) => ({
+    id: `history-${index}`, sessionId: "session-1", runId: "prior-run", createdAt: index,
+    role: "user" as const, source: "prompt" as const, content: `Required history ${index}`,
+  }))
+  const owner = new AgentWorkingContext({ messages: history, contextSummary: "Complete summary 🐂".repeat(2_000) })
+  const agent = new Agent({
+    sessionId: "session-1", systemPrompt: "System", tools: [],
+    getContext: owner.getContext,
+    getRecentConversation: () => owner.getContext().messages,
+    getSelectedPathReferences: () => [],
+    criticalEventSink: (event) => {
+      if (event.type === "message_end") owner.acceptCommittedMessage(event.message)
+    },
+    resolveRunConfiguration: () => ({ reasoningEffort: "high", model: {
+      async *stream(request) {
+        expect(request.messages).toBe(owner.getContext().messages)
+        expect(Object.isFrozen(request.messages)).toBe(true)
+        expect(Object.isFrozen(request.messages[0])).toBe(true)
+        requests.push(request)
+        yield { type: "finish", reason: "stop" }
+      },
+    } }),
+  })
+  let acceptedBeforePublication = false
+  agent.subscribe((event) => {
+    if (event.type === "message_end" && event.message.role === "user") {
+      acceptedBeforePublication = owner.getContext().messages.at(-1)?.id === event.message.id
+    }
+  })
+  await agent.prompt("Current prompt").runFinished
+  expect(acceptedBeforePublication).toBe(true)
+  expect(requests).toHaveLength(1)
+  expect(requests[0]?.messages).toHaveLength(1_051)
+  expect(requests[0]?.messages.slice(0, history.length)).toEqual(history)
+  expect(requests[0]?.messages.at(-1)).toMatchObject({ content: "Current prompt" })
+  expect("messages" in agent.state).toBe(false)
+  expect(requests[0]?.contextSummary).toBe(owner.getContext().contextSummary)
+})
+
+test("Agent observes an external replacement during an active run and removes the old summary", async () => {
+  const requests: IAgentModelRequest[] = []
+  const { agent, owner } = createAgentFixture({
+    sessionId: "session-1", systemPrompt: "System", tools: [],
+    resolveRunConfiguration: () => ({ reasoningEffort: "medium", model: {
+      async *stream(request) {
+        requests.push(request)
+        yield { type: "text-delta", id: "answer", delta: "Answer" }
+        yield { type: "finish", reason: "stop" }
+      },
+    } }),
+  })
+  owner.replaceContext({ messages: [], contextSummary: "Old summary" })
+  let oldView: ReturnType<typeof owner.getContext> | undefined
+  agent.subscribe((event) => {
+    if (event.type !== "message_end" || event.message.role !== "assistant" || requests.length !== 1) return
+    oldView = owner.getContext()
+    owner.replaceContext({ messages: [] })
+    agent.followUp("After replacement")
+  })
+  await agent.prompt("Before replacement").runFinished
+  expect(requests).toHaveLength(2)
+  expect(requests[0]?.contextSummary).toBe("Old summary")
+  expect(requests[1]?.contextSummary).toBeUndefined()
+  expect(requests[1]?.messages).toHaveLength(1)
+  expect(requests[1]?.messages[0]).toMatchObject({ source: "followUp", content: "After replacement" })
+  expect(oldView?.contextSummary).toBe("Old summary")
+  expect(oldView?.messages).toHaveLength(2)
+})
+
+for (const failure of [new Error("Required context unavailable"), undefined]) {
+  test(`Agent never falls back to its state after a context getter throws ${String(failure)}`, async () => {
+    let modelCalls = 0
+    const { agent, owner } = createAgentFixture({
+      sessionId: "session-1", systemPrompt: "System", tools: [],
+      getContext: () => { throw failure },
+      resolveRunConfiguration: () => ({ reasoningEffort: "low", model: {
+        async *stream() { modelCalls++; yield { type: "finish", reason: "stop" } },
+      } }),
+    })
+    const run = agent.prompt("Committed prompt")
+    const results = await Promise.allSettled([run.initialPromptProcessed, run.runFinished])
+    expect(results[0]?.status).toBe("fulfilled")
+    expect(results[1]).toEqual({ status: "rejected", reason: failure })
+    expect(owner.getContext().messages).toHaveLength(1)
+    expect(agent.state.lastRunReason).toBe("internal-error")
+    expect(modelCalls).toBe(0)
+  })
+}
+
+test.each(["no tools", "ordinary tool"])("does not read selected paths with %s, even if unused history loading would fail", async (configuration) => {
+  let selectedPathReads = 0
+  const ordinary = defineAgentTool({
+    name: "ordinary", description: "No selected paths needed",
+    inputSchema: { type: "object" }, execute: async () => "done",
+  })
+  const { agent, owner } = createAgentFixture({
+    sessionId: "session-1", systemPrompt: "System", tools: configuration === "no tools" ? [] : [ordinary],
+    getSelectedPathReferences: () => { selectedPathReads++; throw new Error("Unused selected paths unavailable") },
+    resolveRunConfiguration: () => ({ reasoningEffort: "low", model: completedModel() }),
+  })
+  const run = agent.prompt("Proceed without historical paths")
+  await run.initialPromptProcessed
+  await run.runFinished
+  expect(owner.getContext().messages.map((message) => message.role)).toEqual(["user", "assistant"])
+  expect(selectedPathReads).toBe(0)
+})
+
+test("selected-path reads follow active tool configuration between runs", async () => {
+  let selectedPathReads = 0
+  const selectedTool = defineAgentTool({
+    name: "selected_read", description: "Read selected paths", acceptsSelectedPathReferences: true,
+    inputSchema: { type: "object" }, execute: async () => "done",
+  })
+  const { agent } = createAgentFixture({
+    sessionId: "session-1", systemPrompt: "System", tools: [],
+    getSelectedPathReferences: () => { selectedPathReads++; return [] },
+    resolveRunConfiguration: () => ({ reasoningEffort: "low", model: completedModel() }),
+  })
+  await agent.prompt("Without path consumer").runFinished
+  expect(selectedPathReads).toBe(0)
+  agent.updateConfiguration({ systemPrompt: "System", tools: [selectedTool] })
+  await agent.prompt("With path consumer").runFinished
+  expect(selectedPathReads).toBe(1)
+  agent.replaceContext([])
+  await agent.prompt("Without path consumer again").runFinished
+  expect(selectedPathReads).toBe(1)
+})
+
+test("selected-path loading failure stops the run before prompt acceptance and model dispatch", async () => {
+  let modelCalls = 0
+  let criticalEvents = 0
+  let selectedPathReads = 0
+  const selectedTool = defineAgentTool({
+    name: "selected_read", description: "Read selected paths", acceptsSelectedPathReferences: true,
+    inputSchema: { type: "object" }, execute: async () => "done",
+  })
+  const { agent, owner } = createAgentFixture({
+    sessionId: "session-1", systemPrompt: "System", tools: [selectedTool],
+    getSelectedPathReferences: () => { selectedPathReads++; throw new Error("Selected paths unavailable") },
+    criticalEventSink: () => { criticalEvents++ },
+    resolveRunConfiguration: () => ({ reasoningEffort: "low", model: {
+      async *stream() { modelCalls++; yield { type: "finish", reason: "stop" } },
+    } }),
+  })
+  const run = agent.prompt("Do not accept")
+  const results = await Promise.allSettled([run.initialPromptProcessed, run.runFinished])
+  expect(results.map((result) => result.status)).toEqual(["rejected", "rejected"])
+  expect(owner.getContext().messages).toEqual([])
+  expect(criticalEvents).toBe(0)
+  expect(modelCalls).toBe(0)
+  expect(selectedPathReads).toBe(1)
+})
+
+/** Explicit test owner; production Agent has no context fallback or history acceptance. */
+function createAgentFixture(options: Omit<IAgentOptions, "getContext" | "getSelectedPathReferences" | "getRecentConversation"> &
+  Partial<Pick<IAgentOptions, "getContext" | "getSelectedPathReferences" | "getRecentConversation">> &
+  { readonly initialMessages?: readonly TAgentMessage[] }) {
+  const { initialMessages = [], ...agentOptions } = options
+  const owner = new AgentWorkingContext({ messages: initialMessages })
+  const agent = new Agent({
+    ...agentOptions,
+    getContext: options.getContext ?? owner.getContext,
+    getRecentConversation: options.getRecentConversation ?? (() => owner.getContext().messages),
+    getSelectedPathReferences: options.getSelectedPathReferences ?? (() => []),
+    criticalEventSink: async (event, signal) => {
+      await options.criticalEventSink?.(event, signal)
+      if (event.type === "message_end") owner.acceptCommittedMessage(event.message)
+    },
+  })
+  return { agent, owner }
+}
 
 function completedModel(): IAgentModel {
   return {

@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer"
 import type { AssistantContent, ModelMessage, ToolContent, UserContent } from "ai"
-import type { TAgentMessage } from "@/agent"
+import type { TAgentMessage, IToolResultMessage } from "@/agent"
 
 type AssistantPart = Exclude<AssistantContent, string>[number]
 
@@ -10,7 +10,8 @@ export function toKimiModelMessages(
     contextSummary?: string,
 ): ModelMessage[] {
     const projected: ModelMessage[] = []
-    const pending = new Map<string, string>()
+    const pending = new Map<string, Pick<IToolResultMessage,
+        "assistantMessageId" | "sessionId" | "runId" | "toolName">>()
     const seen = new Set<string>()
     if (contextSummary) projected.push({
         role: "assistant",
@@ -54,7 +55,10 @@ export function toKimiModelMessages(
                             if (reasoning.length === 0) throw new Error("Kimi tool history requires nonempty reasoning; start a new session")
                             if (seen.has(part.toolCallId)) throw new Error("Kimi history contains duplicate tool call IDs")
                             seen.add(part.toolCallId)
-                            pending.set(part.toolCallId, part.toolName)
+                            pending.set(part.toolCallId, {
+                                assistantMessageId: message.id, sessionId: message.sessionId,
+                                runId: message.runId, toolName: part.toolName,
+                            })
                             return {
                                 type: "tool-call", toolCallId: part.toolCallId,
                                 toolName: part.toolName, input: structuredClone(part.input),
@@ -66,7 +70,12 @@ export function toKimiModelMessages(
                 break
             }
             case "toolResult": {
-                if (!pending.has(message.toolCallId) || pending.get(message.toolCallId) !== message.toolName) {
+                const expected = pending.get(message.toolCallId)
+                if (!expected
+                    || expected.assistantMessageId !== message.assistantMessageId
+                    || expected.sessionId !== message.sessionId
+                    || expected.runId !== message.runId
+                    || expected.toolName !== message.toolName) {
                     throw new Error("Kimi history contains an unpaired tool result; start a new session")
                 }
                 pending.delete(message.toolCallId)

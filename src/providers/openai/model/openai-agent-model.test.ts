@@ -4,7 +4,6 @@ import { realpathSync } from "node:fs"
 import {
     defineAgentTool,
     isModelContextOverflowError,
-    runAgentLoop,
     type TAgentMessage,
     type TAgentModelEvent,
     type IAgentToolDescriptor,
@@ -23,9 +22,10 @@ import {
 } from "@/providers/openai/model/openai-agent-model"
 import { OPENAI_CODEX_RESPONSES_URL } from "@/providers/openai/constants"
 import { AgentSession } from "@/sessions/agent-session"
-import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
+import { SQLiteSessionManager } from "@/sessions/sqlite/sqlite-session-manager"
 import { createWorkspaceTools } from "../../../../test/fixtures/workspace-tools"
 import { MODELS_DEV_ASTRA_REFERENCE } from "../../../../test/fixtures/openai-astra-reference"
+import { runAgentLoopWithContext as runAgentLoop } from "../../../../test/fixtures/agent-loop"
 
 const WORKSPACE_ROOT = realpathSync(process.cwd())
 
@@ -82,7 +82,7 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
       createdAt: 2,
     },
   ]
-  const manager = new InMemorySessionManager()
+  const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
   manager.createSession(testSessionInfo())
   messages.forEach(manager.appendMessage)
   const expectedSystemPrompt = "Inspect the workspace using the supplied tools."
@@ -304,7 +304,7 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
   const readContinuation = (await fourthRequest.json()) as Record<string, unknown>
   expect(JSON.stringify(readContinuation.input)).toContain("scripts")
 
-  const stored = manager.getMessages("session-1")
+  const stored = manager.loadRequiredContext("session-1").messages
   const toolCalls = stored.flatMap((message) => message.role === "assistant"
     ? message.content.filter((content) => content.type === "toolCall")
     : [])
@@ -384,7 +384,7 @@ test("replays a local tool failure into the next OAuth iteration", async () => {
     fetch: captureFetch,
     now: () => 100,
   })
-  const manager = new InMemorySessionManager()
+  const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
   manager.createSession(testSessionInfo())
   const session = new AgentSession({
     agentId: "test-agent",
@@ -404,7 +404,7 @@ test("replays a local tool failure into the next OAuth iteration", async () => {
 
   expect(capturedRequests).toHaveLength(2)
   const failedTool = manager
-    .getMessages("session-1")
+    .loadRequiredContext("session-1").messages
     .find((message) => message.role === "toolResult")
 
   if (failedTool?.role !== "toolResult") {
@@ -433,7 +433,7 @@ test("replays a local tool failure into the next OAuth iteration", async () => {
       output: failedTool.content,
     },
   ]))
-  expect(manager.getMessages("session-1").at(-1)).toMatchObject({
+  expect(manager.loadRequiredContext("session-1").messages.at(-1)).toMatchObject({
     role: "assistant",
     stopReason: "stop",
   })
@@ -470,6 +470,7 @@ test("lowers direct assistant and text-only toolResult messages", async () => {
       sessionId: "session-1",
       runId: "run-1",
       role: "toolResult",
+      assistantMessageId: "assistant-message",
       toolCallId: "call-read",
       toolName: "read_file",
       content: "README contents",
@@ -508,6 +509,41 @@ test("lowers direct assistant and text-only toolResult messages", async () => {
       output: "README contents",
     },
   ])
+})
+
+test.each([
+  "wrong-owner", "wrong-run", "wrong-session", "wrong-tool", "wrong-call",
+  "missing-result", "orphan-result", "duplicate-result", "duplicate-call", "interleaved-user",
+  "failed-assistant", "aborted-assistant",
+])("rejects unsafe OpenAI tool history before credentials: %s", async (kind) => {
+  let credentialReads = 0
+  let requests = 0
+  const model = new OpenAiAgentModel({ auth: {
+    requireCredential: async () => { credentialReads++; return {} },
+    authenticatedFetch: fetchImplementation(async () => { requests++; return streamResponse() }),
+  } })
+  const call = { type: "toolCall" as const, toolCallId: "call-read", toolName: "read", input: {} }
+  const assistant: TAgentMessage = {
+    id: "assistant", sessionId: "session-1", runId: "run-1", createdAt: 1, role: "assistant",
+    stopReason: kind === "failed-assistant" ? "error" : kind === "aborted-assistant" ? "aborted" : "tool-calls",
+    content: kind === "duplicate-call" ? [call, call] : [call],
+  }
+  const result: TAgentMessage = {
+    id: "result", createdAt: 2, role: "toolResult", content: "Contents", isError: false,
+    assistantMessageId: kind === "wrong-owner" ? "other-assistant" : assistant.id,
+    sessionId: kind === "wrong-session" ? "other-session" : assistant.sessionId,
+    runId: kind === "wrong-run" ? "other-run" : assistant.runId,
+    toolName: kind === "wrong-tool" ? "other-tool" : call.toolName,
+    toolCallId: kind === "wrong-call" ? "other-call" : call.toolCallId,
+  }
+  const histories: Record<string, TAgentMessage[]> = {
+    "missing-result": [assistant], "orphan-result": [result],
+    "duplicate-result": [assistant, result, { ...result, id: "duplicate" }],
+    "interleaved-user": [assistant, userMessage("next"), result],
+  }
+  await expect(collectEvents(model, histories[kind] ?? [assistant, result], [])).rejects.toThrow("OpenAI history")
+  expect(credentialReads).toBe(0)
+  expect(requests).toBe(0)
 })
 
 test("lowers user image attachments to OpenAI input_image parts", async () => {
@@ -582,6 +618,7 @@ test("projects structured tool outcomes as text-only provider results", async ()
         sessionId: "session-1",
         runId: "run-1",
         role: "toolResult",
+        assistantMessageId: `assistant-${index}`,
         toolCallId,
         toolName: "test_tool",
         content: `provider-visible-${index}`,
@@ -607,6 +644,7 @@ test("projects structured tool outcomes as text-only provider results", async ()
     expect(input).not.toContain("HOST_ONLY_SUMMARY")
     expect(input).not.toContain('"outcome"')
     expect(input).not.toContain('"summary"')
+    expect(input).not.toContain('"assistantMessageId"')
   }
 })
 
@@ -1010,6 +1048,7 @@ test("does not execute an OpenAI tool call from an output-limited response", asy
     },
   })
 
+  const messages: TAgentMessage[] = []
   const result = await runAgentLoop(
     userMessage("Perform the action"),
     {
@@ -1023,14 +1062,17 @@ test("does not execute an OpenAI tool call from an output-limited response", asy
       model,
       reasoningEffort: "medium",
       signal: new AbortController().signal,
-      emit: () => undefined,
+      emit: (event) => {
+        if (event.type === "message_end") messages.push(structuredClone(event.message))
+      },
     },
   )
 
+  expect(result).toEqual({ reason: "completed" })
   expect(executions).toBe(0)
   expect(requests).toBe(1)
-  expect(result.messages.some((message) => message.role === "toolResult")).toBe(false)
-  expect(result.messages.filter((message) => message.role === "assistant"))
+  expect(messages.some((message) => message.role === "toolResult")).toBe(false)
+  expect(messages.filter((message) => message.role === "assistant"))
     .toEqual([expect.objectContaining({ stopReason: "length", content: [] })])
 })
 

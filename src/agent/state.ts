@@ -16,16 +16,19 @@ export interface IAgentContextProjection {
     readonly contextSummary?: string
 }
 
-export type TAgentContextProjector = (
-    messages: readonly TAgentMessage[],
-) => IAgentContextProjection
+/** Error metadata, never a retained completed assistant payload. */
+export interface IAssistantError {
+    readonly id: string
+    readonly runId: string
+    readonly errorMessage: string
+}
 
-/** Immutable state published by one live Agent instance. */
+/** Immutable operational state published by one live Agent instance. */
 export interface IAgentState {
     readonly sessionId: string
     readonly systemPrompt: string
     readonly tools: readonly IRuntimeAgentTool[]
-    readonly messages: readonly TAgentMessage[]
+    readonly assistantError: IAssistantError | undefined
     readonly isRunning: boolean
     readonly activeRunId: string | undefined
     readonly streamingMessage: IAssistantMessage | undefined
@@ -42,5 +45,4 @@ export interface IAgentRunHandle {
 
 export interface IAgentLoopResult {
     readonly reason: TAgentRunEndReason
-    readonly messages: readonly TAgentMessage[]
 }

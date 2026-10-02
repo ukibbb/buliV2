@@ -1,4 +1,3 @@
-import { ErrorNotice } from "@/ui/chat/ErrorNotice"
 import { useTerminalDimensions } from "@opentui/react"
 import type { ReactNode } from "react"
 
@@ -60,18 +59,15 @@ export function InputMenu(props: IInputMenuProps): ReactNode {
                         <span fg={isSelected ? theme.green : theme.amber}>
                             {`${isSelected ? "→" : " "} ${item.label.padEnd(MENU_LABEL_COLUMNS)}`}
                         </span>
-                        {item.description ? <span fg={theme.textMuted}>{item.description}</span> : null}
+                        {item.description ? <span fg={theme.textSecondary}>{item.description}</span> : null}
                     </text>
                 })}
             </scrollbox>
         </ClippedBox>
         {menu.items.length === 0 && menu.emptyMessage ? (
-            <text selectable={false} flexShrink={0} wrapMode="word" fg={theme.textMuted}>
+            <text selectable={false} flexShrink={0} wrapMode="word" fg={theme.textSecondary}>
                 {menu.emptyMessage}
             </text>
-        ) : null}
-        {menu.errorMessage ? (
-            <ErrorNotice message={menu.errorMessage} />
         ) : null}
     </ClippedBox>
 }

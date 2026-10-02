@@ -50,7 +50,7 @@ export function SecretInput({ placeholder, onSubmit }: ISecretInputProps) {
         }
     })
 
-    return <text selectable={false} fg={length ? theme.text : theme.textMuted}>
+    return <text selectable={false} fg={length ? theme.text : theme.textSecondary}>
         {length ? "*".repeat(Math.min(length, 64)) : placeholder}
     </text>
 }

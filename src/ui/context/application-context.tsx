@@ -72,8 +72,6 @@ const selectSession = (snapshot: ISessionSnapshot) => snapshot
 // Home has no live session. Keep its idle source stable and do not open a session.
 const HOME_SESSION: ISessionSnapshot = {
     activeBranchId: "main",
-    messages: [],
-    fileChangeProposals: [],
     pendingSteeringMessages: [],
     pendingFollowUpMessages: [],
     isRunning: false,

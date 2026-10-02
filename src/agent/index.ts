@@ -22,12 +22,6 @@ export type {
     TAgentEventListener,
 } from "@/agent/events"
 export type {
-    IFileChangeProposal,
-    IFileChangeProposalRecord,
-    TFileChangeOperation,
-    TFileChangeProposalStatus,
-} from "@/agent/file-change-proposal"
-export type {
     TAgentMessage,
     TAssistantContent,
     IAssistantMessage,
@@ -69,7 +63,6 @@ export type {
 } from "@/agent/model-values"
 export type {
     IAgentContextProjection,
-    TAgentContextProjector,
     IAgentLoopResult,
     TAgentRunEndReason,
     IAgentRunHandle,

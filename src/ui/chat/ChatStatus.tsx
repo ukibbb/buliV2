@@ -34,7 +34,7 @@ export function ChatStatus(props: IChatStatusProps) {
                 <span fg={theme.amber}>{props.reasoningEffort}</span>
                 <span> ]</span>
             </text>
-            {props.contextUsage ? <text fg={theme.textMuted} minWidth={0} flexShrink={1} wrapMode="word">
+            {props.contextUsage ? <text fg={theme.textSecondary} minWidth={0} flexShrink={1} wrapMode="word">
                 {`| ${formatContextUsage(props.contextUsage)}`}
             </text> : null}
         </box>

@@ -12,6 +12,7 @@ import type {
     IAgentModel,
     TAgentModelEvent,
     IAgentModelRequest,
+    IToolResultMessage,
 } from "@/agent"
 import {
     isModelContextOverflowError,
@@ -81,6 +82,7 @@ export class OpenAiAgentModel implements IAgentModel {
         request: IAgentModelRequest,
     ): AsyncIterable<TAgentModelEvent> {
         request.signal.throwIfAborted()
+        const messages = toModelMessages(request.messages, request.contextSummary)
         const credential = await this.auth.requireCredential(request.signal)
         if (
             this.expectedAccountId
@@ -111,10 +113,7 @@ export class OpenAiAgentModel implements IAgentModel {
         })
         yield* streamAiSdkTurn(request, {
             model: provider.responses(this.modelId),
-            messages: toModelMessages(
-                request.messages,
-                request.contextSummary,
-            ),
+            messages,
             providerOptions: {
                 openai: {
                     store: false,
@@ -179,6 +178,7 @@ function toModelMessages(
     messages: readonly TAgentMessage[],
     contextSummary?: string,
 ): ModelMessage[] {
+    assertCompleteToolHistory(messages)
     const projected = messages.flatMap((message): ModelMessage[] => {
         switch (message.role) {
             case "user":
@@ -242,6 +242,41 @@ function toModelMessages(
         role: "assistant",
         content: `Cumulative operational checkpoint:\n${contextSummary}`,
     }, ...projected]
+}
+
+function assertCompleteToolHistory(messages: readonly TAgentMessage[]): void {
+    const pending = new Map<string, Pick<IToolResultMessage,
+        "assistantMessageId" | "sessionId" | "runId" | "toolName">>()
+    for (const message of messages) {
+        if (message.role === "toolResult") {
+            const expected = pending.get(message.toolCallId)
+            if (!expected
+                || expected.assistantMessageId !== message.assistantMessageId
+                || expected.sessionId !== message.sessionId
+                || expected.runId !== message.runId
+                || expected.toolName !== message.toolName) {
+                throw new Error("OpenAI history contains an unpaired tool result")
+            }
+            pending.delete(message.toolCallId)
+            continue
+        }
+        if (pending.size > 0) {
+            throw new Error("OpenAI history contains unresolved tool calls")
+        }
+        if (message.role !== "assistant"
+            || message.stopReason === "error" || message.stopReason === "aborted") continue
+        for (const part of message.content) {
+            if (part.type !== "toolCall") continue
+            if (pending.has(part.toolCallId)) {
+                throw new Error("OpenAI history contains duplicate tool call IDs")
+            }
+            pending.set(part.toolCallId, {
+                assistantMessageId: message.id, sessionId: message.sessionId,
+                runId: message.runId, toolName: part.toolName,
+            })
+        }
+    }
+    if (pending.size > 0) throw new Error("OpenAI history contains unresolved tool calls")
 }
 
 function normalizeOpenAiModelError(error: unknown): unknown {

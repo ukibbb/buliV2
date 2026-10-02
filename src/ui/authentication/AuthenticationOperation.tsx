@@ -1,3 +1,4 @@
+import { Keycap } from "@/ui/components/Keycap"
 import type { InputRenderable } from "@opentui/core"
 import {
     useRef,
@@ -38,7 +39,7 @@ export function AuthenticationOperation(
             >
                 <text>{`Signing in to ${state.provider.name}...`}</text>
                 {state.event ? <AuthenticationEvent event={state.event} /> : (
-                    <text fg={theme.textMuted}>Starting authentication...</text>
+                    <text fg={theme.textSecondary}>Starting authentication...</text>
                 )}
                 {state.browserOpenFailed ? (
                     <text fg={theme.amber}>
@@ -48,7 +49,7 @@ export function AuthenticationOperation(
                 {state.prompt ? (
                     <box flexDirection="column" gap={1}>
                         <text>{state.prompt.message}</text>
-                        <box border={["bottom"]} borderColor={theme.textMuted}>
+                        <box border={["bottom"]} borderColor={theme.textSecondary}>
                             {state.prompt.presentation === "secret" ? (
                                 <SecretInput
                                     key={state.prompt.id}
@@ -63,7 +64,7 @@ export function AuthenticationOperation(
                                 placeholder={state.prompt.placeholder}
                                 textColor={theme.text}
                                 focusedTextColor={theme.text}
-                                placeholderColor={theme.textMuted}
+                                placeholderColor={theme.textSecondary}
                                 backgroundColor="transparent"
                                 focusedBackgroundColor="transparent"
                                 onSubmit={() => {
@@ -73,17 +74,17 @@ export function AuthenticationOperation(
                                 }}
                             />}
                         </box>
-                        <text fg={theme.textMuted} selectable={false}>
-                            enter submit  esc cancel
+                        <text fg={theme.textSecondary} selectable={false}>
+                            <Keycap keys="Enter" />{" submit  "}<Keycap keys="Esc" />{" cancel"}
                         </text>
                     </box>
                 ) : (
-                    <text fg={theme.textMuted} selectable={false}>
-                        Waiting...  esc cancel
+                    <text fg={theme.textSecondary} selectable={false}>
+                        Waiting...  <Keycap keys="Esc" />{" cancel"}
                     </text>
                 )}
-                <text fg={theme.textMuted} selectable={false}>
-                    page up/down scroll
+                <text fg={theme.textSecondary} selectable={false}>
+                    <Keycap keys="Page Up" />{" / "}<Keycap keys="Page Down" />{" scroll"}
                 </text>
             </box>
         )
@@ -93,8 +94,8 @@ export function AuthenticationOperation(
         return (
             <box flexDirection="column" gap={1}>
                 <text>{`Disconnecting ${state.provider.name}...`}</text>
-                <text fg={theme.textMuted} selectable={false}>
-                    Please wait  esc cancel
+                <text fg={theme.textSecondary} selectable={false}>
+                    Please wait  <Keycap keys="Esc" />{" cancel"}
                 </text>
             </box>
         )
@@ -109,8 +110,8 @@ export function AuthenticationOperation(
             </text>
             <text>{`Provider: ${state.providerName}`}</text>
             <text>{`Account: ${state.accountId ?? "unavailable"}`}</text>
-            <text fg={theme.textMuted} selectable={false}>
-                enter or esc close
+            <text fg={theme.textSecondary} selectable={false}>
+                <Keycap keys="Enter" />{" or "}<Keycap keys="Esc" />{" close"}
             </text>
         </box>
     )
@@ -118,7 +119,7 @@ export function AuthenticationOperation(
 
 function AuthenticationEvent(props: { readonly event: TAuthEvent }): ReactNode {
     if (props.event.type === "progress") {
-        return <text fg={theme.textMuted}>{props.event.message}</text>
+        return <text fg={theme.textSecondary}>{props.event.message}</text>
     }
     if (props.event.type === "authorization") {
         return (

@@ -18,6 +18,7 @@ export function createInterruptedToolResults(
         if (pending) {
             if (
                 message.role === "toolResult"
+                && message.assistantMessageId === pending.assistant.id
                 && message.runId === pending.assistant.runId
                 && pending.remainingToolCallIds.delete(message.toolCallId)
             ) {
@@ -69,6 +70,7 @@ export function createInterruptedToolResults(
             sessionId: pending.assistant.sessionId,
             runId: pending.assistant.runId,
             role: "toolResult" as const,
+            assistantMessageId: pending.assistant.id,
             toolCallId: content.toolCallId,
             toolName: content.toolName,
             content: "A durable tool result was not recorded. The tool may have produced side effects; inspect the current state before retrying.",

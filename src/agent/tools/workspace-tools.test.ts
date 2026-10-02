@@ -298,6 +298,7 @@ test("agent execution prepares legacy and serialized edit arguments", async () =
     ], createToolIndex([edit]), {
       sessionId: "session-workspace-tools",
       runId: "run-workspace-tools",
+      assistantMessageId: "assistant-workspace-tools",
       messages: [],
       signal: new AbortController().signal,
       emit: () => {},

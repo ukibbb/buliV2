@@ -22,9 +22,9 @@ import type { IBuliApplication, IBuliModelSelection } from "@/app/contracts"
 import { BuliApplicationRuntime } from "@/app/runtime"
 import type { IOpenAiModelCatalog } from "@/providers/openai"
 import {
-    defaultSessionDirectoryPath,
+    defaultHistoryDirectoryPath,
     type ISessionManager,
-    WorkspaceSessionManager,
+    SQLiteSessionManager,
 } from "@/sessions"
 import {
     EphemeralToolOutputStore,
@@ -114,8 +114,8 @@ export async function createBuliApplication(
     let runtime: BuliApplicationRuntime | undefined
     let manager: ISessionManager | undefined
     try {
-        manager = options.manager ?? new WorkspaceSessionManager({
-            directoryPath: defaultSessionDirectoryPath(workspaceRoot),
+        manager = options.manager ?? new SQLiteSessionManager({
+            directoryPath: defaultHistoryDirectoryPath(workspaceRoot),
         })
         const modelComposition = options.model === undefined
             ? createProviderModelComposition({

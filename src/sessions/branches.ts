@@ -21,17 +21,21 @@ export interface ISessionBranch {
     readonly inheritedCheckpointId: string | null
 }
 
-export interface ISessionBranchData {
+export interface ISessionBranchReferences<TMessage, TCheckpoint> {
     readonly branch: ISessionBranch
-    readonly messages: readonly TAgentMessage[]
-    readonly checkpoints: readonly ICompactionCheckpoint[]
+    readonly messages: readonly TMessage[]
+    readonly checkpoints: readonly TCheckpoint[]
 }
 
-export interface ISessionBranchContext {
+export interface ISessionBranchData extends ISessionBranchReferences<TAgentMessage, ICompactionCheckpoint> {}
+
+export interface ISessionBranchReferenceContext<TMessage, TCheckpoint> {
     readonly branchId: string
-    readonly messages: readonly TAgentMessage[]
-    readonly checkpoint?: ICompactionCheckpoint
+    readonly messages: readonly TMessage[]
+    readonly checkpoint?: TCheckpoint
 }
+
+export interface ISessionBranchContext extends ISessionBranchReferenceContext<TAgentMessage, ICompactionCheckpoint> {}
 
 type TBranches = ReadonlyMap<string, ISessionBranchData>
 
@@ -75,10 +79,19 @@ export function resolveBranchContext(
     branches: TBranches,
     branchId: string,
 ): ISessionBranchContext {
+    return structuredClone(resolveBranchReferences(branches, branchId, checkpointFits))
+}
+
+/** Resolves references without cloning payloads or retaining expanded branch contexts. */
+export function resolveBranchReferences<TMessage extends { readonly id: string }, TCheckpoint extends { readonly id: string }>(
+    branches: ReadonlyMap<string, ISessionBranchReferences<TMessage, TCheckpoint>>,
+    branchId: string,
+    checkpointFits: (checkpoint: TCheckpoint, messages: readonly TMessage[]) => boolean,
+): ISessionBranchReferenceContext<TMessage, TCheckpoint> {
     const chain = getBranchChain(branches, branchId)
-    const ancestorCheckpoints = new Map<string, ICompactionCheckpoint>()
-    let messages: TAgentMessage[] = []
-    let checkpoint: ICompactionCheckpoint | undefined
+    const ancestorCheckpoints = new Map<string, TCheckpoint>()
+    let messages: TMessage[] = []
+    let checkpoint: TCheckpoint | undefined
 
     for (const data of chain) {
         const { branch } = data
@@ -116,8 +129,8 @@ export function resolveBranchContext(
 
     return {
         branchId,
-        messages: structuredClone(messages),
-        ...(checkpoint === undefined ? {} : { checkpoint: structuredClone(checkpoint) }),
+        messages,
+        ...(checkpoint === undefined ? {} : { checkpoint }),
     }
 }
 
@@ -131,14 +144,17 @@ export function getParentBranchId(
     return origin.branchId
 }
 
-function getBranchChain(branches: TBranches, branchId: string): ISessionBranchData[] {
-    const chain: ISessionBranchData[] = []
+function getBranchChain<TData extends { readonly branch: ISessionBranch }>(
+    branches: ReadonlyMap<string, TData>,
+    branchId: string,
+): TData[] {
+    const chain: TData[] = []
     const visited = new Set<string>()
     let id: string | null = branchId
     while (id !== null) {
         if (visited.has(id)) throw new Error(`Branch cycle at ${id}`)
         visited.add(id)
-        const data = requireBranch(branches, id)
+        const data: TData = requireBranch(branches, id)
         assertBranchIdentity(id, data.branch)
         chain.push(data)
         id = data.branch.origin?.branchId ?? null
@@ -146,7 +162,7 @@ function getBranchChain(branches: TBranches, branchId: string): ISessionBranchDa
     return chain.reverse()
 }
 
-function requireBranch(branches: TBranches, id: string): ISessionBranchData {
+function requireBranch<TData>(branches: ReadonlyMap<string, TData>, id: string): TData {
     const data = branches.get(id)
     if (!data) throw new Error(`Branch does not exist: ${id}`)
     return data

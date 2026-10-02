@@ -14,6 +14,7 @@ import type {
     TReasoningEffort,
 } from "@/agent/model-values"
 import type {
+    IAgentContextProjection,
     IAgentLoopResult,
     TAgentRunEndReason,
 } from "@/agent/state"
@@ -41,8 +42,9 @@ export interface IAgentInputQueue {
 
 export interface IAgentContext {
     readonly systemPrompt: string
-    readonly messages: readonly TAgentMessage[]
-    readonly contextSummary?: string
+    /** Reads the complete context accepted by the owner of message_end events. */
+    readonly getContext: () => IAgentContextProjection
+    readonly getRecentConversation: () => readonly TAgentMessage[]
     readonly tools: readonly IRuntimeAgentTool[]
     readonly selectedPathReferences?: readonly IUserPathReference[]
 }
@@ -65,8 +67,6 @@ export interface IAgentLoopConfig {
 /** Orchestrates provider turns, queued input, and sequential local tool batches. */
 export async function runAgentLoop(
     prompt: IUserMessage,
-
-    // data needed to build context send to model
     context: IAgentContext,
     config: IAgentLoopConfig,
 ): Promise<IAgentLoopResult> {
@@ -74,8 +74,6 @@ export async function runAgentLoop(
     const generateId = config.generateId ?? (() => crypto.randomUUID())
 
     const toolsByName = createToolIndex(context.tools)
-    const messages = structuredClone([...context.messages, prompt])
-    const newMessages: TAgentMessage[] = [structuredClone(prompt)]
     const selectedPathReferences = mergePathReferences(
         [],
         context.selectedPathReferences ?? [],
@@ -85,6 +83,7 @@ export async function runAgentLoop(
     await config.emit({ type: "agent_start", runId: config.runId })
     await config.emit({ type: "turn_start", runId: config.runId, index: 0 })
     await emitCompletedMessage(prompt, config.runId, config.emit)
+    mergePathReferences(selectedPathReferences, prompt.references ?? [])
 
     let iteration = 0
     let pendingMessage: IUserMessage | undefined
@@ -118,8 +117,6 @@ export async function runAgentLoop(
                         config.runId,
                         config.emit,
                     )
-                    messages.push(queuedMessage)
-                    newMessages.push(queuedMessage)
                     mergePathReferences(
                         selectedPathReferences,
                         queuedMessage.references ?? [],
@@ -132,14 +129,15 @@ export async function runAgentLoop(
                 throw error
             }
 
+            const projection = context.getContext()
             const assistant = await streamModelTurn({
                 sessionId: config.sessionId,
                 runId: config.runId,
                 systemPrompt: context.systemPrompt,
-                ...(context.contextSummary === undefined
+                ...(projection.contextSummary === undefined
                     ? {}
-                    : { contextSummary: context.contextSummary }),
-                messages,
+                    : { contextSummary: projection.contextSummary }),
+                messages: projection.messages,
                 model: config.model,
                 ...(config.modelProfile === undefined
                     ? {}
@@ -154,9 +152,6 @@ export async function runAgentLoop(
                 now,
                 generateId,
             })
-            // `messages` is the full model context; `newMessages` is this run's delta.
-            messages.push(assistant)
-            newMessages.push(assistant)
 
             const assistantRunReason = runReasonForAssistant(assistant)
             if (assistantRunReason) {
@@ -171,7 +166,6 @@ export async function runAgentLoop(
                 })
                 return finishRun(
                     config.signal.aborted ? "aborted" : assistantRunReason,
-                    newMessages,
                     config.runId,
                     config.emit,
                 )
@@ -180,7 +174,11 @@ export async function runAgentLoop(
             const toolCalls = assistant.content.filter(
                 (content): content is IToolCallContent => content.type === "toolCall",
             )
+            const needsConversationContext = toolCalls.some(
+                (call) => toolsByName.get(call.toolName)?.requiresConversationContext,
+            )
             const toolExecutionOptions = {
+                assistantMessageId: assistant.id,
                 sessionId: config.sessionId,
                 runId: config.runId,
                 ...(config.modelProfile === undefined
@@ -189,7 +187,9 @@ export async function runAgentLoop(
                 ...(providerAccountId === undefined
                     ? {}
                     : { providerAccountId }),
-                messages,
+                messages: needsConversationContext
+                    ? context.getRecentConversation()
+                    : [],
                 selectedPathReferences,
                 signal: config.signal,
                 emit: config.emit,
@@ -210,11 +210,6 @@ export async function runAgentLoop(
                     toolsByName,
                     toolExecutionOptions,
                 )
-
-            for (const toolResult of toolResults) {
-                messages.push(toolResult)
-                newMessages.push(toolResult)
-            }
 
             // Steering precedes follow-up, which waits until tool continuation ends.
             const hasSteeringMessages = config.inputQueue?.hasSteering() ?? false
@@ -239,7 +234,6 @@ export async function runAgentLoop(
                 config.inputQueue?.close()
                 return finishRun(
                     "aborted",
-                    newMessages,
                     config.runId,
                     config.emit,
                 )
@@ -247,7 +241,6 @@ export async function runAgentLoop(
             if (!willContinue) {
                 return finishRun(
                     "completed",
-                    newMessages,
                     config.runId,
                     config.emit,
                 )
@@ -262,7 +255,6 @@ export async function runAgentLoop(
             config.inputQueue?.close()
             return finishRun(
                 "completed",
-                newMessages,
                 config.runId,
                 config.emit,
             )
@@ -306,11 +298,10 @@ function runReasonForAssistant(
 
 async function finishRun(
     reason: TAgentRunEndReason,
-    messages: readonly TAgentMessage[],
     runId: string,
     emit: TAgentEventSink,
 ): Promise<IAgentLoopResult> {
-    const result = { reason, messages: structuredClone(messages) }
+    const result = { reason }
     await emit({ type: "agent_end", runId, ...result })
     return result
 }

@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test"
 import type { IAgentModel } from "@/agent"
-import { AgentSession, InMemorySessionManager, type IAgentSessionRunConfiguration } from "@/sessions"
+import { AgentSession, SQLiteSessionManager, type IAgentSessionRunConfiguration } from "@/sessions"
 
-function seededManager(): InMemorySessionManager {
-    const manager = new InMemorySessionManager()
+function seededManager(): SQLiteSessionManager {
+    const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
     manager.createSession({ id: "session", agentId: "agent", title: "Test", createdAt: 1, updatedAt: 1 })
     manager.appendMessage({
         id: "answer", sessionId: "session", runId: "old", role: "assistant",

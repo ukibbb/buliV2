@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test"
 import { BuliApplicationRuntime, type IBuliModelRuntimeConfig } from "@/app/runtime"
-import { InMemorySessionManager } from "@/sessions"
+import { SQLiteSessionManager } from "@/sessions"
 
 function createRuntime(registration: IBuliModelRuntimeConfig): BuliApplicationRuntime {
-    const manager = new InMemorySessionManager()
+    const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
     manager.createSession({ id: "session", agentId: "agent", title: "Test", createdAt: 1, updatedAt: 1 })
     manager.appendMessage({
         id: "answer", sessionId: "session", runId: "old", role: "assistant",

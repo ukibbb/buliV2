@@ -13,7 +13,7 @@ import {
   AgentSession,
   contextCompactionThresholdTokens,
   estimateContextInputTokens,
-  InMemorySessionManager,
+  SQLiteSessionManager,
   type ISessionManager,
 } from "@/sessions"
 
@@ -107,7 +107,7 @@ test("AgentSession compacts at preflight and dispatches the same durable prompt"
     compactedMessageCount: 4,
     summary: structuredSummary("Earlier summary"),
   })
-  const durablePrompt = manager.getMessages("session-1").find(
+  const durablePrompt = manager.loadRequiredContext("session-1").messages.find(
     (message) => message.role === "user" && message.runId === run.runId,
   )
   expect(durablePrompt).toBeDefined()
@@ -116,7 +116,7 @@ test("AgentSession compacts at preflight and dispatches the same durable prompt"
     contextSummary: structuredSummary("Earlier summary"),
   })
   expect(conversationRequests[0]?.messages).toEqual([durablePrompt!])
-  expect(manager.getMessages("session-1").filter(
+  expect(manager.loadRequiredContext("session-1").messages.filter(
     (message) => message.role === "user" && message.content === prompt,
   )).toHaveLength(1)
   expect(snapshots.some((snapshot) => snapshot.shouldCompact === true)).toBe(true)
@@ -450,8 +450,8 @@ test("AgentSession blocks an oversized request when compaction has no progress",
   expect(summaryAttempts).toBe(0)
   expect(requests).toHaveLength(0)
   expect(manager.getCompactionCheckpoint("session-1")).toBeUndefined()
-  expect(session.getSnapshot().compactionCheckpoint).toBeUndefined()
-  expect(manager.getMessages("session-1").findLast(
+  expect(session.loadHistoryPage("main").checkpoint).toBeUndefined()
+  expect(manager.loadRequiredContext("session-1").messages.findLast(
     (message) => message.role === "assistant" && message.runId === run.runId,
   )).toMatchObject({
     stopReason: "error",
@@ -494,9 +494,9 @@ test("AgentSession aborts preflight when the summary prompt cannot fit", async (
 
   expect(modelAttempts).toBe(0)
   expect(manager.getCompactionCheckpoint("session-1")).toBeUndefined()
-  expect(manager.getMessages("session-1").slice(0, 2).map((message) => message.id))
+  expect(manager.loadRequiredContext("session-1").messages.slice(0, 2).map((message) => message.id))
     .toEqual(["oversized-user", "oversized-assistant"])
-  expect(manager.getMessages("session-1").findLast(
+  expect(manager.loadRequiredContext("session-1").messages.findLast(
     (message) => message.role === "assistant" && message.runId === run.runId,
   )).toMatchObject({
     stopReason: "error",
@@ -597,8 +597,8 @@ for (const overflowMode of ["emitted", "thrown"] as const) {
           checkpointBeforeRetry = manager.getCompactionCheckpoint(
             "session-1",
           )?.summary
-          publishedCheckpointBeforeRetry = session.getSnapshot()
-            .compactionCheckpoint?.summary
+          publishedCheckpointBeforeRetry = session.loadHistoryPage("main")
+            .checkpoint?.summary
         }
         if (conversationAttempts === 1) {
           const overflow = new ModelContextOverflowError("context overflow")
@@ -632,7 +632,7 @@ for (const overflowMode of ["emitted", "thrown"] as const) {
         content: "Retry this request",
       }),
     ])
-    const runAssistants = manager.getMessages("session-1").filter(
+    const runAssistants = manager.loadRequiredContext("session-1").messages.filter(
       (message) => message.role === "assistant" && message.runId === run.runId,
     )
     expect(runAssistants).toHaveLength(1)
@@ -695,7 +695,7 @@ test("AgentSession can compact at preflight and advance again for overflow recov
     const first = session.getSnapshot()
     expect(first.isCompacting).toBe(true)
     expect(first.isRunning).toBe(true)
-    expect(first.compactionCheckpoint).toBeUndefined()
+    expect(session.loadHistoryPage("main").checkpoint).toBeUndefined()
     expect(first.compactionProgress).toMatchObject({
       throughMessageId: "large-assistant-7",
       summary: structuredSummary("Initial checkpoint ".repeat(100)),
@@ -706,17 +706,17 @@ test("AgentSession can compact at preflight and advance again for overflow recov
     await Promise.race([secondPublished.promise, run.runFinished])
     const second = session.getSnapshot()
     expect(second.isCompacting).toBe(true)
-    expect(second.compactionCheckpoint?.id).toBe(first.compactionProgress?.id)
+    expect(session.loadHistoryPage("main").checkpoint?.id).toBe(first.compactionProgress?.id)
     expect(second.compactionProgress?.id).not.toBe(first.compactionProgress?.id)
     expect(second.compactionProgress).toMatchObject({
       throughMessageId: "large-assistant-7",
       summary: structuredSummary("Recompressed checkpoint"),
     })
-    expect(second.compactionCheckpoint?.summary).toBe(first.compactionProgress?.summary)
+    expect(session.loadHistoryPage("main").checkpoint?.summary).toBe(first.compactionProgress?.summary)
     releaseSecond.resolve()
     await run.runFinished
     expect(session.getSnapshot()).not.toHaveProperty("compactionProgress")
-    expect(session.getSnapshot().compactionCheckpoint?.id).toBe(second.compactionProgress?.id)
+    expect(session.loadHistoryPage("main").checkpoint?.id).toBe(second.compactionProgress?.id)
     expect(summaryAttempts).toBe(2)
     expect(conversationAttempts).toBe(2)
     expect(requests[0]?.contextSummary).toBe(
@@ -744,7 +744,7 @@ test("AgentSession can compact at preflight and advance again for overflow recov
       compactedMessageCount: 16,
       summary: structuredSummary("Recompressed checkpoint"),
     })
-    expect(session.getSnapshot().compactionCheckpoint).toMatchObject({
+    expect(session.loadHistoryPage("main").checkpoint).toMatchObject({
       compactedMessageCount: 16,
       summary: structuredSummary("Recompressed checkpoint"),
     })
@@ -823,7 +823,7 @@ test("AgentSession does not retry overflow after exposing semantic output", asyn
   expect(conversationAttempts).toBe(1)
   expect(summaryAttempts).toBe(0)
   expect(manager.getCompactionCheckpoint("session-1")).toBeUndefined()
-  expect(manager.getMessages("session-1").findLast(
+  expect(manager.loadRequiredContext("session-1").messages.findLast(
     (message) => message.role === "assistant" && message.runId === run.runId,
   )).toMatchObject({
     stopReason: "error",
@@ -863,7 +863,7 @@ test("AgentSession surfaces a second overflow without another retry", async () =
 
   expect(conversationAttempts).toBe(2)
   expect(summaryAttempts).toBe(1)
-  expect(manager.getMessages("session-1").findLast(
+  expect(manager.loadRequiredContext("session-1").messages.findLast(
     (message) => message.role === "assistant" && message.runId === run.runId,
   )).toMatchObject({
     stopReason: "error",
@@ -899,10 +899,10 @@ test("AgentSession surfaces overflow without retry when compaction cannot advanc
   expect(conversationAttempts).toBe(1)
   expect(summaryAttempts).toBe(0)
   expect(manager.getCompactionCheckpoint("session-1")).toBeUndefined()
-  expect(session.getSnapshot().compactionCheckpoint).toBeUndefined()
+  expect(session.loadHistoryPage("main").checkpoint).toBeUndefined()
   expect(compactionStates).toContain(true)
   expect(session.getSnapshot().isCompacting).toBe(false)
-  expect(manager.getMessages("session-1").findLast(
+  expect(manager.loadRequiredContext("session-1").messages.findLast(
     (message) => message.role === "assistant" && message.runId === run.runId,
   )).toMatchObject({
     stopReason: "error",
@@ -923,10 +923,16 @@ test("AgentSession aborts preflight compaction without saving a checkpoint", asy
     returnToParentBranch: memory.returnToParentBranch,
     getSessionInfo: memory.getSessionInfo,
     listSessions: memory.listSessions,
-    getMessages: memory.getMessages,
+    openSession: memory.openSession,
+    releaseSession: memory.releaseSession,
+    dispose: memory.dispose,
+    recoverInterruptedTools: memory.recoverInterruptedTools,
+    loadRequiredContext: memory.loadRequiredContext,
+    loadRecentConversation: memory.loadRecentConversation,
+    loadSelectedPaths: memory.loadSelectedPaths,
+    loadHistoryPage: memory.loadHistoryPage,
+    deleteEmptySession: memory.deleteEmptySession,
     appendMessage: memory.appendMessage,
-    getPresentationRevision: memory.getPresentationRevision,
-    getFileChangeProposals: memory.getFileChangeProposals,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
     saveCompactionCheckpoint: (checkpoint) => {
       checkpointSaves += 1
@@ -966,7 +972,7 @@ test("AgentSession aborts preflight compaction without saving a checkpoint", asy
   expect(conversationAttempts).toBe(0)
   expect(checkpointSaves).toBe(0)
   expect(manager.getCompactionCheckpoint("session-1")).toBeUndefined()
-  expect(session.getSnapshot().compactionCheckpoint).toBeUndefined()
+  expect(session.loadHistoryPage("main").checkpoint).toBeUndefined()
   expect(compactionStates.filter(Boolean).length).toBeGreaterThanOrEqual(2)
   expect(session.getSnapshot().isCompacting).toBe(false)
 
@@ -996,8 +1002,8 @@ function openSession(
   })
 }
 
-function managerWithSession(): InMemorySessionManager {
-  const manager = new InMemorySessionManager()
+function managerWithSession(): SQLiteSessionManager {
+  const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
   manager.createSession({
     id: "session-1",
     agentId: "test-agent",
@@ -1008,7 +1014,7 @@ function managerWithSession(): InMemorySessionManager {
   return manager
 }
 
-function seedTurn(manager: InMemorySessionManager): void {
+function seedTurn(manager: SQLiteSessionManager): void {
   const messages: readonly TAgentMessage[] = [
     {
       id: "old-user",
@@ -1033,7 +1039,7 @@ function seedTurn(manager: InMemorySessionManager): void {
 }
 
 function seedLargeTurns(
-  manager: InMemorySessionManager,
+  manager: SQLiteSessionManager,
   turns: number,
 ): void {
   for (let index = 0; index < turns; index += 1) {

@@ -3,8 +3,8 @@ import {
     ToolPolicy,
     isToolAllowed,
     type TAgentEvent,
-    type TAgentMessage,
     type IAgentModelRequest,
+    type IAgentContextProjection,
     type IAgentRunConfiguration,
     type IAgentRunHandle,
     type IAgentState,
@@ -20,18 +20,22 @@ import { MAIN_BRANCH_ID } from "@/sessions/branches"
 import type { ICompactionCheckpoint } from "@/sessions/compaction/checkpoint"
 import {
     estimateContextUsage,
+    estimateCompactionProgressInputTokens,
     type IContextUsage,
     type IContextEstimationPolicy,
 } from "@/sessions/compaction/context-budget"
 import {
     createContextAwareModel,
 } from "@/sessions/compaction/context-aware-model"
-import { projectAgentContext } from "@/sessions/compaction/context-projector"
+import {
+    projectCompactionCandidate,
+} from "@/sessions/compaction/context-projector"
 import {
     compactSessionMessages,
     type ICompactionProgress,
 } from "@/sessions/compaction/session-compactor"
-import { createInterruptedToolResults } from "@/sessions/recovery"
+import { AgentWorkingContext } from "@/sessions/agent-working-context"
+import type { IHistoryCursor, IHistoryPage } from "@/sessions/history-contracts"
 import type { ISessionManager } from "@/sessions/repository"
 import {
     freezeSessionSnapshot,
@@ -39,6 +43,12 @@ import {
     type ISessionSnapshot,
 } from "@/sessions/snapshot"
 const DEFAULT_DISPOSE_TIMEOUT_MS = 5_000
+
+function restoredErrorOptions(context: IAgentContextProjection): { initialAssistantError?: NonNullable<IAgentState["assistantError"]> } {
+    const last = context.messages.at(-1)
+    if (last?.role !== "assistant" || !last.errorMessage) return {}
+    return { initialAssistantError: { id: last.id, runId: last.runId, errorMessage: last.errorMessage } }
+}
 
 export interface IAgentSessionRunConfiguration extends IAgentRunConfiguration {
     readonly estimationPolicy?: IContextEstimationPolicy
@@ -78,6 +88,9 @@ export class AgentSession {
     readonly id: string
     private readonly agent: Agent
     private readonly manager: ISessionManager
+    private activeBranchId: string
+    private readonly workingContext: AgentWorkingContext
+    private readonly historyListeners = new Set<TSessionListener>()
     private readonly listeners = new Set<TSessionListener>()
     private readonly unsubscribeAgent: () => void
     private readonly disposeTimeoutMs: number
@@ -101,10 +114,6 @@ export class AgentSession {
     }
     private pendingToolCallIdsSource: ReadonlySet<string> | undefined
     private pendingToolCallIdsSnapshot: readonly string[] = []
-    private presentationRevision: number | undefined
-    private presentationSource: Pick<
-        ISessionSnapshot, "fileChangeProposals" | "compactionCheckpoint"
-    > | undefined
     private queuedMessagesRevision: number | undefined
     private queuedMessagesSource: Pick<
         ISessionSnapshot, "pendingSteeringMessages" | "pendingFollowUpMessages"
@@ -117,7 +126,7 @@ export class AgentSession {
     private contextUsageRefreshPending = false
     private disposed = false
     private disposeTask: Promise<void> | undefined
-    private persistenceError: unknown
+    private persistenceError: { readonly cause: unknown } | undefined
     private acceptCriticalEvents = true
     private compactionController: AbortController | undefined
     private compactionProgress: ICompactionProgress | undefined
@@ -127,6 +136,7 @@ export class AgentSession {
         this.agentId = options.agentId
         this.id = options.sessionId
         this.manager = options.manager
+        this.activeBranchId = this.manager.getActiveBranchId(this.id)
         this.resolveRunConfiguration = options.resolveRunConfiguration
         this.systemPrompt = options.systemPrompt
         this.availableTools = [...options.tools]
@@ -137,8 +147,9 @@ export class AgentSession {
         if (!Number.isFinite(this.disposeTimeoutMs) || this.disposeTimeoutMs <= 0) {
             throw new Error("disposeTimeoutMs must be a positive finite number")
         }
-        const initialMessages = this.loadDurableHistory()
-        this.initializeContextUsage(initialMessages)
+        this.manager.recoverInterruptedTools(this.id)
+        this.workingContext = new AgentWorkingContext(this.manager.loadRequiredContext(this.id))
+        this.initializeContextUsage()
         this.agent = new Agent({
             // agent for sessionId
             sessionId: options.sessionId,
@@ -147,6 +158,7 @@ export class AgentSession {
             resolveRunConfiguration: () =>
                 this.resolveConversationRunConfiguration(),
             tools: this.tools,
+            ...restoredErrorOptions(this.workingContext.getContext()),
             ...(options.toolOutputStore === undefined
                 ? {}
                 : { toolOutputStore: options.toolOutputStore }),
@@ -156,9 +168,14 @@ export class AgentSession {
                 }
                 if (event.type === "message_end") {
                     try {
-                        this.manager.appendMessage(event.message)
+                        const result = this.manager.appendMessage(event.message)
+                        if (result.kind === "inserted") {
+                            this.workingContext.acceptCommittedMessage(event.message)
+                        } else {
+                            this.workingContext.replaceContext(this.manager.loadRequiredContext(this.id))
+                        }
                     } catch (error) {
-                        this.persistenceError = error
+                        this.persistenceError = { cause: error }
                         throw error
                     }
                 }
@@ -166,20 +183,9 @@ export class AgentSession {
             onObserverError: (error) => {
                 console.error("Agent observer failed", error)
             },
-            // ?? what initial messages are?
-            // To trwała historia tej samej sesji odczytana z managera podczas
-            // tworzenia Agenta. Zawiera wcześniejsze wiadomości `user`, zakończone
-            // wiadomości `assistant` oraz `toolResult`, ale nie `systemPrompt`,
-            // bieżący prompt ani aktualnie streamowaną odpowiedź. Agent klonuje tę
-            // historię do swojego stanu i używa jej jako kontekstu kolejnych requestów.
-            initialMessages,
-            // Projekcja jest liczona dopiero przy nowym promptcie. Agent zachowuje
-            // pełny stan dla UI/persistence, a model dostaje checkpoint i tylko
-            // wiadomości, których jeszcze nie miał szansy przetworzyć.
-            projectContext: (messages) => projectAgentContext(
-                messages,
-                this.manager.getCompactionCheckpoint(this.id),
-            ),
+            getContext: this.workingContext.getContext,
+            getSelectedPathReferences: () => this.manager.loadSelectedPaths(this.id),
+            getRecentConversation: () => this.manager.loadRecentConversation(this.id),
             ...(options.now === undefined ? {} : { now: options.now }),
             ...(options.generateId === undefined
                 ? {}
@@ -197,6 +203,17 @@ export class AgentSession {
 
     readonly getSnapshot = (): ISessionSnapshot => this.snapshot
 
+    readonly loadHistoryPage = (branchId: string, cursor?: IHistoryCursor): IHistoryPage => {
+        if (this.disposed) throw new Error("AgentSession is disposed")
+        return this.manager.loadHistoryPage(this.id, branchId, cursor)
+    }
+
+    readonly subscribeHistory = (listener: TSessionListener): (() => void) => {
+        if (this.disposed) return () => {}
+        this.historyListeners.add(listener)
+        return () => this.historyListeners.delete(listener)
+    }
+
     readonly subscribe = (listener: TSessionListener): (() => void) => {
         if (this.disposed) return () => {}
         this.listeners.add(listener)
@@ -212,7 +229,7 @@ export class AgentSession {
 
     returnToParentBranch(): void {
         this.assertCanSwitchBranch()
-        if (this.manager.getActiveBranchId(this.id) === MAIN_BRANCH_ID) {
+        if (this.activeBranchId === MAIN_BRANCH_ID) {
             throw new Error("Cannot return from the main branch")
         }
         this.switchBranch(() => this.manager.returnToParentBranch(this.id))
@@ -228,10 +245,7 @@ export class AgentSession {
             systemPrompt: configuration.systemPrompt,
             tools,
         }
-        const nextContextUsage = this.estimateProjectedContext(
-            this.manager.getMessages(this.id),
-            nextConfiguration,
-        )
+        const nextContextUsage = this.estimateProjectedContext(nextConfiguration)
         const activeMcpServerIds = [...(configuration.activeMcpServerIds ?? [])]
         const nextSnapshot = this.createSnapshot(nextContextUsage, tools, activeMcpServerIds)
 
@@ -252,7 +266,7 @@ export class AgentSession {
             throw new Error("Tool execution belongs to another session")
         }
         this.assertBranchContextAvailable()
-        const policy = this.manager.getActiveBranchId(this.id) === MAIN_BRANCH_ID
+        const policy = this.activeBranchId === MAIN_BRANCH_ID
             ? ToolPolicy.Full
             : ToolPolicy.ReadOnly
         if (!isToolAllowed(tool, policy)) {
@@ -288,7 +302,7 @@ export class AgentSession {
     private resolveActiveTools(
         availableTools: readonly IRuntimeAgentTool[] = this.availableTools,
     ): readonly IRuntimeAgentTool[] {
-        const policy = this.manager.getActiveBranchId(this.id) === MAIN_BRANCH_ID
+        const policy = this.activeBranchId === MAIN_BRANCH_ID
             ? ToolPolicy.Full
             : ToolPolicy.ReadOnly
         return availableTools.filter((tool) => isToolAllowed(tool, policy))
@@ -306,7 +320,7 @@ export class AgentSession {
         this.assertBranchContextAvailable()
         if (this.persistenceError !== undefined) {
             throw new Error("Session persistence failed. Reopen the session before switching branches.", {
-                cause: this.persistenceError,
+                cause: this.persistenceError.cause,
             })
         }
         if (this.agent.state.isRunning || this.agent.state.pendingToolCallIds.size > 0) {
@@ -323,11 +337,14 @@ export class AgentSession {
         this.branchSwitchInProgress = true
         try {
             navigate()
-            const messages = this.loadDurableHistory()
+            this.activeBranchId = this.manager.getActiveBranchId(this.id)
+            this.manager.recoverInterruptedTools(this.id)
+            const context = this.manager.loadRequiredContext(this.id)
             const tools = this.resolveActiveTools()
-            this.agent.replaceContext(messages, tools)
+            this.workingContext.replaceContext(context)
+            this.agent.replaceContext(tools, restoredErrorOptions(context).initialAssistantError)
             this.tools = tools
-            this.updateContextUsageFromDurableHistory()
+            this.updateContextUsageFromWorkingContext()
             this.publishSnapshot()
         } catch (cause) {
             this.branchSwitchError = new Error(
@@ -359,7 +376,7 @@ export class AgentSession {
             this.currentModelProfile = undefined
             this.currentEstimationPolicy = undefined
         }
-        this.updateContextUsageFromDurableHistory()
+        this.updateContextUsageFromWorkingContext()
     }
 
     prompt(input: TUserInput): IAgentRunHandle {
@@ -371,7 +388,7 @@ export class AgentSession {
         if (this.persistenceError !== undefined) {
             throw new Error(
                 "Session persistence failed. Reopen the session before submitting another prompt.",
-                { cause: this.persistenceError },
+                { cause: this.persistenceError.cause },
             )
         }
         return this.agent.prompt(input)
@@ -386,7 +403,7 @@ export class AgentSession {
         if (this.persistenceError !== undefined) {
             throw new Error(
                 "Session persistence failed. Reopen the session before submitting another prompt.",
-                { cause: this.persistenceError },
+                { cause: this.persistenceError.cause },
             )
         }
         this.agent.steer(input)
@@ -402,7 +419,7 @@ export class AgentSession {
         if (this.persistenceError !== undefined) {
             throw new Error(
                 "Session persistence failed. Reopen the session before submitting another prompt.",
-                { cause: this.persistenceError },
+                { cause: this.persistenceError.cause },
             )
         }
         this.agent.followUp(input)
@@ -446,7 +463,7 @@ export class AgentSession {
         if (this.persistenceError !== undefined) {
             throw new Error(
                 "Session persistence failed. Reopen the session before compacting it.",
-                { cause: this.persistenceError },
+                { cause: this.persistenceError.cause },
             )
         }
         if (this.agent.state.isRunning) {
@@ -483,6 +500,7 @@ export class AgentSession {
             this.acceptCriticalEvents = false
             this.unsubscribeAgent()
             this.listeners.clear()
+            this.historyListeners.clear()
         }
     }
 
@@ -540,29 +558,12 @@ export class AgentSession {
         ))
         if (!checkpoint) return undefined
 
-        return this.reprojectRequest(originalRequest, checkpoint)
+        return this.reprojectRequest(originalRequest)
     }
 
-    private reprojectRequest(
-        originalRequest: IAgentModelRequest,
-        checkpoint = this.manager.getCompactionCheckpoint(this.id),
-    ): IAgentModelRequest {
-        const projection = projectAgentContext(
-            this.manager.getMessages(this.id),
-            checkpoint,
-        )
-        const request = {
-            ...originalRequest,
-            messages: projection.messages,
-        }
-        if (projection.contextSummary === undefined) {
-            delete request.contextSummary
-            return request
-        }
-        return {
-            ...request,
-            contextSummary: projection.contextSummary,
-        }
+    private reprojectRequest(originalRequest: IAgentModelRequest): IAgentModelRequest {
+        const projection = this.workingContext.getContext()
+        return requestWithContext(originalRequest, projection)
     }
 
     private startCompaction(
@@ -576,7 +577,7 @@ export class AgentSession {
         if (this.persistenceError !== undefined) {
             throw new Error(
                 "Session persistence failed. Reopen the session before compacting it.",
-                { cause: this.persistenceError },
+                { cause: this.persistenceError.cause },
             )
         }
         if (this.compactionTask) return this.compactionTask
@@ -621,19 +622,15 @@ export class AgentSession {
         originalRequest?: IAgentModelRequest,
         activeRunConfiguration?: IAgentSessionRunConfiguration,
     ): Promise<ICompactionCheckpoint | undefined> {
-        const previousCheckpoint = this.manager.getCompactionCheckpoint(this.id)
         const runConfiguration = activeRunConfiguration
             ?? this.captureRunConfiguration()
         if (!this.agent.state.isRunning) {
             this.setCurrentContextConfiguration(runConfiguration)
         }
-        const messages = this.manager.getMessages(this.id)
+        const context = this.workingContext.getContext()
         const checkpoint = await compactSessionMessages({
             sessionId: this.id,
-            messages,
-            ...(previousCheckpoint === undefined
-                ? {}
-                : { previousCheckpoint }),
+            context,
             runConfiguration,
             ...(originalRequest === undefined
                 ? {}
@@ -654,34 +651,22 @@ export class AgentSession {
         })
         if (!checkpoint) return undefined
 
-        const beforeTokens = originalRequest === undefined
+        const candidate = projectCompactionCandidate(context, checkpoint)
+        const estimate = (projection: IAgentContextProjection) => originalRequest === undefined
             ? estimatedProjectionInputTokens(
                 this.systemPrompt,
                 this.tools,
-                messages,
-                previousCheckpoint,
+                projection,
                 runConfiguration.modelProfile,
                 runConfiguration.estimationPolicy,
             )
             : estimatedRequestInputTokens(
-                this.reprojectRequest(originalRequest, previousCheckpoint),
+                requestWithContext(originalRequest, projection),
                 runConfiguration.modelProfile,
                 runConfiguration.estimationPolicy,
             )
-        const afterTokens = originalRequest === undefined
-            ? estimatedProjectionInputTokens(
-                this.systemPrompt,
-                this.tools,
-                messages,
-                checkpoint,
-                runConfiguration.modelProfile,
-                runConfiguration.estimationPolicy,
-            )
-            : estimatedRequestInputTokens(
-                this.reprojectRequest(originalRequest, checkpoint),
-                runConfiguration.modelProfile,
-                runConfiguration.estimationPolicy,
-            )
+        const beforeTokens = estimate(context)
+        const afterTokens = estimate(candidate)
         if (afterTokens >= beforeTokens) {
             return undefined
         }
@@ -689,17 +674,17 @@ export class AgentSession {
         controller.signal.throwIfAborted()
         try {
             this.manager.saveCompactionCheckpoint(checkpoint)
+            this.workingContext.replaceContext(this.manager.loadRequiredContext(this.id))
         } catch (error) {
-            this.persistenceError = error
+            this.persistenceError = { cause: error }
             throw error
         }
-        this.updateContextUsageFromDurableHistory()
+        this.updateContextUsageFromWorkingContext()
+        this.notifyHistoryListeners()
         return checkpoint
     }
 
-    private initializeContextUsage(
-        messages: readonly TAgentMessage[],
-    ): void {
+    private initializeContextUsage(): void {
         try {
             this.setCurrentContextConfiguration(this.captureRunConfiguration())
         } catch {
@@ -707,26 +692,20 @@ export class AgentSession {
             this.currentModelProfile = undefined
             this.currentEstimationPolicy = undefined
         }
-        this.contextUsage = this.estimateProjectedContext(messages)
+        this.contextUsage = this.estimateProjectedContext()
     }
 
-    private updateContextUsageFromDurableHistory(): void {
-        this.contextUsage = this.estimateProjectedContext(
-            this.manager.getMessages(this.id),
-        )
+    private updateContextUsageFromWorkingContext(): void {
+        this.contextUsage = this.estimateProjectedContext()
     }
 
     private estimateProjectedContext(
-        messages: readonly TAgentMessage[],
         configuration: ISessionConfiguration = {
             systemPrompt: this.systemPrompt,
             tools: this.tools,
         },
     ): IContextUsage {
-        const projection = projectAgentContext(
-            messages,
-            this.manager.getCompactionCheckpoint(this.id),
-        )
+        const projection = this.workingContext.getContext()
         return estimateContextUsage({
             systemPrompt: configuration.systemPrompt,
             ...(projection.contextSummary === undefined
@@ -755,31 +734,29 @@ export class AgentSession {
     }
 
     private handleAgentEvent(event: TAgentEvent): void {
-        if (event.type === "agent_settled" && event.reason === "internal-error") {
-            try {
-                this.agent.restoreMessages(this.loadDurableHistory())
-                this.persistenceError = undefined
-            } catch (error) {
-                this.persistenceError = error
-            }
-        }
         if (event.type === "message_end") {
-            this.updateContextUsageFromDurableHistory()
+            this.notifyHistoryListeners()
         }
-        if (event.type === "agent_settled" && this.contextUsageRefreshPending) {
-            this.contextUsageRefreshPending = false
-            this.refreshContextUsageFromRunConfiguration()
+        if (event.type === "agent_settled") {
+            if (event.reason === "internal-error") {
+                // Presentation can retry a read; it never clears the acceptance barrier.
+                this.notifyHistoryListeners()
+            }
+            if (this.contextUsageRefreshPending) {
+                this.contextUsageRefreshPending = false
+                this.refreshContextUsageFromRunConfiguration()
+            } else {
+                this.updateContextUsageFromWorkingContext()
+            }
         }
         this.publishSnapshot()
     }
 
-    private loadDurableHistory(): readonly TAgentMessage[] {
-        const messages = this.manager.getMessages(this.id)
-        const recoveries = createInterruptedToolResults(messages)
-        for (const recovery of recoveries) {
-            this.manager.appendMessage(recovery)
+    private notifyHistoryListeners(): void {
+        if (this.disposed) return
+        for (const listener of [...this.historyListeners]) {
+            try { listener() } catch (error) { console.error("History observer failed", error) }
         }
-        return this.manager.getMessages(this.id)
     }
 
     private publishSnapshot(): void {
@@ -805,24 +782,6 @@ export class AgentSession {
     ): ISessionSnapshot {
         const state = this.agent.state
 
-        // Defensive manager getters return new objects, even for empty proposals.
-        // Feeding those straight to the identity-based freezer invalidated React's
-        // entire durable-history memo on each streamed delta. Cache private source
-        // copies by authoritative revision instead. Refresh both related branches
-        // on any metadata save; store the token only after every read succeeds.
-        // This also observes external manager writes on the next publication, not
-        // just writes performed by this AgentSession or changes to proposal IDs.
-        const presentationRevision = this.manager.getPresentationRevision(this.id)
-        if (this.presentationSource === undefined || presentationRevision !== this.presentationRevision) {
-            const fileChangeProposals = this.manager.getFileChangeProposals(this.id)
-            const compactionCheckpoint = this.manager.getCompactionCheckpoint(this.id)
-            this.presentationSource = {
-                fileChangeProposals,
-                ...(compactionCheckpoint === undefined ? {} : { compactionCheckpoint }),
-            }
-            this.presentationRevision = presentationRevision
-        }
-
         // Queue consumption/restoration happens inside the Agent loop, not only in
         // steer()/followUp(). Its mutation token covers all those paths while the
         // freezer keeps older published snapshots detached and deeply immutable.
@@ -836,12 +795,11 @@ export class AgentSession {
         }
 
         return freezeSessionSnapshot({
-            activeBranchId: this.manager.getActiveBranchId(this.id),
+            activeBranchId: this.activeBranchId,
             ...(activeMcpServerIds.length === 0 ? {} : {
                 activeMcpServers: this.snapshotMcpServers(tools, activeMcpServerIds),
             }),
-            messages: state.messages,
-            ...this.presentationSource,
+            ...(state.assistantError === undefined ? {} : { assistantError: state.assistantError }),
             ...this.queuedMessagesSource,
             ...(state.streamingMessage
                 ? { streamingMessage: state.streamingMessage }
@@ -896,7 +854,7 @@ function estimatedRequestInputTokens(
     modelProfile?: IModelProfile,
     estimationPolicy?: IContextEstimationPolicy,
 ): number {
-    return estimateContextUsage({
+    return estimateCompactionProgressInputTokens({
         systemPrompt: request.systemPrompt,
         ...(request.contextSummary === undefined
             ? {}
@@ -905,19 +863,30 @@ function estimatedRequestInputTokens(
         tools: request.tools,
         ...(modelProfile === undefined ? {} : { modelProfile }),
         ...(estimationPolicy === undefined ? {} : { estimationPolicy }),
-    }).estimatedInputTokens
+    })
+}
+
+function requestWithContext(
+    originalRequest: IAgentModelRequest,
+    projection: IAgentContextProjection,
+): IAgentModelRequest {
+    const request = { ...originalRequest, messages: projection.messages }
+    if (projection.contextSummary === undefined) {
+        delete request.contextSummary
+    } else {
+        request.contextSummary = projection.contextSummary
+    }
+    return request
 }
 
 function estimatedProjectionInputTokens(
     systemPrompt: string,
     tools: readonly IRuntimeAgentTool[],
-    messages: readonly TAgentMessage[],
-    checkpoint: ICompactionCheckpoint | undefined,
+    projection: IAgentContextProjection,
     modelProfile?: IModelProfile,
     estimationPolicy?: IContextEstimationPolicy,
 ): number {
-    const projection = projectAgentContext(messages, checkpoint)
-    return estimateContextUsage({
+    return estimateCompactionProgressInputTokens({
         systemPrompt,
         ...(projection.contextSummary === undefined
             ? {}
@@ -926,7 +895,7 @@ function estimatedProjectionInputTokens(
         tools,
         ...(modelProfile === undefined ? {} : { modelProfile }),
         ...(estimationPolicy === undefined ? {} : { estimationPolicy }),
-    }).estimatedInputTokens
+    })
 }
 
 function userMessageInput(message: {

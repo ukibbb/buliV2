@@ -75,14 +75,14 @@ export function AuthenticationFlow(
                 flexDirection="column"
                 border
                 borderStyle="single"
-                borderColor={theme.textMuted}
+                borderColor={theme.textSecondary}
                 padding={1}
                 gap={1}
             >
                 <text fg={theme.green} selectable={false}>
                     Buli Authentication
                 </text>
-                <text fg={theme.textMuted} selectable={false}>
+                <text fg={theme.textSecondary} selectable={false}>
                     {controller.mode === "login" ? "Sign in" : "Sign out"}
                 </text>
                 <scrollbox
@@ -112,7 +112,7 @@ function renderActiveState(
 ): ReactNode {
     switch (state.type) {
         case "loading":
-            return <text fg={theme.textMuted} selectable={false}>
+            return <text fg={theme.textSecondary} selectable={false}>
                 Loading providers...
             </text>
         case "providers":

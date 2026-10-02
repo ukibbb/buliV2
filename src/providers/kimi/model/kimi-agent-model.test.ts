@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { Type } from "typebox"
-import { defineAgentTool, runAgentLoop, isModelContextOverflowError, type IAgentModelRequest, type TAgentMessage, type TAgentModelEvent, type IUserMessage } from "@/agent"
+import { defineAgentTool, isModelContextOverflowError, type IAgentModelRequest, type TAgentMessage, type TAgentModelEvent, type IUserMessage } from "@/agent"
+import { runAgentLoopWithContext as runAgentLoop } from "../../../../test/fixtures/agent-loop"
 import { createKimiFetch } from "../transport/kimi-fetch"
 import { KimiAgentModel, type TKimiModelId } from "./kimi-agent-model"
 
@@ -51,14 +52,19 @@ for (const reasoning of ["actual reasoning", ""]) {
             if (input.path === "fail") throw new Error("synthetic tool failure")
             return "synthetic result"
         } })
+        const messages: TAgentMessage[] = []
         const result = await runAgentLoop(user, { systemPrompt: "System", messages: [], tools: [inspect] }, {
             sessionId: "s", runId: "r", model, modelProfile: profile, reasoningEffort: "high",
-            signal: new AbortController().signal, emit: () => {},
+            signal: new AbortController().signal,
+            emit: (event) => {
+                if (event.type === "message_end") messages.push(structuredClone(event.message))
+            },
         })
         if (!reasoning) {
             expect(executed).toEqual([])
             expect(bodies).toHaveLength(1)
-            expect(result.messages.at(-1)).toMatchObject({ stopReason: "error", errorMessage: expect.stringContaining("without nonempty reasoning") })
+            expect(result).toEqual({ reason: "error" })
+            expect(messages.at(-1)).toMatchObject({ stopReason: "error", errorMessage: expect.stringContaining("without nonempty reasoning") })
             return
         }
         expect(executed).toEqual(["ok", "fail"])
@@ -70,7 +76,7 @@ for (const reasoning of ["actual reasoning", ""]) {
             { role: "tool", tool_call_id: "call-1", content: "synthetic result" },
             { role: "tool", tool_call_id: "call-2", content: expect.stringContaining("synthetic tool failure") },
         ] })
-        expect(result.messages.find((message) => message.role === "assistant")).toMatchObject({
+        expect(messages.find((message) => message.role === "assistant")).toMatchObject({
             model: profile, content: expect.arrayContaining([{ type: "reasoning", text: reasoning }]),
         })
     })
@@ -152,7 +158,7 @@ test("abort during streaming cancels upstream and emits no tool calls", async ()
     expect(cancelled).toBe(true)
 })
 
-for (const kind of ["missing-reasoning", "missing-result", "orphan-result"] as const) {
+for (const kind of ["missing-reasoning", "missing-result", "orphan-result", "wrong-owner", "wrong-run", "wrong-session", "wrong-tool"] as const) {
     test(`rejects unsafe tool history: ${kind}`, async () => {
         const f = fixture(() => response([]))
         const assistant: TAgentMessage = {
@@ -162,10 +168,17 @@ for (const kind of ["missing-reasoning", "missing-result", "orphan-result"] as c
                 { type: "toolCall", toolCallId: "call", toolName: "inspect", input: {} },
             ],
         }
-        const result: TAgentMessage = { id: "t", sessionId: "s", runId: "old", createdAt: 0, role: "toolResult", toolCallId: "call", toolName: "inspect", content: "result", isError: false }
+        const result: TAgentMessage = {
+            id: "t", createdAt: 0, role: "toolResult", toolCallId: "call", content: "result", isError: false,
+            assistantMessageId: kind === "wrong-owner" ? "other-assistant" : assistant.id,
+            sessionId: kind === "wrong-session" ? "other-session" : assistant.sessionId,
+            runId: kind === "wrong-run" ? "other-run" : assistant.runId,
+            toolName: kind === "wrong-tool" ? "other-tool" : "inspect",
+        }
         const messages = kind === "orphan-result" ? [result] : kind === "missing-result" ? [assistant] : [assistant, result]
         await expect(collect(f.model, request({ messages }))).rejects.toThrow()
         expect(f.keyReads()).toBe(0)
+        expect(f.bodies).toHaveLength(0)
     })
 }
 

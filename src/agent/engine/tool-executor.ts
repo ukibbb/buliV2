@@ -28,6 +28,7 @@ const SIDE_EFFECTS_UNKNOWN_SUMMARY =
     "WARNING: Tool side effects are unknown; inspect current state before retrying."
 
 interface IExecuteToolCallsOptions {
+    readonly assistantMessageId: string
     readonly sessionId: string
     readonly runId: string
     readonly modelProfile?: IModelProfile
@@ -107,6 +108,7 @@ export async function failToolCallsWithoutExecution(
             sessionId: options.sessionId,
             runId: options.runId,
             role: "toolResult",
+            assistantMessageId: options.assistantMessageId,
             toolCallId: toolCall.toolCallId,
             toolName: toolCall.toolName,
             content: truncateToolOutput(content),
@@ -250,6 +252,7 @@ async function executeToolCall(
         sessionId: options.sessionId,
         runId: options.runId,
         role: "toolResult",
+        assistantMessageId: options.assistantMessageId,
         toolCallId: toolCall.toolCallId,
         toolName: toolCall.toolName,
         content,

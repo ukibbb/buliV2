@@ -7,9 +7,9 @@ import { collectSessionErrors } from "./SessionErrors"
 
 const state = { isRunning: false, isCompacting: false, lastRunReason: "aborted" as const, errorMessage: "Aborted", transcriptError: "Aborted" }
 
-test("one transcript error suppresses matching notices and the generic interruption", () => {
-    expect(collectSessionErrors(state, "Aborted", "Aborted")).toEqual([])
-    expect(collectSessionErrors(state, "Different command error")).toEqual(["Different command error"])
+test("current transcript error is shown once and suppresses generic interruption", () => {
+    expect(collectSessionErrors(state, "Aborted", "Aborted")).toEqual(["Aborted"])
+    expect(collectSessionErrors(state, "Different command error")).toEqual(["Aborted", "Different command error"])
     expect(collectSessionErrors({ ...state, transcriptError: undefined }, "Aborted")).toEqual(["Aborted"])
 })
 

@@ -17,16 +17,36 @@ export interface ICompactionCheckpoint {
     readonly usage?: IModelUsage
 }
 
+type TCheckpointAnchor = Pick<ICompactionCheckpoint,
+    "sessionId" | "compactedMessageCount" | "throughMessageId">
+
+type TCheckpointMessage = { readonly id: string } & (
+    | { readonly role: "user" }
+    | { readonly role: "assistant"; readonly stopReason: string }
+    | { readonly role: "toolResult"; readonly assistantMessageId: string; readonly toolCallId: string }
+)
+
 /** Verifies that a checkpoint ends on a complete anchored message sequence. */
 export function assertCheckpointAnchor(
     checkpoint: ICompactionCheckpoint,
     messages: readonly TAgentMessage[],
 ): void {
+    assertCheckpointReferences(checkpoint, messages, (message) => message.role === "assistant"
+        ? message.content.flatMap((content) => content.type === "toolCall" ? [content.toolCallId] : [])
+        : [])
+}
+
+/** Shared anchor rules for validated payloads and metadata; tool names/runs are not matched here. */
+export function assertCheckpointReferences<TMessage extends TCheckpointMessage>(
+    checkpoint: TCheckpointAnchor,
+    messages: readonly TMessage[],
+    toolCallIds: (message: TMessage) => readonly string[],
+): void {
     const anchor = messages[checkpoint.compactedMessageCount - 1]
     if (
         anchor?.id !== checkpoint.throughMessageId
         || !hasCompleteToolSequence(
-            messages.slice(0, checkpoint.compactedMessageCount),
+            messages.slice(0, checkpoint.compactedMessageCount), toolCallIds,
         )
     ) {
         throw new Error(
@@ -35,17 +55,21 @@ export function assertCheckpointAnchor(
     }
 }
 
-function hasCompleteToolSequence(messages: readonly TAgentMessage[]): boolean {
-    let pendingToolCallIds: Set<string> | undefined
+function hasCompleteToolSequence<TMessage extends TCheckpointMessage>(
+    messages: readonly TMessage[],
+    toolCallIds: (message: TMessage) => readonly string[],
+): boolean {
+    let pending: { readonly assistantMessageId: string; readonly toolCallIds: Set<string> } | undefined
     for (const message of messages) {
-        if (pendingToolCallIds) {
+        if (pending) {
             if (
                 message.role !== "toolResult"
-                || !pendingToolCallIds.delete(message.toolCallId)
+                || message.assistantMessageId !== pending.assistantMessageId
+                || !pending.toolCallIds.delete(message.toolCallId)
             ) {
                 return false
             }
-            if (pendingToolCallIds.size === 0) pendingToolCallIds = undefined
+            if (pending.toolCallIds.size === 0) pending = undefined
             continue
         }
         if (message.role === "toolResult") return false
@@ -57,10 +81,8 @@ function hasCompleteToolSequence(messages: readonly TAgentMessage[]): boolean {
             continue
         }
 
-        const toolCallIds = message.content.flatMap((content) =>
-            content.type === "toolCall" ? [content.toolCallId] : []
-        )
-        if (toolCallIds.length > 0) pendingToolCallIds = new Set(toolCallIds)
+        const ids = toolCallIds(message)
+        if (ids.length > 0) pending = { assistantMessageId: message.id, toolCallIds: new Set(ids) }
     }
-    return pendingToolCallIds === undefined
+    return pending === undefined
 }

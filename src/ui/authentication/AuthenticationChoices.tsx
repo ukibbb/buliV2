@@ -1,3 +1,4 @@
+import { Keycap } from "@/ui/components/Keycap"
 import type { SelectOption } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/react"
 import type { ReactNode } from "react"
@@ -28,7 +29,7 @@ const SELECT_STYLE = {
     focusedTextColor: theme.text,
     selectedBackgroundColor: theme.green,
     selectedTextColor: theme.text,
-    descriptionColor: theme.textMuted,
+    descriptionColor: theme.textSecondary,
     selectedDescriptionColor: theme.text,
 } as const
 
@@ -75,14 +76,14 @@ export function AuthenticationChoices(
                         }}
                     />
                 ) : (
-                    <text fg={theme.textMuted} selectable={false}>
+                    <text fg={theme.textSecondary} selectable={false}>
                         No authentication providers are available.
                     </text>
                 )}
-                <text fg={theme.textMuted} selectable={false}>
+                <text fg={theme.textSecondary} selectable={false}>
                     {state.providers.length > 0
-                        ? "enter select  esc close"
-                        : "enter or esc close"}
+                        ? <><Keycap keys="Enter" />{" select  "}<Keycap keys="Esc" />{" close"}</>
+                        : <><Keycap keys="Enter" />{" or "}<Keycap keys="Esc" />{" close"}</>}
                 </text>
             </box>
         )
@@ -109,12 +110,12 @@ export function AuthenticationChoices(
                         }}
                     />
                 ) : (
-                    <text fg={theme.textMuted} selectable={false}>
+                    <text fg={theme.textSecondary} selectable={false}>
                         No login methods are available for this provider.
                     </text>
                 )}
-                <text fg={theme.textMuted} selectable={false}>
-                    enter select  esc back
+                <text fg={theme.textSecondary} selectable={false}>
+                    <Keycap keys="Enter" />{" select  "}<Keycap keys="Esc" />{" back"}
                 </text>
             </box>
         )
@@ -124,7 +125,7 @@ export function AuthenticationChoices(
         return (
             <box flexDirection="column" gap={1}>
                 <text selectable={false}>{`Disconnect ${state.provider.name}?`}</text>
-                <text fg={theme.textMuted} selectable={false}>
+                <text fg={theme.textSecondary} selectable={false}>
                     {`Account: ${state.provider.accountId ?? "unavailable"}`}
                 </text>
                 <select
@@ -136,8 +137,8 @@ export function AuthenticationChoices(
                         else controller.back()
                     }}
                 />
-                <text fg={theme.textMuted} selectable={false}>
-                    enter select  esc back
+                <text fg={theme.textSecondary} selectable={false}>
+                    <Keycap keys="Enter" />{" select  "}<Keycap keys="Esc" />{" back"}
                 </text>
             </box>
         )
@@ -155,8 +156,8 @@ export function AuthenticationChoices(
                     else controller.back()
                 }}
             />
-            <text fg={theme.textMuted} selectable={false}>
-                enter select  esc back
+            <text fg={theme.textSecondary} selectable={false}>
+                <Keycap keys="Enter" />{" select  "}<Keycap keys="Esc" />{" back"}
             </text>
         </box>
     )

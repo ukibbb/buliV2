@@ -19,8 +19,9 @@ export const theme = {
     green: "#10B981",
     pink: "#EC4899",
     surface: "#000000",
-    text: "#E5E7EB",
-    textMuted: "#94A3B8",
+    text: "#FFFFFF",
+    textSecondary: "#A3A3A3",
+    violet: "#A78BFA",
 } as const
 
 export type Theme = typeof theme
@@ -35,10 +36,10 @@ const syntaxTheme = [
     token(["boolean"], theme.amber, { bold: true }),
     token(["character", "string", "string.special"], theme.green),
     token(["character.special", "escape", "string.escape"], theme.amber),
-    token(["comment", "comment.documentation"], theme.textMuted, {
+    token(["comment", "comment.documentation"], theme.textSecondary, {
         italic: true,
     }),
-    token(["conceal"], theme.textMuted, { dim: true }),
+    token(["conceal"], theme.textSecondary, { dim: true }),
     token(["constant", "number", "number.float"], theme.amber),
     token(["constant.builtin"], theme.amber, { bold: true }),
     token(["constructor", "module", "type"], theme.amber),
@@ -69,7 +70,7 @@ const syntaxTheme = [
     token(["operator"], theme.pink),
     token(
         ["punctuation", "punctuation.bracket", "punctuation.delimiter"],
-        theme.textMuted,
+        theme.textSecondary,
     ),
     token(["punctuation.special"], theme.amber),
     token(["string.regexp"], theme.green, { underline: true }),
@@ -85,22 +86,22 @@ const syntaxTheme = [
     token(["markup.heading.3"], theme.green, { bold: true }),
     token(["markup.heading.4"], theme.pink, { bold: true }),
     token(["markup.heading.5"], theme.text, { bold: true }),
-    token(["markup.heading.6"], theme.textMuted, { bold: true }),
+    token(["markup.heading.6"], theme.textSecondary, { bold: true }),
     token(["markup.italic"], theme.text, { italic: true }),
     token(["markup.strong"], theme.text, { bold: true }),
-    token(["markup.strikethrough"], theme.textMuted, { dim: true }),
+    token(["markup.strikethrough"], theme.textSecondary, { dim: true }),
     token(["markup.link", "markup.link.bracket.close"], theme.green, {
         underline: true,
     }),
     token(["markup.link.label"], theme.green, { underline: true }),
-    token(["markup.link.url"], theme.textMuted, {
+    token(["markup.link.url"], theme.textSecondary, {
         dim: true,
         underline: true,
     }),
     token(["markup.list"], theme.green),
     token(["markup.list.checked"], theme.green, { bold: true }),
-    token(["markup.list.unchecked"], theme.textMuted),
-    token(["markup.quote"], theme.textMuted, { italic: true }),
+    token(["markup.list.unchecked"], theme.textSecondary),
+    token(["markup.quote"], theme.textSecondary, { italic: true }),
     token(["markup.raw"], theme.amber, { background: theme.surface }),
     token(["markup.raw.block"], theme.text),
 ] satisfies ThemeTokenStyle[]

@@ -18,11 +18,11 @@ export function Chat(props: { readonly sessionId?: string | undefined }) {
             flexDirection="column"
             backgroundColor={theme.surface}
         >
+            <SessionIndicators sessionId={props.sessionId} />
             <SessionQueue sessionId={props.sessionId} />
             <ChatMenu />
-            <SessionActivity sessionId={props.sessionId} />
-            <SessionIndicators sessionId={props.sessionId} />
             <SessionErrors sessionId={props.sessionId} />
+            <SessionActivity sessionId={props.sessionId} />
             <ChatInput />
             <ChatFeedback sessionId={props.sessionId} />
         </box>

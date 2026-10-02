@@ -1,4 +1,4 @@
-import type { ReactNode } from "react"
+import { memo, type ReactNode } from "react"
 
 import type {
     IToolCallContent,
@@ -14,10 +14,9 @@ const TOOL_TARGET_MAX_CHARACTERS = 96
 // Persisted sessions can still contain calls to the removed handoff tool.
 const LEGACY_PATCH_HANDOFF_TOOL_NAME = "request_patch_handoff"
 
-// Keep the legacy tool palette local; other transcript text uses the app theme.
+const TOOL_BORDER: ("left")[] = ["left"]
+
 const toolCallStyle = {
-    text: "#FFFFFF",
-    textMuted: "#64748B",
     horizontalPadding: 1,
     verticalPadding: 0,
     leftRail: {
@@ -45,7 +44,7 @@ interface IToolCallDisplayProps {
 export function ToolCallDisplay(props: IToolCallDisplayProps): ReactNode {
     if (!props.call && !props.result) return null
     const toolName = props.call?.toolName ?? props.result?.toolName
-    if (!toolName || toolName === LEGACY_PATCH_HANDOFF_TOOL_NAME) return null
+    if (!toolName || !isVisibleTool(toolName)) return null
 
     const presentation: IToolPresentation = props.call
         ? toolPresentation(props.call)
@@ -64,32 +63,49 @@ export function ToolCallDisplay(props: IToolCallDisplayProps): ReactNode {
     )
     const detail = detailParts.length === 0 ? undefined : detailParts.join(" | ")
 
+    return <ToolCallView name={name} target={target} detail={detail}
+        foreground={state.critical ? theme.red : state.live ? theme.amber : theme.textSecondary}
+        accent={state.accent} marker={state.marker} diff={props.result?.diff} />
+}
+
+interface IToolCallViewProps {
+    readonly name: string
+    readonly target: string | undefined
+    readonly detail: string | undefined
+    readonly foreground: string
+    readonly accent: string
+    readonly marker: string | undefined
+    readonly diff: string | undefined
+}
+
+/** Primitive display values remain comparable even when the provider snapshot is cloned. */
+export const ToolCallView = memo(function ToolCallView(props: IToolCallViewProps): ReactNode {
     const line = <text
-        fg={state.critical ? theme.red : state.live ? theme.amber : toolCallStyle.textMuted}
+        fg={props.foreground}
         minWidth={0}
         flexShrink={1}
         wrapMode="word"
         truncate={false}
     >
-        <span fg={toolCallStyle.text}>{name}</span>
-        {target === undefined ? null : <>
-            <span fg={state.accent}> [</span>
-            <span fg={toolCallStyle.textMuted}>{target}</span>
-            <span fg={state.accent}>]</span>
+        <span fg={theme.text}>{props.name}</span>
+        {props.target === undefined ? null : <>
+            <span fg={props.accent}> [</span>
+            <span fg={theme.textSecondary}>{props.target}</span>
+            <span fg={props.accent}>]</span>
         </>}
-        {detail === undefined ? null : <span
-            fg={state.accent}
-        >{` ${detail}`}</span>}
-        {state.marker === undefined
+        {props.detail === undefined ? null : <span
+            fg={props.accent}
+        >{` ${props.detail}`}</span>}
+        {props.marker === undefined
             ? null
-            : <span fg={state.accent}>{` ${state.marker}`}</span>}
+            : <span fg={props.accent}>{` ${props.marker}`}</span>}
     </text>
 
     return <box
         width="100%"
         flexDirection="column"
-        border={["left"]}
-        borderColor={state.accent}
+        border={TOOL_BORDER}
+        borderColor={props.accent}
         customBorderChars={toolCallStyle.leftRail}
     >
         <box
@@ -101,9 +117,14 @@ export function ToolCallDisplay(props: IToolCallDisplayProps): ReactNode {
             paddingY={toolCallStyle.verticalPadding}
         >
             {line}
-            {props.result?.diff ? <FileChangeDiff diff={props.result.diff} /> : null}
+            {props.diff ? <FileChangeDiff diff={props.diff} /> : null}
         </box>
     </box>
+})
+
+/** Hidden legacy calls must not introduce transcript spacing either. */
+export function isVisibleTool(name: string): boolean {
+    return Boolean(name) && name !== LEGACY_PATCH_HANDOFF_TOOL_NAME
 }
 
 interface IToolPresentation {
@@ -256,7 +277,7 @@ function activityState(
         return {
             live: false,
             critical: false,
-            accent: outcome === "manual" ? theme.amber : theme.textMuted,
+            accent: outcome === "manual" ? theme.amber : theme.textSecondary,
             ...(detail === undefined ? {} : { detail }),
         }
     }

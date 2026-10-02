@@ -217,6 +217,7 @@ test("renders direct, streaming, and persisted legacy tool messages", async () =
             sessionId: "default",
             runId: "run-1",
             role: "toolResult",
+            assistantMessageId: "assistant-message",
             createdAt: 3,
             toolCallId: "call-grep",
             toolName: "grep",
@@ -230,6 +231,7 @@ test("renders direct, streaming, and persisted legacy tool messages", async () =
             sessionId: "default",
             runId: "run-1",
             role: "toolResult",
+            assistantMessageId: "assistant-message",
             createdAt: 4,
             toolCallId: "call-read",
             toolName: "read_file",
@@ -241,6 +243,7 @@ test("renders direct, streaming, and persisted legacy tool messages", async () =
             sessionId: "default",
             runId: "run-1",
             role: "toolResult",
+            assistantMessageId: "assistant-message",
             createdAt: 5,
             toolCallId: "call-patch-rejected",
             toolName: "apply_patch",
@@ -254,6 +257,7 @@ test("renders direct, streaming, and persisted legacy tool messages", async () =
             sessionId: "default",
             runId: "run-1",
             role: "toolResult",
+            assistantMessageId: "assistant-message",
             createdAt: 6,
             toolCallId: "call-command-manual",
             toolName: "bash",
@@ -267,6 +271,7 @@ test("renders direct, streaming, and persisted legacy tool messages", async () =
             sessionId: "default",
             runId: "run-1",
             role: "toolResult",
+            assistantMessageId: "assistant-message",
             createdAt: 7,
             toolCallId: "call-patch-committed",
             toolName: "apply_patch",
@@ -280,6 +285,7 @@ test("renders direct, streaming, and persisted legacy tool messages", async () =
             sessionId: "default",
             runId: "run-1",
             role: "toolResult",
+            assistantMessageId: "assistant-message",
             createdAt: 8,
             toolCallId: "call-command-failed",
             toolName: "bash",
@@ -293,6 +299,7 @@ test("renders direct, streaming, and persisted legacy tool messages", async () =
             sessionId: "default",
             runId: "run-1",
             role: "toolResult",
+            assistantMessageId: "assistant-message",
             createdAt: 9,
             toolCallId: "call-command-unknown",
             toolName: "bash",
@@ -512,6 +519,7 @@ test("updates one tool activity line from active to completed", async () => {
                 sessionId: "default",
                 runId: "run-tool",
                 role: "toolResult" as const,
+                assistantMessageId: "assistant-tool",
                 createdAt: 2,
                 toolCallId: "call-read",
                 toolName: "read",
@@ -684,6 +692,7 @@ test("pairs out-of-order results and preserves orphan results", async () => {
             sessionId: "default",
             runId: "run-tools",
             role: "toolResult",
+            assistantMessageId: assistant.id,
             createdAt: 2,
             toolCallId: "call-bash",
             toolName: "bash",
@@ -697,6 +706,7 @@ test("pairs out-of-order results and preserves orphan results", async () => {
             sessionId: "default",
             runId: "run-tools",
             role: "toolResult",
+            assistantMessageId: "absent-assistant",
             createdAt: 3,
             toolCallId: "orphan",
             toolName: "read",
@@ -708,6 +718,7 @@ test("pairs out-of-order results and preserves orphan results", async () => {
             sessionId: "default",
             runId: "run-tools",
             role: "toolResult",
+            assistantMessageId: assistant.id,
             createdAt: 4,
             toolCallId: "call-grep",
             toolName: "grep",
@@ -763,6 +774,7 @@ test("does not pair results to calls from a failed assistant turn", async () => 
             sessionId: "default",
             runId: "run-failed-turn",
             role: "toolResult",
+            assistantMessageId: "failed-tool-turn",
             createdAt: 2,
             toolCallId: "call-read",
             toolName: "read",
@@ -812,6 +824,7 @@ test("scopes an active reused tool call id to its current run", async () => {
             sessionId: "default",
             runId: "run-old",
             role: "toolResult",
+            assistantMessageId: "old-assistant",
             createdAt: 2,
             toolCallId: "shared-call",
             toolName: "read",
@@ -915,11 +928,11 @@ test("renders full reasoning summaries as plain text in content order", async ()
             renderable.plainText === "Thinking: Live released summary"
         )
         expect(completedReasoning).toBeDefined()
-        expect(completedReasoning?.fg.equals(RGBA.fromHex(theme.textMuted))).toBe(true)
+        expect(completedReasoning?.fg.equals(RGBA.fromHex(theme.textSecondary))).toBe(true)
         expect(completedReasoning?.wrapMode).toBe("word")
         expect(completedReasoning?.truncate).toBe(false)
         expect(streamingReasoning).toBeDefined()
-        expect(streamingReasoning?.fg.equals(RGBA.fromHex(theme.textMuted))).toBe(true)
+        expect(streamingReasoning?.fg.equals(RGBA.fromHex(theme.textSecondary))).toBe(true)
         expect(streamingReasoning?.wrapMode).toBe("word")
         expect(streamingReasoning?.truncate).toBe(false)
         expect(markdownRenderables(setup.renderer.root)).toHaveLength(2)
@@ -928,17 +941,17 @@ test("renders full reasoning summaries as plain text in content order", async ()
         expect(frame).toContain("**literal Markdown syntax**")
         expect(frame.indexOf("Before summary")).toBeLessThan(frame.indexOf("Thought:"))
         expect(frame.indexOf("Thought:")).toBeLessThan(frame.indexOf("After summary"))
-        expect(completedReasoning!.parent!.height).toBe(completedReasoning!.height + 1)
-        expect(streamingReasoning!.parent!.height).toBe(streamingReasoning!.height + 1)
+        expect(completedReasoning!.parent!.height).toBe(completedReasoning!.height)
+        expect(streamingReasoning!.parent!.height).toBe(streamingReasoning!.height)
         const afterSummary = markdownRenderables(setup.renderer.root)[1]!
         expect(afterSummary.y).toBe(completedReasoning!.y + completedReasoning!.height + 1)
         expect(frame.split("\n")[afterSummary.y - 1]!.trim()).toBe("")
         const spans = setup.captureSpans().lines.flatMap((line) => line.spans)
         for (const [text, color] of [
-            ["Thought:", theme.pink],
+            ["Thought:", theme.violet],
             ["Thinking:", theme.amber],
-            ["Live released summary", theme.textMuted],
-            ["**literal Markdown syntax**", theme.textMuted],
+            ["Live released summary", theme.textSecondary],
+            ["**literal Markdown syntax**", theme.textSecondary],
         ]) {
             expect(spans.find((span) => span.text.includes(text!))?.fg.equals(
                 RGBA.fromHex(color!),
@@ -992,7 +1005,7 @@ test("shows work for empty streaming reasoning and hides empty completed reasoni
         expect(spans.find((span) => span.text.includes("Thinking..."))?.fg.equals(
             RGBA.fromHex(theme.amber),
         )).toBe(true)
-        expect(reasoning[0]!.parent!.height).toBe(reasoning[0]!.height + 1)
+        expect(reasoning[0]!.parent!.height).toBe(reasoning[0]!.height)
         expect(setup.captureCharFrame()).not.toContain("Thought")
     } finally {
         act(() => {
@@ -1043,7 +1056,7 @@ test("keeps completed headings stable while streaming markdown grows", async () 
             borders: true,
             outerBorder: true,
             borderStyle: "single",
-            borderColor: theme.textMuted,
+            borderColor: theme.textSecondary,
             selectable: true,
         })
         const headingBefore = markdownBefore?._blockStates[0]?.renderable
@@ -1238,7 +1251,7 @@ test("preserves completed Markdown diff counts without repairing them", async ()
 })
 
 test(
-    "clips proposal diff backgrounds and numbered text when scrolling the transcript",
+    "clips tool-result diff backgrounds and numbered text when scrolling the transcript",
     async () => {
         const patch = [
             "--- a/example.txt",
@@ -1256,8 +1269,8 @@ test(
             runId: "run-diff",
             role: "assistant",
             createdAt: 1,
-            stopReason: "stop",
-            content: [],
+            stopReason: "tool_use",
+            content: [{ type: "toolCall", toolCallId: "edit-diff", toolName: "edit", input: { path: "example.txt" } }],
         }, {
             id: "later-message",
             sessionId: "default",
@@ -1280,18 +1293,12 @@ test(
             scrollY
         >
             <Transcript
-                messages={messages}
-                fileChangeProposals={[{
-                    id: "scrolling-proposal",
-                    sessionId: "default",
-                    runId: "run-diff",
-                    toolCallId: "edit-diff",
-                    operation: "edit",
-                    path: "example.txt",
-                    diff: patch,
-                    status: "applied",
-                    createdAt: 2,
-                }]}
+                messages={[messages[0]!, {
+                    id: "scrolling-result", sessionId: "default", runId: "run-diff",
+                    role: "toolResult", assistantMessageId: messages[0]!.id,
+                    toolCallId: "edit-diff", toolName: "edit", content: "Applied",
+                    diff: patch, isError: false, createdAt: 2,
+                }, messages[1]!]}
             />
         </scrollbox>, { width: 80, height: 10 })
 
@@ -1331,7 +1338,7 @@ test(
             const contextBg = initialSpans.lines[contextRow]!.spans.find(
                 (span) => span.text.includes("context after 1234"),
             )!.bg
-            expect(contextBg.a).toBe(0)
+            expect(contextBg.equals(RGBA.fromHex(theme.surface))).toBe(true)
 
             act(() => scrollbox.scrollTo(contextRow))
             await render()
@@ -1363,21 +1370,21 @@ test(
             const narrowFrame = setup.captureCharFrame()
             expect(narrowFrame).toMatch(/1233.*-.*removed 1233/)
             expect(narrowFrame).toMatch(/1233.*\+.*added 1233/)
-            expect(narrowFrame).toContain("narrow screen")
+            expect(narrowFrame).toMatch(/narrow\s*┃\s*screen/)
             for (const bg of [diff.removedBg, diff.addedBg]) {
                 expect(setup.captureSpans().lines.flatMap((line) => line.spans).some(
                     (span) => span.text.includes("screen") && span.bg.equals(bg),
                 )).toBe(true)
             }
-            const continuationRow = narrowFrame.split("\n").findIndex(
-                (line) => line.includes("narrow screen"),
+            const continuationRow = setup.captureSpans().lines.findIndex(
+                (line) => line.spans.some((span) => span.text.includes("screen") && span.bg.equals(diff.addedBg)),
             )
             expect(continuationRow).toBeGreaterThan(0)
             act(() => scrollbox.scrollTo(continuationRow))
             await render()
             expect(diff.y).toBeLessThan(0)
             expect(setup.captureSpans().lines[0]!.spans.some(
-                (span) => span.text.includes("narrow screen") && span.bg.equals(diff.addedBg),
+                (span) => span.text.includes("screen") && span.bg.equals(diff.addedBg),
             )).toBe(true)
 
             act(() => {
@@ -1483,6 +1490,7 @@ test("keeps completed history renderables stable across streaming text updates",
             sessionId: "default",
             runId: "run-durable",
             role: "toolResult",
+            assistantMessageId: "durable-assistant",
             createdAt: 2,
             toolCallId: "durable-read",
             toolName: "read",
@@ -1669,7 +1677,7 @@ test("renders a checkpoint at its anchor before uncompacted and streaming messag
     }
 })
 
-test("streams a checkpoint at its anchor and finalizes the same Markdown renderable", async () => {
+test("streams a checkpoint as plain text at its anchor and formats it only after completion", async () => {
     const messages: TAgentMessage[] = [
         {
             id: "anchor", sessionId: "default", runId: "old", role: "assistant",
@@ -1697,17 +1705,35 @@ test("streams a checkpoint at its anchor and finalizes the same Markdown rendera
             createdAt: 3, stopReason: "pending", content: [{ type: "text", text: "Live response" }],
         }} />
     }
-    const setup = await testRender(<StreamingCheckpoint />, { width: 80, height: 18 })
+    const setup = await testRender(<StreamingCheckpoint />, { width: 80, height: 24 })
     try {
         await act(async () => { await setup.renderOnce() })
         const before = markdownRenderables(setup.renderer.root)
-        expect(before).toHaveLength(3)
-        const preview = before[1]!
-        const heading = preview._blockStates[0]?.renderable
-        expect(heading).toBeDefined()
-        expect(preview.streaming).toBe(true)
-        expect(preview.content).toBe(progress.summary)
+        expect(before).toHaveLength(2)
+        const preview = textRenderables(setup.renderer.root).find(
+            (renderable) => renderable.plainText === progress.summary,
+        )!
+        expect(preview).toBeInstanceOf(TextRenderable)
+        expect(preview.wrapMode).toBe("word")
+        expect(preview.truncate).toBe(false)
+        expect(preview.fg.equals(RGBA.fromHex(theme.text))).toBe(true)
+        const card = preview.parent!
+        const header = card.getChildren()[0] as BoxRenderable
+        const label = header.getChildren()[0] as TextRenderable
+        expect(header).toBeInstanceOf(BoxRenderable)
+        expect(header.width).toBe(card.width)
+        expect(header.x).toBe(card.x)
+        expect(header.borderStyle).toBe("single")
+        expect(header.borderColor.equals(RGBA.fromHex(theme.amber))).toBe(true)
+        expect(header.height).toBe(label.height + 2)
+        expect(preview.y).toBe(header.y + header.height + 1)
         const frame = setup.captureCharFrame()
+        const lines = frame.split("\n")
+        expect(lines[header.y]?.trim()).toBe(`┌${"─".repeat(header.width - 2)}┐`)
+        expect(lines[header.y + header.height - 1]?.trim()).toBe(`└${"─".repeat(header.width - 2)}┘`)
+        expect(lines[preview.y - 1]?.trim()).toBe("")
+        expect(lines[preview.y]?.trim()).toBe("# Stable heading")
+        expect(frame).toContain("# Stable heading")
         expect(frame).not.toContain("Previous checkpoint")
         expect(frame).not.toContain("Context compacted")
         expect(frame.indexOf("Compacting context")).toBeGreaterThan(frame.indexOf("Durable answer"))
@@ -1717,20 +1743,30 @@ test("streams a checkpoint at its anchor and finalizes the same Markdown rendera
         act(() => update?.({ compactionCheckpoint: previous, compactionProgress: expanded }))
         await act(async () => { await setup.renderOnce() })
         const during = markdownRenderables(setup.renderer.root)
+        expect(during).toHaveLength(2)
         expect(during[0]).toBe(before[0])
-        expect(during[1]).toBe(preview)
-        expect(during[2]).toBe(before[2])
-        expect(preview._blockStates[0]?.renderable).toBe(heading)
+        expect(during[1]).toBe(before[1])
+        expect(textRenderables(setup.renderer.root).find(
+            (renderable) => renderable.plainText === expanded.summary,
+        )).toBe(preview)
         expect(setup.captureCharFrame()).toContain("Partial continues")
         act(() => update?.({ compactionCheckpoint: { ...previous, ...expanded } }))
         await act(async () => { await setup.renderOnce() })
         const after = markdownRenderables(setup.renderer.root)
         expect(after).toHaveLength(3)
-        expect(after[1]).toBe(preview)
-        expect(preview.streaming).toBe(false)
-        expect(preview.content).toBe(expanded.summary)
+        expect(after[0]).toBe(before[0])
+        expect(after[2]).toBe(before[1])
+        expect(after[1]?.parent).toBe(card)
+        expect(after[1]?.streaming).toBe(false)
+        expect(after[1]?.content).toBe(expanded.summary)
+        expect(header.height).toBe(label.height)
+        expect(after[1]?.y).toBe(header.y + header.height + 1)
+        expect(setup.captureCharFrame().split("\n")[header.y]?.trim()).toBe("Context compacted")
+        expect(setup.captureCharFrame().split("\n")[after[1]!.y - 1]?.trim()).toBe("")
+        expect(preview.isDestroyed).toBe(true)
         expect(setup.captureCharFrame()).toContain("Context compacted")
         expect(setup.captureCharFrame()).not.toContain("Compacting context")
+        expect(setup.captureCharFrame()).not.toContain("# Stable heading")
     } finally {
         act(() => setup.renderer.destroy())
     }
@@ -1741,7 +1777,7 @@ test.each([false, true])("restores the previous checkpoint or empty transcript w
     function DiscardedCheckpoint(): React.ReactNode {
         const [active, setActive] = useState(true)
         clear = () => setActive(false)
-        return <Transcript messages={[]} {...(hasPrevious ? { compactionCheckpoint: {
+        return <Transcript messages={[]} checkpointOutsidePage {...(hasPrevious ? { compactionCheckpoint: {
             id: "previous", sessionId: "default", createdAt: 1, reason: "manual" as const,
             compactedMessageCount: 1, throughMessageId: "missing", summary: "Previous checkpoint",
         } } : {})} {...(active ? { compactionProgress: {
@@ -1771,43 +1807,98 @@ test.each([false, true])("restores the previous checkpoint or empty transcript w
     }
 })
 
-test("keeps compaction diff previews as native code after the fence closes", async () => {
+test("keeps compaction diff previews as literal text even after the fence closes", async () => {
     let closeFence: (() => void) | undefined
     const patch = "--- a/value.ts\n+++ b/value.ts\n@@ -1 +1 @@\n-const value = 1\n+const value = 2"
+    const openFence = `\`\`\`diff\n${patch}`
     function CompactionDiff(): React.ReactNode {
         const [closed, setClosed] = useState(false)
         closeFence = () => setClosed(true)
-        return <Transcript messages={[]} compactionProgress={{
+        return <Transcript messages={[]} checkpointOutsidePage compactionProgress={{
             id: "candidate", throughMessageId: "missing",
-            summary: `\`\`\`diff\n${patch}${closed ? "\n```" : ""}`,
+            summary: openFence + (closed ? "\n```" : ""),
         }} />
     }
     const setup = await testRender(<CompactionDiff />, { width: 80, height: 12 })
     try {
         await act(async () => { await setup.renderOnce() })
-        const markdown = markdownRenderables(setup.renderer.root)[0]
-        expect(markdown?.streaming).toBe(true)
-        expect(diffRenderables(setup.renderer.root)).toHaveLength(0)
-        const code = codeRenderables(setup.renderer.root).find(
-            (renderable) => renderable.filetype === "diff",
+        const preview = textRenderables(setup.renderer.root).find(
+            (renderable) => renderable.plainText === openFence,
         )
-        expect(code?.content).toBe(patch)
+        expect(preview).toBeInstanceOf(TextRenderable)
+        expect(markdownRenderables(setup.renderer.root)).toHaveLength(0)
+        expect(codeRenderables(setup.renderer.root)).toHaveLength(0)
+        expect(diffRenderables(setup.renderer.root)).toHaveLength(0)
+        expect(setup.captureCharFrame()).toContain("```diff")
         act(() => closeFence?.())
         await act(async () => { await setup.renderOnce() })
-        expect(markdownRenderables(setup.renderer.root)[0]).toBe(markdown)
+        expect(textRenderables(setup.renderer.root).find(
+            (renderable) => renderable.plainText === openFence + "\n```",
+        )).toBe(preview)
+        expect(markdownRenderables(setup.renderer.root)).toHaveLength(0)
+        expect(codeRenderables(setup.renderer.root)).toHaveLength(0)
         expect(diffRenderables(setup.renderer.root)).toHaveLength(0)
-        expect(codeRenderables(setup.renderer.root).find(
-            (renderable) => renderable.filetype === "diff",
-        )).toBe(code)
-        expect(code?.content).toBe(patch)
     } finally {
         act(() => setup.renderer.destroy())
     }
 })
 
+test("retains the full large checkpoint while streaming a wrapped plain-text preview", async () => {
+    const initialSummary = "## Files Read and Why\n\n" + (
+        "- Inspect src/sessions/compaction/session-compactor.ts; preserve durable history and cancellation.\n"
+    ).repeat(1500)
+    let updateSummary: ((summary: string) => void) | undefined
+    function LongCheckpoint(): React.ReactNode {
+        const [summary, setSummary] = useState(initialSummary)
+        updateSummary = setSummary
+        return <scrollbox width="100%" height="100%" scrollY stickyScroll stickyStart="bottom" viewportCulling>
+            <Transcript messages={[]} checkpointOutsidePage compactionProgress={{
+                id: "large-checkpoint", throughMessageId: "anchor", summary,
+            }} />
+        </scrollbox>
+    }
+    const setup = await testRender(<LongCheckpoint />, { width: 40, height: 10 })
+    try {
+        await act(async () => { await setup.renderOnce() })
+        const preview = textRenderables(setup.renderer.root).find(
+            (renderable) => renderable.plainText === initialSummary,
+        )!
+        expect(preview).toBeInstanceOf(TextRenderable)
+        expect(preview.wrapMode).toBe("word")
+        expect(preview.truncate).toBe(false)
+        expect(markdownRenderables(setup.renderer.root)).toHaveLength(0)
+        const expanded = initialSummary + "Latest detail: zażółć 🐍 日本語"
+        act(() => updateSummary?.(expanded))
+        await act(async () => { await setup.renderOnce() })
+        expect(textRenderables(setup.renderer.root).find(
+            (renderable) => renderable.plainText === expanded,
+        )).toBe(preview)
+        expect(markdownRenderables(setup.renderer.root)).toHaveLength(0)
+        expect(codeRenderables(setup.renderer.root)).toHaveLength(0)
+        expect(setup.captureCharFrame()).toContain("Latest detail: zażółć 🐍 日本語")
+    } finally {
+        act(() => setup.renderer.destroy())
+    }
+})
+
+test("does not place an unanchored checkpoint or progress on a historical page", async () => {
+    const setup = await testRender(<Transcript messages={[]} compactionCheckpoint={{
+        id: "outside", sessionId: "default", createdAt: 1, reason: "manual",
+        compactedMessageCount: 1, throughMessageId: "outside-page", summary: "Unrelated saved summary",
+    }} compactionProgress={{ id: "progress", throughMessageId: "outside-page", summary: "Unrelated live summary" }} />,
+    { width: 80, height: 8 })
+    try {
+        await act(async () => { await setup.renderOnce() })
+        expect(setup.captureCharFrame()).not.toContain("Unrelated")
+        expect(setup.captureCharFrame()).not.toContain("Context compacted")
+        expect(markdownRenderables(setup.renderer.root)).toHaveLength(0)
+    } finally { act(() => setup.renderer.destroy()) }
+})
+
 test("treats a checkpoint-only transcript as non-empty", async () => {
     const setup = await testRender(<Transcript
         messages={[]}
+        checkpointOutsidePage
         compactionCheckpoint={{
             id: "checkpoint-only",
             sessionId: "default",
@@ -1915,7 +2006,7 @@ test("styles rich Markdown and renders code without line numbers", async () => {
         expect(tables[0]?.wrapMode).toBe("word")
         expect(tables[0]?.columnWidthMode).toBe("full")
         expect(tables[0]?.columnFitter).toBe("proportional")
-        expect(tables[0]?.borderColor.equals(RGBA.fromHex(theme.textMuted))).toBe(true)
+        expect(tables[0]?.borderColor.equals(RGBA.fromHex(theme.textSecondary))).toBe(true)
 
         const spans = setup.captureSpans().lines.flatMap((line) => line.spans)
         const heading = spans.find((span) => span.text.includes("Styled heading"))
@@ -1926,7 +2017,7 @@ test("styles rich Markdown and renders code without line numbers", async () => {
         expect(heading?.fg.equals(RGBA.fromHex(theme.amber))).toBe(true)
         expect((heading?.attributes ?? 0) & TextAttributes.BOLD).toBeTruthy()
         expect(listMarker?.fg.equals(RGBA.fromHex(theme.green))).toBe(true)
-        expect(quote?.fg.equals(RGBA.fromHex(theme.textMuted))).toBe(true)
+        expect(quote?.fg.equals(RGBA.fromHex(theme.textSecondary))).toBe(true)
         expect((quote?.attributes ?? 0) & TextAttributes.ITALIC).toBeTruthy()
         expect(tableHeading?.fg.equals(RGBA.fromHex(theme.amber))).toBe(true)
         expect((tableHeading?.attributes ?? 0) & TextAttributes.BOLD).toBeTruthy()

@@ -24,8 +24,8 @@ test("summarizer uses the captured reserve while default models retain their bud
     } }
     const options = {
         sessionId: "session", reason: "manual" as const,
-        messages: [{ id: "answer", sessionId: "session", runId: "run", role: "assistant" as const,
-            content: [{ type: "text" as const, text: "x".repeat(1_400_000) }], stopReason: "stop" as const, createdAt: 1 }],
+        context: { messages: [{ id: "answer", sessionId: "session", runId: "run", role: "assistant" as const,
+            content: [{ type: "text" as const, text: "x".repeat(1_400_000) }], stopReason: "stop" as const, createdAt: 1 }] },
         runConfiguration: { model, reasoningEffort: "high" as const,
             modelProfile: { providerId: "test", modelId: "test", contextWindowTokens: 1_048_576 } },
         signal: new AbortController().signal, now: () => 2, generateId: () => "checkpoint",

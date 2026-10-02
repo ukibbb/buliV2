@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test"
 import { defineAgentTool, ToolAccess, type IAgentModelRequest } from "@/agent"
 import { AgentSession } from "@/sessions/agent-session"
-import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
+import { SQLiteSessionManager } from "@/sessions/sqlite/sqlite-session-manager"
 import { estimateContextUsage } from "@/sessions/compaction/context-budget"
 
 for (const sideBranch of [false, true]) {
     test(`opening a session enforces the active branch tool policy (side: ${sideBranch})`, async () => {
-        const manager = new InMemorySessionManager()
+        const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
         manager.createSession({ id: "session", agentId: "agent", title: "Test", createdAt: 1, updatedAt: 1 })
         if (sideBranch) manager.createBranch("session", "side")
         const executed: string[] = []
@@ -57,7 +57,7 @@ for (const sideBranch of [false, true]) {
             }
             expect(executed).toEqual(expectedTools.map((tool) => tool.name))
             expect(session.getSnapshot().contextUsage).toEqual(estimateContextUsage({
-                systemPrompt: "System", messages: manager.getMessages("session"), tools: expectedTools,
+                systemPrompt: "System", messages: manager.loadRequiredContext("session").messages, tools: expectedTools,
             }))
         } finally {
             await session.dispose()

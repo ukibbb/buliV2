@@ -31,7 +31,7 @@ test("renders startup failure instead of leaving a blank screen", async () => {
     expect(frame.trim()).not.toBe("")
     expect(frame).toContain("Failed to start Buli")
     expect(frame).toContain("Missing OPENAI_API_KEY")
-    expect(frame).toContain("Press Ctrl+C to exit")
+    expect(frame).toContain("Press [ Ctrl + C ] to exit")
   } finally {
     act(() => {
       setup.renderer.destroy()

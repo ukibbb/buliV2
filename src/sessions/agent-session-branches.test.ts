@@ -1,10 +1,10 @@
 import { expect, spyOn, test } from "bun:test"
 import { defineAgentTool, ToolAccess, type IAgentModel, type IAgentModelRequest } from "@/agent"
 import { AgentSession } from "@/sessions/agent-session"
-import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
+import { SQLiteSessionManager } from "@/sessions/sqlite/sqlite-session-manager"
 
 function fixture(model?: IAgentModel) {
-    const manager = new InMemorySessionManager()
+    const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
     manager.createSession({ id: "session", agentId: "agent", title: "Test", createdAt: 1, updatedAt: 1 })
     const requests: IAgentModelRequest[] = []
     const tools = [ToolAccess.ReadOnly, ToolAccess.MayMutate].map((access, index) => defineAgentTool({
@@ -29,13 +29,49 @@ function fixture(model?: IAgentModel) {
     return { manager, requests, tools, options, session: new AgentSession(options) }
 }
 
+test("live snapshots reuse the branch ID and navigation refreshes it once", async () => {
+    const { session, manager, options } = fixture()
+    const read = spyOn(manager, "getActiveBranchId")
+    try {
+        await session.prompt("Stream on main").runFinished
+        expect(session.getSnapshot().activeBranchId).toBe("main")
+        expect(read).not.toHaveBeenCalled()
+
+        const side = session.createBranch()
+        expect(session.getSnapshot().activeBranchId).toBe(side)
+        expect(read).toHaveBeenCalledTimes(1)
+        await session.prompt("Stream on side").runFinished
+        expect(read).toHaveBeenCalledTimes(1)
+
+        session.returnToParentBranch()
+        expect(session.getSnapshot().activeBranchId).toBe("main")
+        expect(read).toHaveBeenCalledTimes(2)
+        expect(() => session.returnToParentBranch()).toThrow("main branch")
+        expect(read).toHaveBeenCalledTimes(2)
+    } finally {
+        await session.dispose()
+        read.mockClear()
+    }
+    const reopened = new AgentSession(options)
+    try {
+        expect(read).toHaveBeenCalledTimes(1)
+        expect(reopened.getSnapshot().activeBranchId).toBe("main")
+        await reopened.prompt("Stream after reopening").runFinished
+        expect(read).toHaveBeenCalledTimes(1)
+    } finally {
+        read.mockRestore()
+        await reopened.dispose()
+        manager.dispose()
+    }
+})
+
 test("live branch navigation restores parent history, checkpoint and tools without merging", async () => {
     const { session, manager, requests, tools } = fixture()
     try {
         await session.prompt("Parent message").runFinished
-        const compactedMessages = manager.getMessages("session")
+        const compactedMessages = manager.loadRequiredContext("session").messages
         await session.prompt("Recent parent message").runFinished
-        const parentMessages = manager.getMessages("session")
+        const parentMessages = manager.loadRequiredContext("session").messages
         const checkpoint = {
             id: "parent-checkpoint", sessionId: "session", createdAt: 2, reason: "manual" as const,
             compactedMessageCount: compactedMessages.length,
@@ -46,18 +82,18 @@ test("live branch navigation restores parent history, checkpoint and tools witho
         expect(manager.getActiveBranchId("session")).toBe(side)
         expect(session.state.tools).toEqual(tools.slice(0, 1))
         await session.prompt("Secret side message").runFinished
-        const sideMessages = manager.getMessages("session")
+        const sideMessages = manager.loadRequiredContext("session").messages
         manager.saveCompactionCheckpoint({
             ...checkpoint, id: "side-checkpoint", summary: "Secret side summary",
-            compactedMessageCount: sideMessages.length, throughMessageId: sideMessages.at(-1)!.id,
+            compactedMessageCount: checkpoint.compactedMessageCount + sideMessages.length, throughMessageId: sideMessages.at(-1)!.id,
         })
         session.createBranch()
         session.returnToParentBranch()
         expect(manager.getActiveBranchId("session")).toBe(side)
         expect(session.state.tools).toEqual(tools.slice(0, 1))
         session.returnToParentBranch()
-        expect(session.state.messages).toEqual(parentMessages)
-        expect(session.getSnapshot().compactionCheckpoint).toEqual(checkpoint)
+        expect(session.loadHistoryPage("main").messages).toEqual(parentMessages)
+        expect(session.loadHistoryPage("main").checkpoint).toEqual(checkpoint)
         expect(manager.getCompactionCheckpoint("session")).toEqual(checkpoint)
         expect(session.state.tools).toEqual(tools)
         await session.prompt("Continue parent").runFinished
@@ -125,14 +161,18 @@ for (const afterCommit of [false, true]) {
 
 test("read failure after persisted navigation blocks work until reopening", async () => {
     const { session, manager, options } = fixture()
-    const read = spyOn(manager, "getMessages").mockImplementation(() => { throw new Error("Read failed") })
+    const read = spyOn(manager, "loadRequiredContext").mockImplementation(() => { throw new Error("Read failed") })
     try {
         expect(() => session.createBranch()).toThrow("Reopen the session")
         expect(manager.getActiveBranchId("session")).not.toBe("main")
+        expect(session.getSnapshot().activeBranchId).toBe("main")
         expect(() => session.prompt("No")).toThrow("Reopen the session")
     } finally { read.mockRestore(); await session.dispose() }
     const reopened = new AgentSession(options)
-    try { expect(reopened.state.tools).toHaveLength(1) } finally { await reopened.dispose() }
+    try {
+        expect(reopened.state.tools).toHaveLength(1)
+        expect(reopened.getSnapshot().activeBranchId).toBe(manager.getActiveBranchId("session"))
+    } finally { await reopened.dispose() }
 })
 
 test("navigation is blocked during compaction before touching storage", async () => {

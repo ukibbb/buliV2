@@ -25,12 +25,9 @@ export function reduceAgentState(
         case "message_end":
             return {
                 ...state,
-                messages: [
-                    ...state.messages,
-                    event.message.role === "assistant"
-                        ? retainAssistantSnapshot(event.message)
-                        : structuredClone(event.message),
-                ],
+                assistantError: event.message.role === "assistant" && event.message.errorMessage
+                    ? { id: event.message.id, runId: event.message.runId, errorMessage: event.message.errorMessage }
+                    : undefined,
                 streamingMessage: event.message.role === "assistant"
                     ? undefined
                     : state.streamingMessage,

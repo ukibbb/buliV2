@@ -4,6 +4,8 @@ import type {
 } from "@/agent"
 import type {
     ICompactionCheckpoint,
+    IHistoryCursor,
+    IHistoryPage,
     ISessionInfo,
     ISessionSnapshot,
 } from "@/sessions"
@@ -11,6 +13,11 @@ import type {
 export interface ISnapshotSource<Snapshot> {
     readonly subscribe: (listener: () => void) => () => void
     readonly getSnapshot: () => Snapshot
+}
+
+export interface ISessionSource extends ISnapshotSource<ISessionSnapshot> {
+    readonly loadHistoryPage: (branchId: string, cursor?: IHistoryCursor) => IHistoryPage
+    readonly subscribeHistory: (listener: () => void) => () => void
 }
 
 export interface IBuliPromptInput extends IUserInputContent {
@@ -129,7 +136,7 @@ export interface IBuliApplication
     ) => ISessionInfo
     readonly openSession: (
         sessionId: string,
-    ) => ISnapshotSource<ISessionSnapshot>
+    ) => ISessionSource
     readonly closeSession: (sessionId: string) => Promise<void>
     readonly listSessions: () => readonly ISessionInfo[]
 }

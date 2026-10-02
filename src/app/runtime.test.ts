@@ -17,8 +17,7 @@ import type {
 import { defineAgentTool } from "@/agent/tool"
 import {
   AgentSession,
-  InMemorySessionManager,
-  WorkspaceSessionManager,
+  SQLiteSessionManager,
   type ISessionManager,
 } from "@/sessions"
 
@@ -94,7 +93,7 @@ function runtimeWithPreferredModels(
   let sessionNumber = 0
   return new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,
-    manager: new InMemorySessionManager(),
+    manager: new SQLiteSessionManager({ databasePath: ":memory:" }),
     agents: TEST_AGENTS,
     defaultAgentId: TEST_AGENT_ID,
     models: [{
@@ -119,7 +118,7 @@ function runtimeWithPreferredModels(
 function runtimeWith(
   modelOverride: IAgentModel = model,
   agents: readonly IAgentDefinition[] = TEST_AGENTS,
-  manager: ISessionManager = new InMemorySessionManager(),
+  manager: ISessionManager = new SQLiteSessionManager({ databasePath: ":memory:" }),
 ): BuliApplicationRuntime {
   let sessionNumber = 0
   return new BuliApplicationRuntime({
@@ -176,14 +175,14 @@ test("application runtime submits prompts into its session view", async () => {
 
   expect(promptRun.sessionId).toBe("session-1")
   expect(view.getSnapshot()).not.toBe(initial)
-  expect(view.getSnapshot().messages.map((message) => message.role)).toEqual([
+  expect(view.loadHistoryPage("main").messages.map((message) => message.role)).toEqual([
     "user",
     "assistant",
   ])
-  expect(view.getSnapshot().messages[1]?.content).toContainEqual(
+  expect(view.loadHistoryPage("main").messages[1]?.content).toContainEqual(
     expect.objectContaining({ type: "text", text: "Hello from Buli" }),
   )
-  expect(view.getSnapshot().messages).toEqual([
+  expect(view.loadHistoryPage("main").messages).toEqual([
     expect.objectContaining({
       runId: promptRun.runId,
       source: "prompt",
@@ -196,7 +195,7 @@ test("application runtime submits prompts into its session view", async () => {
 
 test("runtime hands off file ownership and reloads history into model context", async () => {
   const directoryPath = await mkdtemp(join(tmpdir(), "buli-runtime-handoff-"))
-  const managers: WorkspaceSessionManager[] = []
+  const managers: SQLiteSessionManager[] = []
   const runtimes: BuliApplicationRuntime[] = []
   const modelRequests: string[][] = []
   const recordingModel: IAgentModel = {
@@ -208,7 +207,7 @@ test("runtime hands off file ownership and reloads history into model context", 
     },
   }
   const createRuntime = (sessionId: string): BuliApplicationRuntime => {
-    const manager = new WorkspaceSessionManager({ directoryPath })
+    const manager = new SQLiteSessionManager({ directoryPath })
     managers.push(manager)
     const runtime = new BuliApplicationRuntime({
       workspaceRoot: directoryPath,
@@ -244,24 +243,24 @@ test("runtime hands off file ownership and reloads history into model context", 
     const originalView = first.openSession("first")
     const secondView = second.openSession("second")
 
-    expect(() => second.openSession("first")).toThrow("Unable to lock session log")
+    expect(() => second.openSession("first")).toThrow("Unable to lock session")
     expect(second.openSession("second")).toBe(secondView)
-    expect(() => first.openSession("second")).toThrow("Unable to lock session log")
+    expect(() => first.openSession("second")).toThrow("Unable to lock session")
     await submitPrompt(second, { sessionId: "second", text: "Still owned" })
-    expect(secondView.getSnapshot().messages
+    expect(secondView.loadHistoryPage("main").messages
       .filter((message) => message.role === "user")
       .map((message) => message.content))
       .toEqual(["Second question", "Still owned"])
 
     await first.closeSession("first")
     second.openSession("first")
-    expect(() => first.openSession("first")).toThrow("Unable to lock session log")
+    expect(() => first.openSession("first")).toThrow("Unable to lock session")
     await submitPrompt(second, { sessionId: "first", text: "Added by second runtime" })
     await second.closeSession("first")
 
     const reopenedView = first.openSession("first")
     expect(reopenedView).not.toBe(originalView)
-    expect(reopenedView.getSnapshot().messages
+    expect(reopenedView.loadHistoryPage("main").messages
       .filter((message) => message.role === "user")
       .map((message) => message.content))
       .toEqual(["First question", "Added by second runtime"])
@@ -362,21 +361,25 @@ test("application runtime rejects blank prompts", async () => {
     text: "   ",
   })).toThrow("Prompt cannot be empty")
 
-  expect(view.getSnapshot().messages).toEqual([])
+  expect(view.loadHistoryPage("main").messages).toEqual([])
   await runtime.dispose()
 })
 
 test("synchronous prompt failure waits for session disposal before rollback", async () => {
   const cleanupOperations: string[] = []
-  const manager = Object.assign(new InMemorySessionManager(), {
+  const memory = new SQLiteSessionManager({ databasePath: ":memory:" })
+  const releaseSession = memory.releaseSession
+  const manager = Object.assign(memory, {
     releaseSession: (sessionId: string) => {
       cleanupOperations.push(`release:${sessionId}`)
+      releaseSession(sessionId)
     },
   })
-  const deleteSession = manager.deleteSession
-  const deletion = spyOn(manager, "deleteSession").mockImplementation((sessionId) => {
-    deleteSession(sessionId)
+  const deleteSession = manager.deleteEmptySession
+  const deletion = spyOn(manager, "deleteEmptySession").mockImplementation((sessionId) => {
+    const deleted = deleteSession(sessionId)
     cleanupOperations.push(`delete:${sessionId}`)
+    return deleted
   })
   const failure = new Error("Cannot start prompt")
   const prompt = spyOn(AgentSession.prototype, "prompt").mockImplementation(() => {
@@ -426,12 +429,12 @@ test("synchronous prompt failure waits for session disposal before rollback", as
 
 test("synchronous prompt failure reports rollback failure without releasing ownership", async () => {
   const releasedSessionIds: string[] = []
-  const manager = Object.assign(new InMemorySessionManager(), {
+  const manager = Object.assign(new SQLiteSessionManager({ databasePath: ":memory:" }), {
     releaseSession: (sessionId: string) => {
       releasedSessionIds.push(sessionId)
     },
   })
-  const deletion = spyOn(manager, "deleteSession")
+  const deletion = spyOn(manager, "deleteEmptySession")
   const promptFailure = new Error("Cannot start prompt")
   const disposalFailure = new Error("Session did not stop")
   const prompt = spyOn(AgentSession.prototype, "prompt").mockImplementation(() => {
@@ -491,7 +494,7 @@ test("application runtime returns one stable view per session", async () => {
 
 test("closing a session waits for disposal before releasing ownership", async () => {
   const releasedSessionIds: string[] = []
-  const manager = Object.assign(new InMemorySessionManager(), {
+  const manager = Object.assign(new SQLiteSessionManager({ databasePath: ":memory:" }), {
     releaseSession: (sessionId: string) => {
       releasedSessionIds.push(sessionId)
     },
@@ -529,7 +532,7 @@ test("closing a session waits for disposal before releasing ownership", async ()
 
 test("runtime shutdown waits for an overlapping session close before disposing storage", async () => {
   const operations: string[] = []
-  const manager = Object.assign(new InMemorySessionManager(), {
+  const manager = Object.assign(new SQLiteSessionManager({ databasePath: ":memory:" }), {
     releaseSession: (sessionId: string) => {
       operations.push(`release:${sessionId}`)
     },
@@ -577,7 +580,7 @@ test("runtime shutdown waits for an overlapping session close before disposing s
 
 test("failed session disposal retains ownership and prevents reopening", async () => {
   const releasedSessionIds: string[] = []
-  const manager = Object.assign(new InMemorySessionManager(), {
+  const manager = Object.assign(new SQLiteSessionManager({ databasePath: ":memory:" }), {
     releaseSession: (sessionId: string) => {
       releasedSessionIds.push(sessionId)
     },
@@ -603,7 +606,7 @@ test("failed session disposal retains ownership and prevents reopening", async (
 
 test("runtime retains the session manager when a session fails to stop", async () => {
   let managerDisposals = 0
-  const manager = Object.assign(new InMemorySessionManager(), {
+  const manager = Object.assign(new SQLiteSessionManager({ databasePath: ":memory:" }), {
     dispose: () => {
       managerDisposals += 1
     },
@@ -630,7 +633,7 @@ test("runtime retains the session manager when a session fails to stop", async (
 })
 
 test("application runtime auto-opens persisted history when submitting", async () => {
-  const manager = new InMemorySessionManager()
+  const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
   manager.createSession({
     id: "stored-session",
     agentId: TEST_AGENT_ID,
@@ -659,7 +662,7 @@ test("application runtime auto-opens persisted history when submitting", async (
   const second = runtime.openSession("stored-session")
 
   expect(second).toBe(first)
-  expect(first.getSnapshot().messages).toEqual([
+  expect(first.loadHistoryPage("main").messages).toEqual([
     expect.objectContaining({ content: "Stored prompt", runId: "stored-run" }),
     expect.objectContaining({
       content: "New prompt",
@@ -727,7 +730,7 @@ test("application runtime applies global selection to the next prompt", async ()
   const runs: string[] = []
   const runtime = new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,
-    manager: new InMemorySessionManager(),
+    manager: new SQLiteSessionManager({ databasePath: ":memory:" }),
     agents: TEST_AGENTS,
     defaultAgentId: TEST_AGENT_ID,
     models: [
@@ -823,7 +826,7 @@ test("application runtime replaces models atomically and reconciles selection", 
   }
   const runtime = new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,
-    manager: new InMemorySessionManager(),
+    manager: new SQLiteSessionManager({ databasePath: ":memory:" }),
     agents: TEST_AGENTS,
     defaultAgentId: TEST_AGENT_ID,
     models: [{
@@ -887,7 +890,7 @@ test("application runtime replaces models atomically and reconciles selection", 
 test("preferred initial models require discovery, including an empty preference list", async () => {
   expect(() => new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,
-    manager: new InMemorySessionManager(),
+    manager: new SQLiteSessionManager({ databasePath: ":memory:" }),
     agents: TEST_AGENTS,
     defaultAgentId: TEST_AGENT_ID,
     models: CATALOG_MODELS,
@@ -941,7 +944,7 @@ test("first discovery prefers Fast and its catalog default over the provisional 
 
 test("provisional models cannot generate or supply context limits, but sessions remain usable", async () => {
   const release = Promise.withResolvers<readonly IBuliModelRuntimeConfig[]>()
-  const manager = new InMemorySessionManager()
+  const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
   manager.createSession({
     id: "stored",
     agentId: TEST_AGENT_ID,
@@ -1385,7 +1388,7 @@ test("model refresh falls back from a removed Fast variant to its base", async (
   }
   const runtime = new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,
-    manager: new InMemorySessionManager(),
+    manager: new SQLiteSessionManager({ databasePath: ":memory:" }),
     agents: TEST_AGENTS,
     defaultAgentId: TEST_AGENT_ID,
     models: [
@@ -1446,7 +1449,7 @@ test("application runtime validates model fallback registrations", () => {
   const createRuntime = (fallbackSelectionId: string) => () => (
     new BuliApplicationRuntime({
       workspaceRoot: WORKSPACE_ROOT,
-      manager: new InMemorySessionManager(),
+      manager: new SQLiteSessionManager({ databasePath: ":memory:" }),
       agents: TEST_AGENTS,
       defaultAgentId: TEST_AGENT_ID,
       models: [
@@ -1484,7 +1487,7 @@ test("application runtime validates model fallback registrations", () => {
 test("model selection adopts the target default when efforts do not overlap", async () => {
   const runtime = new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,
-    manager: new InMemorySessionManager(),
+    manager: new SQLiteSessionManager({ databasePath: ":memory:" }),
     agents: TEST_AGENTS,
     defaultAgentId: TEST_AGENT_ID,
     models: [
@@ -1518,7 +1521,7 @@ test("model selection adopts the target default when efforts do not overlap", as
 test("application runtime preserves models when refresh validation fails", async () => {
   const runtime = new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,
-    manager: new InMemorySessionManager(),
+    manager: new SQLiteSessionManager({ databasePath: ":memory:" }),
     agents: TEST_AGENTS,
     defaultAgentId: TEST_AGENT_ID,
     models: [{
@@ -1567,7 +1570,7 @@ test("a joined refresh caller can cancel without aborting the shared load", asyn
   let loadCalls = 0
   const runtime = new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,
-    manager: new InMemorySessionManager(),
+    manager: new SQLiteSessionManager({ databasePath: ":memory:" }),
     agents: TEST_AGENTS,
     defaultAgentId: TEST_AGENT_ID,
     models: [{
@@ -1628,7 +1631,7 @@ test("model refresh keeps an active run on its captured adapter", async () => {
   }
   const runtime = new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,
-    manager: new InMemorySessionManager(),
+    manager: new SQLiteSessionManager({ databasePath: ":memory:" }),
     agents: TEST_AGENTS,
     defaultAgentId: TEST_AGENT_ID,
     models: [{
@@ -1693,7 +1696,7 @@ test("runtime disposal aborts a model refresh before it can commit", async () =>
   const started = Promise.withResolvers<void>()
   const runtime = new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,
-    manager: new InMemorySessionManager(),
+    manager: new SQLiteSessionManager({ databasePath: ":memory:" }),
     agents: TEST_AGENTS,
     defaultAgentId: TEST_AGENT_ID,
     models: [{
@@ -1732,7 +1735,7 @@ test("runtime disposal does not wait for a model loader that ignores cancellatio
   const release = Promise.withResolvers<void>()
   const runtime = new BuliApplicationRuntime({
     workspaceRoot: WORKSPACE_ROOT,
-    manager: new InMemorySessionManager(),
+    manager: new SQLiteSessionManager({ databasePath: ":memory:" }),
     agents: TEST_AGENTS,
     defaultAgentId: TEST_AGENT_ID,
     models: [{
@@ -1855,7 +1858,7 @@ test("submitPrompt creates a default-agent session when sessionId is omitted", a
 
   await promptRun.promptPersisted
   await promptRun.runFinished
-  expect(runtime.openSession(promptRun.sessionId).getSnapshot().messages[0])
+  expect(runtime.openSession(promptRun.sessionId).loadHistoryPage("main").messages[0])
     .toMatchObject({
       role: "user",
       source: "prompt",
@@ -1867,7 +1870,7 @@ test("submitPrompt creates a default-agent session when sessionId is omitted", a
 })
 
 test("submitPrompt rolls back a new session when its first prompt is not persisted", async () => {
-  const memory = new InMemorySessionManager()
+  const memory = new SQLiteSessionManager({ databasePath: ":memory:" })
   const persistenceFailure = new Error("Disk write failed")
   const deletedSessionIds: string[] = []
   const cleanupOperations: string[] = []
@@ -1878,21 +1881,28 @@ test("submitPrompt rolls back a new session when its first prompt is not persist
     returnToParentBranch: memory.returnToParentBranch,
     getSessionInfo: memory.getSessionInfo,
     listSessions: memory.listSessions,
-    getMessages: memory.getMessages,
+    openSession: memory.openSession,
+    dispose: memory.dispose,
+    recoverInterruptedTools: memory.recoverInterruptedTools,
+    loadRequiredContext: memory.loadRequiredContext,
+    loadRecentConversation: memory.loadRecentConversation,
+    loadSelectedPaths: memory.loadSelectedPaths,
+    loadHistoryPage: memory.loadHistoryPage,
     appendMessage: () => {
       throw persistenceFailure
     },
-    getPresentationRevision: memory.getPresentationRevision,
-    getFileChangeProposals: memory.getFileChangeProposals,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
     saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
-    deleteSession: (sessionId) => {
+    deleteSession: memory.deleteSession,
+    deleteEmptySession: (sessionId) => {
       deletedSessionIds.push(sessionId)
-      memory.deleteSession(sessionId)
+      const deleted = memory.deleteEmptySession(sessionId)
       cleanupOperations.push(`delete:${sessionId}`)
+      return deleted
     },
     releaseSession: (sessionId) => {
       cleanupOperations.push(`release:${sessionId}`)
+      memory.releaseSession(sessionId)
     },
   }
   const runtime = runtimeWith(model, TEST_AGENTS, manager)
@@ -1918,7 +1928,7 @@ test("submitPrompt rolls back a new session when its first prompt is not persist
   expect(runtime.listSessions()).toEqual([])
   expect(manager.listSessions()).toEqual([])
   expect(manager.getSessionInfo(promptRun.sessionId)).toBeUndefined()
-  expect(manager.getMessages(promptRun.sessionId)).toEqual([])
+  expect(() => manager.loadRequiredContext(promptRun.sessionId)).toThrow()
   expect(() => runtime.openSession(promptRun.sessionId)).toThrow(
     `Session does not exist: ${promptRun.sessionId}`,
   )
@@ -1926,9 +1936,75 @@ test("submitPrompt rolls back a new session when its first prompt is not persist
   await runtime.dispose()
 })
 
+test("a rejected acknowledgement after commit preserves the first prompt and permits reopening", async () => {
+  const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
+  const failure = new Error("Failure after durable commit")
+  const append = manager.appendMessage
+  const appendSpy = spyOn(manager, "appendMessage").mockImplementation((message) => {
+    append(message)
+    throw failure
+  })
+  const releaseSpy = spyOn(manager, "releaseSession")
+  let providerCalls = 0
+  const runtime = runtimeWith({ async *stream() { providerCalls++; yield { type: "finish", reason: "stop" } } }, TEST_AGENTS, manager)
+  try {
+    const run = runtime.submitPrompt({ text: "Keep this committed prompt" })
+    const results = await Promise.allSettled([run.promptPersisted, run.runFinished])
+    expect(results).toEqual([
+      { status: "rejected", reason: failure },
+      { status: "rejected", reason: failure },
+    ])
+    expect(providerCalls).toBe(0)
+    expect(releaseSpy).toHaveBeenCalledWith(run.sessionId)
+    expect(manager.getSessionInfo(run.sessionId)).toBeDefined()
+    appendSpy.mockRestore()
+    const reopened = runtime.openSession(run.sessionId)
+    expect(reopened.loadHistoryPage("main").messages).toMatchObject([
+      { role: "user", content: "Keep this committed prompt" },
+    ])
+  } finally {
+    appendSpy.mockRestore()
+    releaseSpy.mockRestore()
+    await runtime.dispose()
+  }
+})
+
+for (const cleanupFailure of [new Error("Empty-session transaction failed"), undefined]) {
+  test(`failed empty-session rollback retains ownership: ${String(cleanupFailure)}`, async () => {
+    const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
+    const persistenceFailure = new Error("Prompt was not committed")
+    const appendSpy = spyOn(manager, "appendMessage").mockImplementation(() => { throw persistenceFailure })
+    const deleteSpy = spyOn(manager, "deleteEmptySession").mockImplementation(() => { throw cleanupFailure })
+    const releaseSpy = spyOn(manager, "releaseSession")
+    const runtime = runtimeWith(model, TEST_AGENTS, manager)
+    try {
+      const run = runtime.submitPrompt({ text: "New session" })
+      const results = await Promise.allSettled([run.promptPersisted, run.runFinished])
+      for (const result of results) {
+        expect(result.status).toBe("rejected")
+        if (result.status !== "rejected") throw new Error("Expected rollback to fail")
+        expect(result.reason).toBeInstanceOf(AggregateError)
+        expect((result.reason as AggregateError).errors).toEqual([persistenceFailure, cleanupFailure])
+      }
+      expect(deleteSpy).toHaveBeenCalledTimes(1)
+      expect(releaseSpy).not.toHaveBeenCalled()
+      expect(manager.getSessionInfo(run.sessionId)).toBeDefined()
+      expect(() => runtime.openSession(run.sessionId)).toThrow("failed to close")
+      expect(await runtime.closeSession(run.sessionId).then(() => ({ rejected: false }), (cause: unknown) => ({ rejected: true, cause })))
+        .toEqual({ rejected: true, cause: cleanupFailure })
+      expect(deleteSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      appendSpy.mockRestore()
+      deleteSpy.mockRestore()
+      releaseSpy.mockRestore()
+      await runtime.dispose()
+    }
+  })
+}
+
 test("failed rollback disposal preserves the conversation and ownership", async () => {
   const releasedSessionIds: string[] = []
-  const manager = Object.assign(new InMemorySessionManager(), {
+  const manager = Object.assign(new SQLiteSessionManager({ databasePath: ":memory:" }), {
     releaseSession: (sessionId: string) => {
       releasedSessionIds.push(sessionId)
     },
@@ -1938,7 +2014,7 @@ test("failed rollback disposal preserves the conversation and ownership", async 
   const appendMessage = spyOn(manager, "appendMessage").mockImplementation(() => {
     throw persistenceFailure
   })
-  const deleteSession = spyOn(manager, "deleteSession")
+  const deleteSession = spyOn(manager, "deleteEmptySession")
   const sessionDisposal = spyOn(AgentSession.prototype, "dispose")
     .mockRejectedValue(disposalFailure)
   const runtime = runtimeWith(model, TEST_AGENTS, manager)
@@ -1974,7 +2050,7 @@ test("failed rollback disposal preserves the conversation and ownership", async 
 })
 
 test("new-session runFinished waits for rollback before exposing failure", async () => {
-  const memory = new InMemorySessionManager()
+  const memory = new SQLiteSessionManager({ databasePath: ":memory:" })
   const persistenceFailure = new Error("Disk write failed")
   const manager: ISessionManager = {
     createSession: memory.createSession,
@@ -1983,15 +2059,21 @@ test("new-session runFinished waits for rollback before exposing failure", async
     returnToParentBranch: memory.returnToParentBranch,
     getSessionInfo: memory.getSessionInfo,
     listSessions: memory.listSessions,
-    getMessages: memory.getMessages,
+    openSession: memory.openSession,
+    dispose: memory.dispose,
+    recoverInterruptedTools: memory.recoverInterruptedTools,
+    loadRequiredContext: memory.loadRequiredContext,
+    loadRecentConversation: memory.loadRecentConversation,
+    loadSelectedPaths: memory.loadSelectedPaths,
+    loadHistoryPage: memory.loadHistoryPage,
     appendMessage: () => {
       throw persistenceFailure
     },
-    getPresentationRevision: memory.getPresentationRevision,
-    getFileChangeProposals: memory.getFileChangeProposals,
     getCompactionCheckpoint: memory.getCompactionCheckpoint,
     saveCompactionCheckpoint: memory.saveCompactionCheckpoint,
     deleteSession: memory.deleteSession,
+    deleteEmptySession: memory.deleteEmptySession,
+    releaseSession: memory.releaseSession,
   }
   const runtime = runtimeWith(model, TEST_AGENTS, manager)
   const rollbackStarted = Promise.withResolvers<void>()
@@ -2069,7 +2151,7 @@ test("treats slash input as prompts", async () => {
   await slashRun.runFinished
 
   expect(interactionCount).toBe(1)
-  expect(view.getSnapshot().messages.map((message) => message.role)).toEqual([
+  expect(view.loadHistoryPage("main").messages.map((message) => message.role)).toEqual([
     "user",
     "assistant",
   ])

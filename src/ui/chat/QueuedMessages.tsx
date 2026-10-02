@@ -1,6 +1,7 @@
 import { useTerminalDimensions } from "@opentui/react"
 
 import type { IUserMessage } from "@/agent"
+import { Keycap } from "@/ui/components/Keycap"
 import { MessageCard } from "@/ui/components/MessageCard"
 import { ClippedBox } from "@/ui/terminal/renderer/ClippedBox"
 import { theme } from "@/ui/terminal/theme"
@@ -8,6 +9,8 @@ import { theme } from "@/ui/terminal/theme"
 interface IQueuedMessagesProps {
     readonly steering: readonly IUserMessage[] | undefined
     readonly followUps: readonly IUserMessage[] | undefined
+    readonly showHint?: boolean
+    readonly menuOpen?: boolean
 }
 
 // Bounds for the height limit, not a guaranteed allocation: the queue can shrink to zero.
@@ -49,7 +52,7 @@ export function QueuedMessages(props: IQueuedMessagesProps) {
                     showArrows: false,
                     trackOptions: {
                         backgroundColor: theme.surface,
-                        foregroundColor: theme.textMuted,
+                        foregroundColor: theme.textSecondary,
                     },
                 }}
             >
@@ -58,7 +61,7 @@ export function QueuedMessages(props: IQueuedMessagesProps) {
                         key={message.id}
                         id={`queued-message-${message.id}`}
                         content={message.content}
-                        title="Steering"
+                        title="Steering | queued"
                         borderColor={theme.amber}
                     />
                 ))}
@@ -67,22 +70,22 @@ export function QueuedMessages(props: IQueuedMessagesProps) {
                         key={message.id}
                         id={`queued-message-${message.id}`}
                         content={message.content}
-                        title="Follow-up"
+                        title="Follow-up | queued"
                         borderColor={theme.green}
                     />
                 ))}
             </scrollbox>
         </ClippedBox>
         {/* A box aligns the hint's allocation with the scroll viewport's cell grid. */}
-        <box flexShrink={0}>
+        {props.showHint !== false ? <box flexShrink={0}>
             <text
                 id="queued-messages-hint"
-                fg={theme.textMuted}
+                fg={theme.textSecondary}
                 wrapMode="word"
                 paddingLeft={1}
             >
-                Esc restores queued input
+                <Keycap keys="Esc" />{props.menuOpen ? " close menu" : " restores queued input"}
             </text>
-        </box>
+        </box> : null}
     </ClippedBox>
 }

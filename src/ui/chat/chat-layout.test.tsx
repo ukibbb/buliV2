@@ -4,6 +4,7 @@ import { testRender } from "@opentui/react/test-utils"
 import { act, useState } from "react"
 
 import type { IUserMessage } from "@/agent"
+import { ErrorNotice } from "@/ui/chat/ErrorNotice"
 import { QueuedMessages } from "@/ui/chat/QueuedMessages"
 import { ChatStatus } from "@/ui/chat/ChatStatus"
 import { InputMenu } from "@/ui/chat/InputMenu"
@@ -54,7 +55,7 @@ test.each([40, 80])("scrolls complete full-width colored queue cards at %i colum
       const card = setup.renderer.root.findDescendantById(`queued-message-${message.id}`) as BoxRenderable
       expect(card.width).toBe(scroll.viewport.width)
       expect(card.x).toBe(scroll.viewport.x)
-      expect(card.title).toBe(index === 0 ? "Steering" : "Follow-up")
+      expect(card.title).toBe(index === 0 ? "Steering | queued" : "Follow-up | queued")
       expect(card.borderColor.equals(RGBA.fromHex(index === 0 ? theme.amber : theme.green))).toBe(true)
       const text = card.getChildren()[0] as TextRenderable
       expect(text.plainText).toBe(message.content)
@@ -68,7 +69,7 @@ test.each([40, 80])("scrolls complete full-width colored queue cards at %i colum
       await act(async () => { await setup.renderOnce() })
       const lines = setup.captureCharFrame().split("\n")
       expect(lines[0]!.trim()).toBe("Fixed header")
-      expect(lines[hint.y]!.trim()).toBe("Esc restores queued input")
+      expect(lines[hint.y]!.trim()).toBe("[ Esc ] restores queued input")
       expect(lines[footer.y]!.trim()).toBe("Protected footer")
       expect(lines.slice(footer.y + 1).every((line) => line.trim() === "")).toBe(true)
       visibleRows.push(...lines.slice(scroll.y, scroll.y + scroll.height))
@@ -83,7 +84,7 @@ test.each([40, 80])("scrolls complete full-width colored queue cards at %i colum
     act(() => updateQueue([]))
     await render()
     expect(setup.renderer.root.findDescendantById("queued-messages")).toBeUndefined()
-    expect(setup.captureCharFrame()).not.toContain("Esc restores")
+    expect(setup.captureCharFrame()).not.toContain("[ Esc ] restores")
     act(() => updateQueue([{ ...messages[1]!, content: "Short queued input" }]))
     await render()
     expect(setup.captureCharFrame()).toContain("Short queued input")
@@ -113,9 +114,9 @@ test("recovers a queue viewport through zero and one available row", async () =>
         expect(setup.captureCharFrame().split("\n")[footer.y]!.trim()).toBe("Protected footer")
       }
       const content = setup.captureCharFrame()
-      if (height > 11) expect(content).toContain("Esc restores queued input")
+      if (height > 11) expect(content).toContain("[ Esc ] restores queued input")
       if (height === 15) expect(content).toContain("Queued input")
-      if (height === 11) expect(content).not.toContain("Esc restores queued input")
+      if (height === 11) expect(content).not.toContain("[ Esc ] restores queued input")
     }
   } finally {
     act(() => setup.renderer.destroy())
@@ -327,7 +328,7 @@ test.each([
       expect(setup.captureCharFrame().trim()).toBe(`[ Model : medium ] | ${expected}`)
       const spans = setup.captureSpans().lines.flatMap((line) => line.spans)
       expect(spans.find((span) => span.text.includes("ctx ~"))?.fg.equals(
-        RGBA.fromHex(theme.textMuted),
+        RGBA.fromHex(theme.textSecondary),
       )).toBe(true)
       expect(setup.captureCharFrame().match(/ctx ~/g)).toHaveLength(1)
       expect(setup.captureCharFrame()).not.toContain("compact")
@@ -393,6 +394,7 @@ test("recovers menu rows through notices, reopening and resizing in every frame"
     update = setMenu
     return <box height="100%" flexDirection="column">
       <InputMenu menu={menu} />
+      {menu?.errorMessage ? <ErrorNotice message={menu.errorMessage} /> : null}
       <text height={11} flexShrink={0}>Protected footer</text>
     </box>
   }
@@ -410,7 +412,7 @@ test("recovers menu rows through notices, reopening and resizing in every frame"
     act(() => update(selectedMenu))
     await render("→ item-4")
     act(() => update({ ...selectedMenu, errorMessage: "Menu error" }))
-    act(() => setup.resize(60, 14))
+    act(() => setup.resize(60, 16))
     await act(async () => { await setup.renderOnce() })
     expect(setup.captureCharFrame()).toContain("│ Menu error")
     act(() => setup.resize(60, 12))
@@ -452,6 +454,7 @@ test("keeps the selected command and wrapped menu error visible on a short termi
           })),
         }}
       />
+      <ErrorNotice message="Could not refresh model catalog. Retry when connection is available." />
       <box id="protected-footer" height={5} flexShrink={0}>
         <text>Editor and status</text>
       </box>
@@ -476,7 +479,7 @@ test("keeps the selected command and wrapped menu error visible on a short termi
     for (const [text, color] of [
       ["→ command-9", theme.green],
       ["command-8", theme.amber],
-      ["a narrow terminal", theme.textMuted],
+      ["a narrow terminal", theme.textSecondary],
     ]) {
       expect(spans.some((span) => span.text.includes(text!) && span.fg.equals(
         RGBA.fromHex(color!),

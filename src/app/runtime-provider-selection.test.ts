@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { BuliApplicationRuntime, type IBuliModelRuntimeConfig } from "@/app/runtime"
-import { InMemorySessionManager } from "@/sessions"
+import { SQLiteSessionManager } from "@/sessions"
 
 function registration(id: string, providerId?: string): IBuliModelRuntimeConfig {
     return {
@@ -12,7 +12,7 @@ function registration(id: string, providerId?: string): IBuliModelRuntimeConfig 
 
 function runtimeFor(initial: IBuliModelRuntimeConfig, loadModels: () => Promise<readonly IBuliModelRuntimeConfig[]>, startup = false) {
     return new BuliApplicationRuntime({
-        workspaceRoot: "/workspace", manager: new InMemorySessionManager(),
+        workspaceRoot: "/workspace", manager: new SQLiteSessionManager({ databasePath: ":memory:" }),
         agents: [{ id: "agent", name: "Agent", systemPrompt: "System", tools: [] }],
         defaultAgentId: "agent", models: [initial], loadModels,
         selection: { modelId: initial.id, reasoningEffort: "high" },

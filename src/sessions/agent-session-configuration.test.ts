@@ -1,11 +1,11 @@
 import { expect, spyOn, test } from "bun:test"
 import { defineAgentTool, ToolAccess, type IAgentModelRequest } from "@/agent"
 import { AgentSession } from "@/sessions/agent-session"
-import { InMemorySessionManager } from "@/sessions/in-memory-session-manager"
+import { SQLiteSessionManager } from "@/sessions/sqlite/sqlite-session-manager"
 import { estimateContextUsage } from "@/sessions/compaction/context-budget"
 
 function createFixture() {
-    const manager = new InMemorySessionManager()
+    const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
     manager.createSession({ id: "session", agentId: "agent", title: "Test", createdAt: 1, updatedAt: 1 })
     const requests: IAgentModelRequest[] = []
     const session = new AgentSession({
@@ -46,15 +46,15 @@ test("configuration updates preserve history, refresh telemetry and reach the mo
     const { session, manager, requests } = createFixture()
     try {
         await session.prompt("First question").runFinished
-        const history = session.state.messages
-        const durableHistory = manager.getMessages("session")
+        const history = session.loadHistoryPage("main").messages
+        const durableHistory = manager.loadRequiredContext("session").messages
         let publications = 0
         session.subscribe(() => { publications += 1 })
         const tools = [readTool]
         session.updateConfiguration({ systemPrompt: "Base with notes", tools })
         tools.length = 0
-        expect(session.state.messages).toBe(history)
-        expect(manager.getMessages("session")).toEqual(durableHistory)
+        expect(session.loadHistoryPage("main").messages).toEqual(history)
+        expect(manager.loadRequiredContext("session").messages).toEqual(durableHistory)
         expect(session.state.tools).toEqual([readTool])
         expect(publications).toBe(1)
         expect(session.getSnapshot().contextUsage).toEqual(estimateContextUsage({
@@ -63,9 +63,9 @@ test("configuration updates preserve history, refresh telemetry and reach the mo
         await session.prompt("Second question").runFinished
         expect(requests.at(-1)?.systemPrompt).toBe("Base with notes")
         expect(requests.at(-1)?.tools.map((tool) => tool.name)).toEqual([readTool.name])
-        const updatedHistory = session.state.messages
+        const updatedHistory = session.loadHistoryPage("main").messages
         session.updateConfiguration({ systemPrompt: "Base", tools: [] })
-        expect(session.state.messages).toBe(updatedHistory)
+        expect(session.loadHistoryPage("main").messages).toEqual(updatedHistory)
         expect(session.state.tools).toEqual([])
         expect(session.state.systemPrompt).toBe("Base")
     } finally {
@@ -102,41 +102,30 @@ test("duplicate names reject the entire configuration before changing state", as
     }
 })
 
-for (const method of ["getMessages", "getPresentationRevision"] as const) {
-    test(`configuration stays unchanged when ${method} fails during preparation`, async () => {
-        const { session, manager } = createFixture()
-        const state = session.state
-        const snapshot = session.getSnapshot()
-        let publications = 0
-        session.subscribe(() => { publications += 1 })
-        const failure = new Error("Preparation failed")
-        const read = spyOn(manager, method).mockImplementation(() => { throw failure })
-        try {
-            expect(() => session.updateConfiguration({
-                systemPrompt: "Notes", tools: [readTool, writeTool],
-            })).toThrow(failure)
-            expect(session.state).toBe(state)
-            expect(session.getSnapshot()).toBe(snapshot)
-            expect(publications).toBe(0)
-        } finally {
-            read.mockRestore()
-        }
-        try {
-            // A failed update must not leak the candidate tool list into branch changes.
-            session.createBranch()
-            session.returnToParentBranch()
-            expect(session.state.tools).toEqual([])
-            expect(session.state.systemPrompt).toBe("Base")
-            session.updateConfiguration({ systemPrompt: "Notes", tools: [readTool] })
-            expect(session.state.systemPrompt).toBe("Notes")
-            expect(session.getSnapshot().contextUsage).toEqual(estimateContextUsage({
-                systemPrompt: "Notes", tools: [readTool], messages: [],
-            }))
-        } finally {
-            await session.dispose()
-        }
+test("configuration uses the live branch without a storage read", async () => {
+    const { session, manager } = createFixture()
+    const side = session.createBranch()
+    let publications = 0
+    session.subscribe(() => { publications += 1 })
+    const read = spyOn(manager, "getActiveBranchId").mockImplementation(() => {
+        throw new Error("Unexpected branch read")
     })
-}
+    try {
+        session.updateConfiguration({ systemPrompt: "Notes", tools: [readTool, writeTool] })
+        expect(read).not.toHaveBeenCalled()
+        expect(publications).toBe(1)
+        expect(session.getSnapshot().activeBranchId).toBe(side)
+        expect(session.state.tools).toEqual([readTool])
+        expect(session.state.systemPrompt).toBe("Notes")
+        expect(session.getSnapshot().contextUsage).toEqual(estimateContextUsage({
+            systemPrompt: "Notes", tools: [readTool], messages: [],
+        }))
+    } finally {
+        read.mockRestore()
+        await session.dispose()
+        manager.dispose()
+    }
+})
 
 test("observer failure does not reject a committed configuration or skip other observers", async () => {
     const { session } = createFixture()

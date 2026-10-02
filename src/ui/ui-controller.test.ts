@@ -1193,8 +1193,6 @@ function sessionSource(
 ) {
   const snapshot: ISessionSnapshot = {
     activeBranchId: "main",
-    messages: [],
-    fileChangeProposals: [],
     pendingSteeringMessages: [],
     pendingFollowUpMessages: [],
     isRunning,
@@ -1204,5 +1202,7 @@ function sessionSource(
   return {
     subscribe: () => () => undefined,
     getSnapshot: () => snapshot,
+    subscribeHistory: () => () => undefined,
+    loadHistoryPage: (branchId: string) => ({ sessionId: "test", branchId, messages: [] }),
   }
 }

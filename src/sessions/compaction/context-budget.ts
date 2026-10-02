@@ -114,17 +114,15 @@ export function estimateContextUsage(
     input: IContextInput,
     contextWindowTokens?: number,
 ): IContextUsage {
-    const reportedInputTokens = reportedInputSafetyTokens(input)
+    const localInputTokens = estimateContextInputTokens(input)
+    const reportedInput = estimateReportedInput(input)
     const estimatedInputTokens = Math.max(
-        estimateContextInputTokens(input),
-        reportedInputTokens,
+        localInputTokens,
+        reportedInput?.estimatedInputTokens ?? 0,
     )
-    // Without a provider usage anchor, retain the byte-level safety multiplier
-    // to guard against tokenizer underestimates. Expose this existing bound
-    // separately so callers can explain compaction without changing its policy.
-    const compactionInputTokens = reportedInputTokens > 0
-        ? estimatedInputTokens
-        : estimatedInputTokens * ESTIMATED_BYTES_PER_TOKEN
+    const compactionInputTokens = reportedInput === undefined
+        ? localInputTokens * ESTIMATED_BYTES_PER_TOKEN
+        : Math.max(localInputTokens, reportedInput.safetyInputTokens)
     if (contextWindowTokens === undefined) {
         return { estimatedInputTokens, compactionInputTokens, shouldCompact: false }
     }
@@ -144,31 +142,20 @@ export function estimateContextUsage(
     }
 }
 
-/** Adds a byte-level bound for the current fixed prefix to retained usage. */
-export function reportedInputSafetyTokens(input: IContextInput): number {
-    const reportedTokens = reportedInputTokenFloor(
-        input.messages,
-        input.modelProfile,
-        input.estimationPolicy,
+/** Retains the original compaction progress metric independently of display estimates. */
+export function estimateCompactionProgressInputTokens(input: IContextInput): number {
+    return Math.max(
+        estimateContextInputTokens(input),
+        estimateReportedInput(input)?.safetyInputTokens ?? 0,
     )
-    if (reportedTokens === 0) return 0
-    return reportedTokens + estimateContextInputTokens({
-        systemPrompt: input.systemPrompt,
-        ...(input.contextSummary === undefined
-            ? {}
-            : { contextSummary: input.contextSummary }),
-        messages: [],
-        tools: input.tools,
-        ...(input.estimationPolicy === undefined ? {} : { estimationPolicy: input.estimationPolicy }),
-    }) * ESTIMATED_BYTES_PER_TOKEN
 }
 
-/** Anchors at provider usage and adds a byte-level bound for everything appended. */
-export function reportedInputTokenFloor(
-    messages: readonly TAgentMessage[],
-    modelProfile?: IModelProfile,
-    policy: IContextEstimationPolicy = DEFAULT_ESTIMATION_POLICY,
-): number {
+/** Shares the appended-content estimate between telemetry and the safety bound. */
+function estimateReportedInput(input: IContextInput): {
+    readonly estimatedInputTokens: number
+    readonly safetyInputTokens: number
+} | undefined {
+    const { messages, modelProfile } = input
     for (let index = messages.length - 1; index >= 0; index -= 1) {
         const message = messages[index]
         if (
@@ -181,14 +168,20 @@ export function reportedInputTokenFloor(
                 && message.model.modelId === modelProfile.modelId
             ))
         ) {
-            // Provider inputTokens already includes cache reads and writes;
-            // adding those detail counters again would inflate the anchor.
-            return message.usage.inputTokens
-                + estimateMessagesInputTokens(messages.slice(index), policy)
-                    * ESTIMATED_BYTES_PER_TOKEN
+            // Provider inputTokens already includes cache reads and writes.
+            const appendedTokens = estimateMessagesInputTokens(
+                messages.slice(index),
+                input.estimationPolicy,
+            )
+            const prefixTokens = estimateContextInputTokens({ ...input, messages: [] })
+            return {
+                estimatedInputTokens: message.usage.inputTokens + appendedTokens,
+                safetyInputTokens: message.usage.inputTokens
+                    + (appendedTokens + prefixTokens) * ESTIMATED_BYTES_PER_TOKEN,
+            }
         }
     }
-    return 0
+    return undefined
 }
 
 function providerVisibleMessages(

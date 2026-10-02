@@ -60,7 +60,7 @@ export async function streamModelTurn(
             ...(options.contextSummary === undefined
                 ? {}
                 : { contextSummary: options.contextSummary }),
-            messages: structuredClone(options.messages),
+            messages: options.messages,
             tools,
             reasoningEffort: options.reasoningEffort,
             signal: options.signal,

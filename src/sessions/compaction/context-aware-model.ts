@@ -167,7 +167,7 @@ function requestBudgetError(usage: IContextUsage): Error {
         "Model request remains above Buli's safe context budget after compaction"
         + `${threshold === undefined
             ? ""
-            : ` (${usage.estimatedInputTokens} estimated tokens; safe limit ${threshold})`}`
+            : ` (${usage.compactionInputTokens} safety-adjusted input tokens; safe limit ${threshold})`}`
         + "; no provider request was sent.",
     )
 }

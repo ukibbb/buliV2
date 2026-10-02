@@ -49,8 +49,10 @@ a successful publication.
 Set the exact same version in:
 
 - `package.json`
-- the root workspace entry in `bun.lock`
 - `npm/package.json`
+
+The current `bun.lock` format does not record the root package version, so a
+version-only release does not require a lockfile edit.
 
 The release build rejects mismatched versions, and the tag must equal the
 version prefixed with `v`.
@@ -105,10 +107,10 @@ embedded assets or terminal behavior.
 
 ## 5. Commit the release
 
-Add the intended feature files, tests, and three version files explicitly:
+Add the intended feature files, tests, and both version files explicitly:
 
 ```bash
-git add package.json bun.lock npm/package.json path/to/source path/to/test
+git add package.json npm/package.json path/to/source path/to/test
 git diff --cached --check
 git commit -m "Release v0.1.1"
 git push origin main

@@ -168,12 +168,24 @@ export const BULI_COMMANDS: readonly TBuliCommand[] = [
         kind: "action",
         name: "novibe",
         description: "Włącz NoVibe lub wyłącz je przez /novibe off",
-        handler: async (args, { application, sessionId }) => {
-            if (!sessionId) throw new Error("NoVibe wymaga aktywnej sesji.")
+        handler: async (args, { application, sessionId, activateSession }) => {
             const argument = args.trim()
-            if (argument === "") return application.activateNovibe(sessionId)
-            if (argument === "off") return application.deactivateNovibe(sessionId)
-            throw new Error("Użyj /novibe albo /novibe off.")
+            if (argument !== "" && argument !== "off") {
+                throw new Error("Użyj /novibe albo /novibe off.")
+            }
+            if (argument === "off") {
+                return sessionId
+                    ? application.deactivateNovibe(sessionId)
+                    : "NoVibe nie jest aktywne."
+            }
+            if (sessionId) return application.activateNovibe(sessionId)
+
+            const session = application.createSession({
+                agentId: application.getSnapshot().defaultAgentId,
+                title: "Nowa rozmowa",
+            })
+            await activateSession(session.id)
+            return application.activateNovibe(session.id)
         },
     },
 ]

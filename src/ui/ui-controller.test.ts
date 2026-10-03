@@ -890,6 +890,78 @@ test("NoVibe action arguments reach the handler and never become model prompts",
   controller.dispose()
 })
 
+test("NoVibe from Home opens an empty session before activation and reuses it for the first prompt", async () => {
+  const calls: string[] = []
+  const spy = applicationSpy({
+    activateNovibe: async (id) => {
+      expect(controller.getSnapshot().route).toEqual({ type: "session", sessionId: id })
+      expect(spy.opened).toContain(id)
+      expect(spy.prompts).toEqual([])
+      calls.push(id)
+      return "NoVibe włączone."
+    },
+  })
+  const controller = new BuliUiController({ application: spy.application })
+  try {
+    await controller.submitInput("/novibe")
+    expect(spy.created).toEqual([{ agentId: "test-agent", title: "Nowa rozmowa" }])
+    expect(calls).toEqual(["created-1"])
+    controller.dismissMenu()
+    await controller.submitInput("Use NoVibe from the first prompt")
+    expect(spy.prompts).toEqual([{ sessionId: "created-1", text: "Use NoVibe from the first prompt" }])
+    expect(spy.created).toHaveLength(1)
+  } finally {
+    controller.dispose()
+  }
+})
+
+test.each([
+  ["/novibe off", "NoVibe nie jest aktywne."],
+  ["/novibe invalid", "Użyj /novibe albo /novibe off."],
+])("%s from Home does not create a session or contact MCP", async (command, message) => {
+  const calls: string[] = []
+  const spy = applicationSpy({
+    activateNovibe: async (id) => { calls.push(id); return "unexpected" },
+    deactivateNovibe: async (id) => { calls.push(id); return "unexpected" },
+  })
+  const controller = new BuliUiController({ application: spy.application })
+  try {
+    await controller.submitInput(command!)
+    const menu = controller.getSnapshot().menu
+    expect(menu?.errorMessage ?? menu?.emptyMessage).toBe(message)
+    expect(controller.getSnapshot().route).toEqual({ type: "home" })
+    expect(spy.created).toEqual([])
+    expect(spy.prompts).toEqual([])
+    expect(calls).toEqual([])
+  } finally {
+    controller.dispose()
+  }
+})
+
+test("NoVibe connection failure retains the empty session for retry", async () => {
+  const calls: string[] = []
+  const spy = applicationSpy({
+    activateNovibe: async (id) => {
+      calls.push(id)
+      if (calls.length === 1) throw new Error("MCP connection failed")
+      return "NoVibe włączone."
+    },
+  })
+  const controller = new BuliUiController({ application: spy.application })
+  try {
+    await controller.submitInput("/novibe")
+    expect(controller.getSnapshot().route).toEqual({ type: "session", sessionId: "created-1" })
+    expect(controller.getSnapshot().menu?.errorMessage).toBe("MCP connection failed")
+    await controller.submitInput("/novibe")
+    expect(calls).toEqual(["created-1", "created-1"])
+    expect(spy.created).toHaveLength(1)
+    expect(spy.prompts).toEqual([])
+    expect(controller.getSnapshot().menu?.emptyMessage).toBe("NoVibe włączone.")
+  } finally {
+    controller.dispose()
+  }
+})
+
 test("action commands reject arguments instead of sending a prompt", async () => {
   const spy = applicationSpy()
   const controller = new BuliUiController({ application: spy.application })

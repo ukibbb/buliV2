@@ -26,6 +26,42 @@ test("advertises a Codex client version compatible with GPT-6 Sol", () => {
     .toBeGreaterThanOrEqual(0)
 })
 
+test("uses the pinned Codex client version in the catalog URL", () => {
+  expect(OPENAI_CODEX_CLIENT_VERSION).toBe("0.160.0")
+  expect(new URL(OPENAI_CODEX_MODELS_URL).searchParams.get("client_version"))
+    .toBe(OPENAI_CODEX_CLIENT_VERSION)
+})
+
+test("loads account-authorized GPT-6.1 Sol and Fast without public metadata", async () => {
+  const catalog = createOpenAiModelCatalog({
+    auth: catalogAuth(async () => Response.json({
+      models: [{
+        slug: "gpt-6.1-sol",
+        display_name: "GPT-6.1-Sol",
+        visibility: "list",
+        input_modalities: ["text", "image"],
+        context_window: 272_000,
+        default_reasoning_level: "low",
+        supported_reasoning_levels: ["low", "medium", "high", "xhigh", "max", "ultra"]
+          .map(effort => ({ effort })),
+        service_tiers: [{ id: "priority" }],
+      }],
+    })),
+    fetch: fetchImplementation(async () => new Response(null, { status: 503 })),
+  })
+
+  const models = await catalog.load()
+  expect(models.map(model => model.id)).toEqual(["gpt-6.1-sol", "gpt-6.1-sol::fast"])
+  for (const model of models) {
+    expect(model.modelId).toBe("gpt-6.1-sol")
+    expect(model.contextWindowTokens).toBe(272_000)
+    expect(model.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh", "max"])
+    expect(model.defaultReasoningEffort).toBe("low")
+  }
+  expect(models[0]?.serviceTier).toBeUndefined()
+  expect(models[1]?.serviceTier).toBe("priority")
+})
+
 test("uses Codex availability and enriches matching IDs from models.dev", async () => {
   const publicRequests: Array<{
     readonly request: Request

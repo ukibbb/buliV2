@@ -11,10 +11,9 @@ export const OPENAI_OAUTH_DEVICE_AUTHORIZATION_URL =
 export const OPENAI_OAUTH_DEVICE_REDIRECT_URL =
     "https://auth.openai.com/deviceauth/callback"
 export const OPENAI_OAUTH_ORIGINATOR = "buli"
-// The authenticated catalog uses this version to select compatible models.
-// GPT-6 Sol requires a minimum client version of 0.155.0.
-// https://github.com/openai/codex/blob/main/codex-rs/models-manager/models.json
-export const OPENAI_CODEX_CLIENT_VERSION = "0.155.0"
+// Client compatibility version sent to the authenticated Codex endpoints.
+// https://github.com/openai/codex/releases/tag/rust-v0.160.0
+export const OPENAI_CODEX_CLIENT_VERSION = "0.160.0"
 export const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 export const OPENAI_CODEX_MODELS_URL =
     `${OPENAI_CODEX_BASE_URL}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`

@@ -336,7 +336,7 @@ test.each([[40, 8], [40, 10], [40, 12], [40, 13], [40, 14], [80, 14], [80, 24], 
       expect(textarea.y + textarea.height).toBeLessThan(height)
       expect(textareaRenderable(setup.renderer.root)).toBe(textarea)
       expect(textarea.focused).toBe(true)
-      expect((textarea.parent as BoxRenderable).borderColor.equals(RGBA.fromHex(theme.green))).toBe(true)
+      expect((textarea.parent as BoxRenderable).borderColor.equals(RGBA.fromHex(theme.pink))).toBe(true)
       const frame = setup.captureCharFrame()
       expect(frame).toContain("[ Test : medium ]")
       expect(frame).not.toContain("During generation")

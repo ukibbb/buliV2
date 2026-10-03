@@ -51,13 +51,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function convertResult(result: TMcpToolResult): IAgentToolResult {
+    if (!result.isError && result.structuredContent !== undefined) {
+        return {
+            content: JSON.stringify(result.structuredContent),
+            outcome: "completed",
+        }
+    }
     const parts: string[] = []
     for (const block of result.content) {
         if (block.type === "text") parts.push(block.text)
         else parts.push(`[Nieobsługiwany blok wyniku MCP: ${block.type}]`)
-    }
-    if (result.structuredContent !== undefined) {
-        parts.push(JSON.stringify(result.structuredContent))
     }
     return {
         content: parts.join("\n\n") || "Narzędzie MCP zwróciło pustą odpowiedź.",

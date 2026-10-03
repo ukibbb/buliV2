@@ -1,4 +1,6 @@
 import {
+  BoxRenderable,
+  RGBA,
   type ClipboardReadResult,
   type ClipboardService,
   type Renderable,
@@ -9,8 +11,22 @@ import { testRender } from "@opentui/react/test-utils"
 import { act, useRef, useState } from "react"
 
 import { PromptEditor } from "@/ui/chat/PromptEditor"
+import { theme } from "@/ui/terminal/theme"
 import type { IPathCompletion } from "@/ui/controller/path-menu"
 import type { IUserInputContent } from "@/agent"
+
+test("prompt editor uses a pink border", async () => {
+  const setup = await testRender(<PromptHarness onSubmit={() => {}} />, { width: 80, height: 10 })
+
+  try {
+    await act(async () => { await setup.renderOnce() })
+    const border = findTextarea(setup.renderer.root).parent as BoxRenderable
+    expect(border).toBeInstanceOf(BoxRenderable)
+    expect(border.borderColor.equals(RGBA.fromHex(theme.pink))).toBe(true)
+  } finally {
+    act(() => setup.renderer.destroy())
+  }
+})
 
 test("selected path completion becomes a structured reference", async () => {
   const submitted: IUserInputContent[] = []

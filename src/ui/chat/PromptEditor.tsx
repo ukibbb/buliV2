@@ -358,7 +358,7 @@ export function PromptEditor(props: IPromptEditorProps) {
             width="100%"
             border={["top", "bottom"]}
             borderStyle="single"
-            borderColor={theme.green}
+            borderColor={theme.pink}
             style={{
                 minHeight: CHAT_MIN_ROW_COUNT,
                 maxHeight: CHAT_MAX_ROW_COUNT,

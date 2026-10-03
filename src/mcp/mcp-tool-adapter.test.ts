@@ -59,6 +59,29 @@ test("MCP error, structured and empty responses retain their meaning", async () 
     const cases: { result: TMcpToolResult; content: string; outcome: TToolExecutionOutcome }[] = [
         { result: { content: [{ type: "text", text: "Not found" }], isError: true }, content: "Not found", outcome: "failed" },
         { result: { content: [], structuredContent: { id: "note" } }, content: '{"id":"note"}', outcome: "completed" },
+        {
+            result: {
+                content: [{ type: "text", text: '{\n  "id": "note"\n}' }],
+                structuredContent: { id: "note" },
+            },
+            content: '{"id":"note"}', outcome: "completed",
+        },
+        {
+            result: {
+                content: [{ type: "text", text: "Summary" }],
+                structuredContent: [{ id: "note" }],
+            },
+            content: '[{"id":"note"}]', outcome: "completed",
+        },
+        {
+            result: {
+                content: [{ type: "text", text: "Not found" }],
+                structuredContent: { id: "note" },
+                isError: true,
+            },
+            content: "Not found", outcome: "failed",
+        },
+        { result: { content: [{ type: "text", text: "Done" }] }, content: "Done", outcome: "completed" },
         { result: { content: [] }, content: "Narzędzie MCP zwróciło pustą odpowiedź.", outcome: "completed" },
     ]
     for (const { result, content, outcome } of cases) {

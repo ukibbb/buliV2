@@ -149,7 +149,7 @@ function messageBlocks(
             return [{
                 key: message.id,
                 kind: "user",
-                node: <MessageCard id={`user-message-${message.id}`} content={message.content} borderColor={theme.green} />,
+                node: <MessageCard id={`user-message-${message.id}`} content={message.content} borderColor={theme.pink} />,
             }]
         case "assistant":
             return assistantBlocks(message, false, projection, runningToolCallIds, currentErrorMessageId)
@@ -215,12 +215,12 @@ function CompactionCheckpointCard(props: {
     return <box width="100%" flexDirection="column" gap={1}>
         <box
             width="100%"
-            border={props.streaming}
+            border
             borderStyle="single"
-            borderColor={theme.amber}
-            paddingX={props.streaming ? 1 : 0}
+            borderColor={props.streaming ? theme.amber : theme.green}
+            paddingX={1}
         >
-            <text fg={props.streaming ? theme.amber : theme.textSecondary}>
+            <text fg={props.streaming ? theme.amber : theme.green}>
                 {props.streaming ? "Compacting context…" : "Context compacted"}
             </text>
         </box>

@@ -167,11 +167,15 @@ export const BULI_COMMANDS: readonly TBuliCommand[] = [
     {
         kind: "action",
         name: "novibe",
-        description: "Włącz NoVibe lub wyłącz je przez /novibe off",
+        description: "NoVibe: login, status, logout; /novibe włącza narzędzia, off wyłącza",
         handler: async (args, { application, sessionId, activateSession }) => {
             const argument = args.trim()
+            if (argument === "login" || argument === "status" || argument === "logout") {
+                if (!application.novibeAccount) throw new Error("NoVibe authentication is unavailable")
+                return application.novibeAccount(argument, sessionId ?? undefined)
+            }
             if (argument !== "" && argument !== "off") {
-                throw new Error("Użyj /novibe albo /novibe off.")
+                throw new Error("Użyj /novibe, /novibe off, /novibe login, /novibe status albo /novibe logout.")
             }
             if (argument === "off") {
                 return sessionId

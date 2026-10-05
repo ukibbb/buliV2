@@ -129,7 +129,10 @@ for account discovery and request settings.
 | `/return` | Return to the parent branch without transferring side messages. |
 | `/compact` | Summarize older context without deleting saved history. |
 | `/novibe` | Connect the active session to the local NoVibe MCP server. |
-| `/novibe off` | Disconnect NoVibe from the active session. |
+| `/novibe off` | Disconnect NoVibe from the active session without logging out. |
+| `/novibe login` | Authorize Buli through the NoVibe browser consent screen. |
+| `/novibe status` | Show account access and current conversation tool status. |
+| `/novibe logout` | Revoke Buli access and disconnect its NoVibe sessions. |
 
 Branches restrict tools to those classified as read-only; they are conversation
 branches, not Git branches or filesystem snapshots. Returning to the parent does
@@ -161,6 +164,19 @@ follow-up messages are held in memory: exiting or crashing can discard them.
 specific NoVibe integration, not a general-purpose server configuration interface.
 Only connect a server you trust: its tools and instructions become available to
 the session.
+
+Run `/novibe login` before activating tools. The authorization server is pinned
+to `http://localhost:8000`; the browser UI normally runs at `http://localhost:3000`.
+The NoVibe backend requires migration `0009_mcp_oauth`. Login uses PKCE and a
+random ephemeral IPv4 loopback callback, with GitHub sign-in if needed. Approval
+allows reading, creating, changing and deleting your NoVibe resources.
+
+Login does not create a conversation or enable tools. Use `/novibe` separately.
+NoVibe credentials are stored in Buli's local auth store, not conversation history.
+They are separate from model-provider credentials and browser sessions. Refresh
+is serialized through the auth-store file lock. `/novibe logout` does not log out
+the browser; if server revocation cannot be confirmed, local credentials are still
+removed and Buli reports that limitation. Completed writes are not undone.
 
 ## Project instructions
 

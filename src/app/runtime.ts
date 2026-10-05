@@ -22,6 +22,7 @@ import { generateRandomId } from "@/common/ids"
 import { version as applicationVersion } from "../../package.json"
 import { SessionMcpController } from "@/mcp/session-mcp-controller"
 import { McpConnection } from "@/mcp/mcp-connection"
+import { NovibeAuth } from "@/app/novibe-auth/novibe-auth"
 import { createNovibeContribution, NOVIBE_ENDPOINT, NOVIBE_SERVER_ID } from "@/mcp/novibe"
 import {
     AgentSession,
@@ -74,6 +75,8 @@ export interface IBuliRuntimeOptions {
     readonly now?: () => number
     readonly generateId?: () => string
     readonly toolOutputStore?: IToolOutputStore
+    readonly novibeAuth?: NovibeAuth
+    readonly openNovibeUrl?: (url: string) => Promise<unknown>
 }
 
 
@@ -98,6 +101,9 @@ export class BuliApplicationRuntime implements IBuliApplication {
     private readonly generateId: () => string
     private readonly toolOutputStore: IToolOutputStore | undefined
     private readonly lifetime = new AbortController()
+    private readonly novibeAuth: NovibeAuth | undefined
+    private readonly openNovibeUrl: ((url: string) => Promise<unknown>) | undefined
+    private novibeAccountChanging = false
 
     private selection: IBuliModelSelection
     private preserveRestoredModel = false
@@ -124,6 +130,8 @@ export class BuliApplicationRuntime implements IBuliApplication {
     private readonly listeners = new Set<TBuliRuntimeListener>()
 
     constructor(options: IBuliRuntimeOptions) {
+        this.novibeAuth = options.novibeAuth
+        this.openNovibeUrl = options.openNovibeUrl
         this.workspaceRoot = options.workspaceRoot
         this.manager = options.manager
         const agentIds = new Set<string>()
@@ -242,7 +250,27 @@ export class BuliApplicationRuntime implements IBuliApplication {
         return task
     }
 
+    readonly novibeAccount = async (action: "login" | "status" | "logout", sessionId?: string): Promise<string> => {
+        if (!this.novibeAuth || this.disposed) throw new Error("NoVibe authentication is unavailable")
+        if (action === "status") {
+            const status = await this.novibeAuth.status(this.lifetime.signal)
+            const active = sessionId && this.sessionMcpControllers.get(sessionId)?.isActive(NOVIBE_SERVER_ID)
+            return `${status} Narzędzia w rozmowie: ${active ? "włączone" : "wyłączone"}.`
+        }
+        if (this.novibeAccountChanging) throw new Error("NoVibe: trwa operacja konta.")
+        this.novibeAccountChanging = true
+        try {
+            for (const controller of this.sessionMcpControllers.values()) controller.deactivate(NOVIBE_SERVER_ID)
+            await Promise.all([...new Set([...this.novibeConnections.keys(), ...this.novibeActivations.keys()])].map(id => this.closeNovibeConnection(id)))
+            if (action === "logout") return await this.novibeAuth.logout()
+            if (!this.openNovibeUrl) throw new Error("Browser opener is unavailable")
+            await this.novibeAuth.logout()
+            return await this.novibeAuth.login(this.openNovibeUrl, this.lifetime.signal)
+        } finally { this.novibeAccountChanging = false }
+    }
+
     readonly activateNovibe = (sessionId: string): Promise<string> => {
+        if (this.novibeAccountChanging) return Promise.reject(new Error("NoVibe: trwa operacja konta."))
         if (this.disposed) return Promise.reject(new Error("Buli runtime is disposed"))
         const session = this.getOrOpenAgentSession(sessionId)
         const controller = this.sessionMcpControllers.get(sessionId)!
@@ -255,6 +283,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
             session.assertCanUpdateConfiguration()
             const connection = await McpConnection.connect({
                 endpoint: new URL(NOVIBE_ENDPOINT),
+                ...(this.novibeAuth ? { authProvider: this.novibeAuth.provider(this.lifetime.signal) } : {}),
                 clientInfo: { name: "buli", version: applicationVersion },
                 signal,
             })

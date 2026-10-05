@@ -1,4 +1,4 @@
-import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client"
+import { Client, StreamableHTTPClientTransport, type OAuthClientProvider } from "@modelcontextprotocol/client"
 
 export type TMcpTool = Awaited<ReturnType<Client["listTools"]>>["tools"][number]
 export type TMcpToolResult = Awaited<ReturnType<Client["callTool"]>>
@@ -9,6 +9,7 @@ interface IMcpConnectionOptions {
     readonly clientInfo: { readonly name: string; readonly version: string }
     readonly signal: AbortSignal
     readonly timeoutMs?: number
+    readonly authProvider?: OAuthClientProvider
 }
 
 /** One HTTP client. The caller owns closing it on deactivation or session shutdown. */
@@ -29,7 +30,7 @@ export class McpConnection {
         }
         options.signal.throwIfAborted()
         const client = new Client(options.clientInfo)
-        const transport = new StreamableHTTPClientTransport(options.endpoint)
+        const transport = new StreamableHTTPClientTransport(options.endpoint, options.authProvider ? { authProvider: options.authProvider } : {})
         const signal = AbortSignal.any([options.signal, AbortSignal.timeout(timeoutMs)])
         try {
             await client.connect(transport, { signal, timeout: timeoutMs })

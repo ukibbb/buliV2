@@ -8,6 +8,8 @@ import type {
 } from "@/agent"
 import { createBuliAgentDefinition } from "@/agent/definitions/buli"
 import type { IAuthenticationService } from "@/authentication"
+import { NovibeAuth } from "@/app/novibe-auth/novibe-auth"
+import open from "open"
 import {
     createAuthentication,
     type IAuthenticationComposition,
@@ -141,6 +143,8 @@ export async function createBuliApplication(
         const preferencesPath = options.preferencesPath ?? defaultModelPreferencesPath()
         const preferences = options.model === undefined ? loadModelPreferences(preferencesPath) : {}
         const applicationRuntime = new BuliApplicationRuntime({
+            novibeAuth: new NovibeAuth(),
+            openNovibeUrl: (url) => open(url),
             ...(preferences.selection === undefined ? {} : { restoredSelection: preferences.selection }),
             ...(preferences.warning === undefined ? {} : { preferencesWarning: preferences.warning }),
             ...(options.model === undefined ? {

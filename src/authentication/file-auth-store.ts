@@ -65,6 +65,14 @@ function parseCredential(
         }
         return { type: "api_key", key: value.key }
     }
+    if (value.type === "mcp_oauth") {
+        if (![value.issuer, value.resource, value.clientId, value.access, value.refresh].every(isNonEmptyString)
+            || typeof value.expires !== "number" || !Number.isFinite(value.expires) || value.expires < 0) {
+            throw new TypeError(`Invalid MCP credential for provider ${providerId}`)
+        }
+        return { type: "mcp_oauth", issuer: value.issuer as string, resource: value.resource as string,
+            clientId: value.clientId as string, access: value.access as string, refresh: value.refresh as string, expires: value.expires }
+    }
     if (value.type !== "oauth") {
         throw new TypeError(`Unsupported credential type for provider ${providerId}`)
     }
@@ -102,6 +110,7 @@ function parseCredential(
 }
 
 function copyCredential(credential: TAuthCredential): TAuthCredential {
+    if (credential.type === "mcp_oauth") return { ...credential }
     if (credential.type === "api_key") {
         return { type: "api_key", key: credential.key }
     }
@@ -127,6 +136,10 @@ function credentialsEqual(
     if (left.type !== right.type) return false
     if (left.type === "api_key" && right.type === "api_key") {
         return left.key === right.key
+    }
+    if (left.type === "mcp_oauth" && right.type === "mcp_oauth") {
+        return left.issuer === right.issuer && left.resource === right.resource && left.clientId === right.clientId
+            && left.access === right.access && left.refresh === right.refresh && left.expires === right.expires
     }
     if (left.type !== "oauth" || right.type !== "oauth") return false
     return left.access === right.access

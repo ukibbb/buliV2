@@ -121,6 +121,7 @@ export interface IBuliApplication
         query: string,
         signal?: AbortSignal,
     ) => Promise<readonly IBuliPathSuggestion[]>
+    readonly novibeAccount?: (action: "login" | "status" | "logout", sessionId?: string) => Promise<string>
     readonly activateNovibe: (sessionId: string) => Promise<string>
     readonly deactivateNovibe: (sessionId: string) => Promise<string>
     readonly createBranch: (sessionId: string) => string

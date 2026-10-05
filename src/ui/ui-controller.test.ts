@@ -883,7 +883,7 @@ test("NoVibe action arguments reach the handler and never become model prompts",
   await controller.submitInput("/novibe off")
   expect(controller.getSnapshot().menu?.emptyMessage).toBe("NoVibe wyłączone.")
   await controller.submitInput("/novibe invalid")
-  expect(controller.getSnapshot().menu?.errorMessage).toBe("Użyj /novibe albo /novibe off.")
+  expect(controller.getSnapshot().menu?.errorMessage).toBe("Użyj /novibe, /novibe off, /novibe login, /novibe status albo /novibe logout.")
   expect(calls).toEqual(["on:session-1", "off:session-1"])
   expect(spy.prompts).toEqual([])
   expect(spy.steering).toEqual([])
@@ -917,7 +917,7 @@ test("NoVibe from Home opens an empty session before activation and reuses it fo
 
 test.each([
   ["/novibe off", "NoVibe nie jest aktywne."],
-  ["/novibe invalid", "Użyj /novibe albo /novibe off."],
+  ["/novibe invalid", "Użyj /novibe, /novibe off, /novibe login, /novibe status albo /novibe logout."],
 ])("%s from Home does not create a session or contact MCP", async (command, message) => {
   const calls: string[] = []
   const spy = applicationSpy({

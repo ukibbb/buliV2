@@ -45,10 +45,27 @@ Efekt: ustandaryzowanie, podsumowanie i pełna wiedza o wprowadzonych zmianach.
 Gdy odpowiedź zależy od projektu lub technologii, sprawdź kod, używane biblioteki i dokumentację. Wskaż ścieżki i linie albo konkretną stronę dokumentacji. Sprawdź możliwości technologii, zanim je polecisz. Nie zgaduj, jak działa API, i nie nazywaj przewidywanej wydajności pomiarem.
 Oddziel rzeczy sprawdzone, opisane w dokumentacji i dopiero proponowane. Jeśli nie możesz czegoś ustalić, powiedz, czego brakuje i które wnioski od tego zależą.
 # Jaki kod piszesz
-- Stosuj wzorce tylko wtedy, gdy rzeczywiście upraszczają kod. Inne możesz zaproponować, wyjaśniając ich korzyści, koszty i skutki, ale nie wdrażaj ich bez zgody. Każda nowa zależność lub warstwa wymaga uzasadnienia i musi mieścić się w uzgodnionym planie.
-- Pisz kod prosty, poprawny i czytelny. Nazywaj rzeczy według ich celu; układaj kod od ogółu do szczegółu.
-- Dziel odpowiedzialności jasno i ograniczaj zależności. Nie kopiuj rozwiązań z projektu bez oceny.
+Graunlarnie rozdzielaj odpowiedzialności, pisz kod otwarty na zmiany.
+Wybieraj najprostsze kompletne rozwiązanie, które spełnia wymagania i zachowuje poprawność oraz bezpieczeństwo. Oceniaj prostotę całego rozwiązania, a nie liczbę linii w jednym pliku.
+Przed implementacją:
+- Prześledź istniejący kod i sprawdź możliwości używanej biblioteki. Preferuj jej gotowe mechanizmy zamiast odtwarzać je samodzielnie.
+- Zacznij od rozwiązania bez nowych warstw, klas i zależności. Dodawaj je tylko wtedy, gdy rozwiązują konkretny, obecny problem.
+- Sprawdź, czy komplikację można usunąć przez zmianę sposobu wykonania zadania, zamiast jedynie schować ją w funkcji.
+Podczas pisania:
+- Pisz kod w kolejności działania: wejście → sprawdzenie → operacja → wynik.
+- Preferuj jawne wywołania i składanie elementów zamiast tworzenia gotowych struktur, a następnie podmieniania ich wnętrza.
+- Utrzymuj jedną odpowiedzialność w jednym miejscu. Nie rozpraszaj tej samej reguły ani obsługi danych między modułami.
+- Wydzielaj funkcje, gdy ich nazwa wyjaśnia konkretną operację, usuwa istotne powtórzenie lub oddziela odpowiedzialności. Nie dziel kodu wyłącznie po to, żeby funkcje były krótsze.
+- Używaj czytelnych nazw, prostych warunków i wczesnych wyjść. Nie upychaj kilku decyzji w jednym wyrażeniu.
+- Nie twórz uniwersalnych mechanizmów dla hipotetycznych przyszłych zastosowań. Obsługuj obecne wymagania.
+- Nie dodawaj konfiguracji, flag i parametrów sterujących zachowaniem, jeśli jasne, osobne operacje wystarczą.
+- Nie usuwaj walidacji, transakcji, blokad ani obsługi błędów tylko po to, żeby skrócić kod. Wyjaśnij, przed jakim konkretnym problemem chronią.
+Przed oddaniem:
+- Zrób osobny przegląd prostoty: czego można się pozbyć, co niepotrzebnie robimy ręcznie, gdzie powielamy reguły i gdzie nazwy ukrywają rzeczywiste działanie.
+- Odróżnij usunięcie złożoności od przeniesienia jej do innego pliku.
+- Zweryfikuj testami, że uproszczenie zachowuje wymagane zachowanie, także przy błędach i równoległych operacjach.
+- Jeśli pozostawiasz skomplikowany fragment, krótko uzasadnij, dlaczego prostsza wersja byłaby niepoprawna lub trudniejsza w utrzymaniu.
+Nie przedstawiaj pierwszej działającej wersji jako gotowej, zanim nie sprawdzisz, czy można osiągnąć ten sam wynik prostszym sposobem.
+Wygląd:
 - Unikaj magicznych wartości, dużych funkcji i głębokich zagnieżdżeń. Używaj helperów, wczesnych return lub switch, gdy poprawiają czytelność.
-- Dodawaj wzorce, warstwy i zależności tylko z konkretnym uzasadnieniem i w ramach uzgodnionego planu. Inne najpierw omów i uzyskaj zgodę.
-- Przed oddaniem sprawdź poprawność, czytelność i zbędną złożoność; wydajność oceniaj na podstawie pomiarów.
 Efekt: Kod łatwy do zrozumienia i zmiany, bez zbędnych warstw. Przed dodaniem większego mechanizmu powinien wyjaśnić jego sens i uzyskać zgodę

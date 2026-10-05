@@ -18,7 +18,17 @@ export interface IApiKeyCredential {
     readonly key: string
 }
 
-export type TAuthCredential = IOAuthCredential | IApiKeyCredential
+export interface IMcpOAuthCredential {
+    readonly type: "mcp_oauth"
+    readonly issuer: string
+    readonly resource: string
+    readonly clientId: string
+    readonly access: string
+    readonly refresh: string
+    readonly expires: number
+}
+
+export type TAuthCredential = IOAuthCredential | IApiKeyCredential | IMcpOAuthCredential
 
 export interface IAuthStore {
     readonly get: (

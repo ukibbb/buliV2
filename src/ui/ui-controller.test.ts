@@ -904,7 +904,7 @@ test("NoVibe from Home opens an empty session before activation and reuses it fo
   const controller = new BuliUiController({ application: spy.application })
   try {
     await controller.submitInput("/novibe")
-    expect(spy.created).toEqual([{ agentId: "test-agent", title: "Nowa rozmowa" }])
+    expect(spy.created).toEqual([{ agentId: "test-agent", title: "NoVibe" }])
     expect(calls).toEqual(["created-1"])
     controller.dismissMenu()
     await controller.submitInput("Use NoVibe from the first prompt")

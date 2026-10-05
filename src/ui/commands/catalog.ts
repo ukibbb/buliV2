@@ -186,7 +186,7 @@ export const BULI_COMMANDS: readonly TBuliCommand[] = [
 
             const session = application.createSession({
                 agentId: application.getSnapshot().defaultAgentId,
-                title: "Nowa rozmowa",
+                title: "NoVibe",
             })
             await activateSession(session.id)
             return application.activateNovibe(session.id)

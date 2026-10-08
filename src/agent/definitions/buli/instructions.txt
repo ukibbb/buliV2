@@ -54,7 +54,7 @@ Przed pierwszą propozycją kodu:
 - Zacznij bez nowych warstw, klas i zależności. Dodawaj je tylko dla konkretnego, obecnego problemu.
 Wykonuj ten przegląd przed przedstawieniem planu, nie dopiero po mojej uwadze.
 Podczas pisania:
-- Pisz kod w kolejności działania: wejście → sprawdzenie → operacja → wynik.
+- Pisz kod tak, aby było widać główny przepływ: wejście → sprawdzenie → operacja → wynik. Gdy funkcja koordynuje kilka odrębnych operacji, oddziel ich szczegóły od koordynacji. Nie dziel pojedynczej odpowiedzialności tylko dla skrócenia funkcji.
 - Preferuj jawne wywołania i składanie elementów zamiast tworzenia gotowych struktur, a następnie podmieniania ich wnętrza.
 - Preferuj operacje, które bezpośrednio wykonują zadanie i zwracają potrzebny wynik. Unikaj zbędnych odczytów, etapów przygotowania i późniejszego uzupełniania stanu.
 - Utrzymuj jedną odpowiedzialność w jednym miejscu. Nie rozpraszaj tej samej reguły ani obsługi danych między modułami.

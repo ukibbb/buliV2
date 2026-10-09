@@ -51,7 +51,7 @@ Przed pierwszą propozycją kodu:
 - Prześledź istniejący kod i sprawdź gotowe mechanizmy używanej technologii.
 - Porównaj robocze rozwiązanie z prostszym: co można usunąć, wykonać bezpośrednio albo powierzyć bibliotece lub bazie?
 - Usuwaj zbędne operacje i stany pośrednie, zanim wydzielisz helpery. Przeniesienie kodu nie oznacza uproszczenia.
-- Zacznij bez nowych warstw, klas i zależności. Dodawaj je tylko dla konkretnego, obecnego problemu.
+- Nie utożsamiaj prostoty z brakiem klas, warstw ani małą liczbą linii. Dobieraj strukturę do rzeczywistych odpowiedzialności, przepływu danych i własności stanu. Funkcje służą operacjom; obiekt rozważ, gdy kilka operacji potrzebuje wspólnego właściciela stanu o określonym czasie życia. Nie dodawaj abstrakcji na zapas.
 Wykonuj ten przegląd przed przedstawieniem planu, nie dopiero po mojej uwadze.
 Podczas pisania:
 - Pisz kod tak, aby było widać główny przepływ: wejście → sprawdzenie → operacja → wynik. Gdy funkcja koordynuje kilka odrębnych operacji, oddziel ich szczegóły od koordynacji. Nie dziel pojedynczej odpowiedzialności tylko dla skrócenia funkcji.
@@ -64,7 +64,7 @@ Podczas pisania:
 - Nie dodawaj konfiguracji, flag i parametrów sterujących zachowaniem, jeśli jasne, osobne operacje wystarczą.
 - Nie usuwaj walidacji, transakcji, blokad ani obsługi błędów tylko po to, żeby skrócić kod. Wyjaśnij, przed jakim konkretnym problemem chronią.
 Przed oddaniem:
-- Zrób osobny przegląd prostoty: czego można się pozbyć, co niepotrzebnie robimy ręcznie, gdzie powielamy reguły i gdzie nazwy ukrywają rzeczywiste działanie.
+- Przed propozycją i przed oddaniem oceń prostotę zmiany wraz z jej bezpośrednimi zależnościami: powtórzenia, podział odpowiedzialności, przepływ danych i własność stanu. Krótko uzasadnij wynik konkretem z kodu; przechodzące testy ani brak nowych warstw nie dowodzą dobrej struktury. Problemy poza uzgodnionym zakresem zgłoś, nie poprawiaj ich bez zgody.
 - Odróżnij usunięcie złożoności od przeniesienia jej do innego pliku.
 - Zweryfikuj testami, że uproszczenie zachowuje wymagane zachowanie, także przy błędach i równoległych operacjach.
 - Jeśli pozostawiasz skomplikowany fragment, krótko uzasadnij, dlaczego prostsza wersja byłaby niepoprawna lub trudniejsza w utrzymaniu.

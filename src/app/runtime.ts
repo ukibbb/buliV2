@@ -273,8 +273,8 @@ export class BuliApplicationRuntime implements IBuliApplication {
         if (this.novibeAccountChanging) return Promise.reject(new Error("NoVibe: trwa operacja konta."))
         if (this.disposed) return Promise.reject(new Error("Buli runtime is disposed"))
         const session = this.getOrOpenAgentSession(sessionId)
-        const controller = this.sessionMcpControllers.get(sessionId)!
-        if (controller.isActive(NOVIBE_SERVER_ID)) return Promise.resolve("NoVibe jest aktywne.")
+        const previousController = this.sessionMcpControllers.get(sessionId)!
+        if (previousController.isActive(NOVIBE_SERVER_ID)) return Promise.resolve("NoVibe jest aktywne.")
         const pending = this.novibeActivations.get(sessionId)
         if (pending) return pending.task
         const abort = new AbortController()
@@ -292,10 +292,15 @@ export class BuliApplicationRuntime implements IBuliApplication {
                 if (this.sessionCloseTasks.has(sessionId) || this.sessions.get(sessionId) !== session) {
                     throw new Error("Sesja została zamknięta podczas łączenia z NoVibe.")
                 }
+                if (!connection.instructions.trim()) throw new Error("NoVibe nie zwróciło instrukcji agenta.")
+                const agent = this.resolveAgent(NOVIBE_SERVER_ID)
+                const controller = this.createSessionMcpController(session, agent)
                 const contribution = createNovibeContribution(connection)
-                this.novibeConnections.set(sessionId, connection)
                 controller.activate(NOVIBE_SERVER_ID, contribution)
-                return "NoVibe włączone — pobrano wszystkie narzędzia serwera."
+                previousController.dispose()
+                this.sessionMcpControllers.set(sessionId, controller)
+                this.novibeConnections.set(sessionId, connection)
+                return "Przełączono na agenta NoVibe. Historia rozmowy pozostała bez zmian."
             } catch (error) {
                 if (this.novibeConnections.get(sessionId) === connection) this.novibeConnections.delete(sessionId)
                 try { await connection.close() } catch { /* Preserve the activation error. */ }
@@ -312,9 +317,12 @@ export class BuliApplicationRuntime implements IBuliApplication {
         if (this.disposed) throw new Error("Buli runtime is disposed")
         const session = this.getOrOpenAgentSession(sessionId)
         session.assertCanUpdateConfiguration()
-        this.sessionMcpControllers.get(sessionId)!.deactivate(NOVIBE_SERVER_ID)
+        const agent = this.resolveAgent(this.defaultAgentId)
+        session.updateConfiguration({ agentId: agent.id, systemPrompt: agent.systemPrompt, tools: agent.tools })
+        this.sessionMcpControllers.get(sessionId)!.dispose()
+        this.sessionMcpControllers.set(sessionId, this.createSessionMcpController(session, agent))
         await this.closeNovibeConnection(sessionId)
-        return "NoVibe wyłączone. Historia rozmowy pozostała bez zmian."
+        return "Przywrócono agenta Buli. Historia rozmowy pozostała bez zmian."
     }
 
     private async closeNovibeConnection(sessionId: string): Promise<void> {
@@ -894,6 +902,10 @@ export class BuliApplicationRuntime implements IBuliApplication {
             resolveRunConfiguration: () => {
                 // Session browsing tolerates an unresolved configuration. Throwing
                 // here also keeps provisional context limits out of its telemetry.
+                if ((this.sessions.get(info.id)?.agentId ?? info.agentId) === NOVIBE_SERVER_ID
+                    && !this.sessionMcpControllers.get(info.id)?.isActive(NOVIBE_SERVER_ID)) {
+                    throw new Error("Agent NoVibe wymaga połączenia. Użyj /novibe lub wróć do Buli przez /novibe off.")
+                }
                 this.assertModelCatalogReady()
                 const registration = this.resolveSelectedModel()
 
@@ -923,14 +935,16 @@ export class BuliApplicationRuntime implements IBuliApplication {
                 ? {}
                 : { toolOutputStore: this.toolOutputStore }),
         })
-        const controller = new SessionMcpController({
-            baseConfiguration: { systemPrompt: agent.systemPrompt, tools: agent.tools },
-            applyConfiguration: (configuration) => session.updateConfiguration(configuration),
-            assertToolExecutionAllowed: (tool, context) =>
-                session.assertToolExecutionAllowed(tool, context),
-        })
-        this.sessionMcpControllers.set(info.id, controller)
+        this.sessionMcpControllers.set(info.id, this.createSessionMcpController(session, agent))
         return session
+    }
+
+    private createSessionMcpController(session: AgentSession, agent: IAgentDefinition): SessionMcpController {
+        return new SessionMcpController({
+            baseConfiguration: { systemPrompt: agent.systemPrompt, tools: agent.tools },
+            applyConfiguration: (configuration) => session.updateConfiguration({ ...configuration, agentId: agent.id }),
+            assertToolExecutionAllowed: (tool, context) => session.assertToolExecutionAllowed(tool, context),
+        })
     }
 
     private resolveAgent(agentId: string): IAgentDefinition {

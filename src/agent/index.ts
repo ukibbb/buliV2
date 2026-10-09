@@ -2,6 +2,7 @@
 export { Agent } from "@/agent/engine/agent"
 export type { IAgentOptions } from "@/agent/engine/agent"
 export { createAgentDefinition } from "@/agent/create-agent-definition"
+export { createNovibeAgentDefinition } from "@/agent/definitions/novibe"
 export type {
     IAgentDeclaration,
     IAgentDefinition,

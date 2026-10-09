@@ -395,6 +395,7 @@ test("AgentSession restores steering to the queue when persistence fails", async
   memory.createSession(sessionInfo("session-1", "test-agent", "Steering failure"))
   const persistenceFailure = new Error("Failed to persist steering")
   const manager: ISessionManager = {
+    updateSessionAgent: memory.updateSessionAgent,
     createSession: memory.createSession,
     getActiveBranchId: memory.getActiveBranchId,
     createBranch: memory.createBranch,
@@ -478,6 +479,7 @@ test("AgentSession restores follow-up to the queue when persistence fails", asyn
   memory.createSession(sessionInfo("session-1", "test-agent", "Follow-up failure"))
   const persistenceFailure = new Error("Failed to persist follow-up")
   const manager: ISessionManager = {
+    updateSessionAgent: memory.updateSessionAgent,
     createSession: memory.createSession,
     getActiveBranchId: memory.getActiveBranchId,
     createBranch: memory.createBranch,
@@ -561,6 +563,7 @@ test("AgentSession rejects acceptance without invoking the provider or diverging
   memory.createSession(sessionInfo("session-1", "test-agent", "Failure"))
   const persistenceFailure = new Error("Disk write failed")
   const manager: ISessionManager = {
+    updateSessionAgent: memory.updateSessionAgent,
     createSession: memory.createSession,
     getActiveBranchId: memory.getActiveBranchId,
     createBranch: memory.createBranch,

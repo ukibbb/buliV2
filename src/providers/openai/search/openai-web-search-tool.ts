@@ -3,6 +3,7 @@ import { Value } from "typebox/value"
 
 import {
     defineAgentTool,
+    ToolAccess,
     type TAgentMessage,
     type IAgentTool,
 } from "@/agent"
@@ -117,6 +118,7 @@ export function createOpenAiWebSearchTool(
 ): IAgentTool<typeof WEB_SEARCH_INPUT_SCHEMA, "web_search"> {
     return defineAgentTool({
         name: "web_search",
+        access: ToolAccess.ReadOnly,
         description: WEB_SEARCH_DESCRIPTION,
         inputSchema: WEB_SEARCH_INPUT_SCHEMA,
         requiresConversationContext: true,

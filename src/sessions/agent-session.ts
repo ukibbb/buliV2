@@ -70,6 +70,7 @@ interface IAgentSessionOptions {
 }
 
 export interface ISessionConfiguration {
+    readonly agentId?: string
     readonly activeMcpServerIds?: readonly string[]
     readonly systemPrompt: string
     readonly tools: readonly IRuntimeAgentTool[]
@@ -84,7 +85,8 @@ type TSessionListener = () => void
 
 /** Connects one live Agent to durable history and UI subscriptions. */
 export class AgentSession {
-    readonly agentId: string
+    private currentAgentId: string
+    get agentId(): string { return this.currentAgentId }
     readonly id: string
     private readonly agent: Agent
     private readonly manager: ISessionManager
@@ -133,7 +135,7 @@ export class AgentSession {
     private compactionTask: Promise<ICompactionCheckpoint | undefined> | undefined
 
     constructor(options: IAgentSessionOptions) {
-        this.agentId = options.agentId
+        this.currentAgentId = options.agentId
         this.id = options.sessionId
         this.manager = options.manager
         this.activeBranchId = this.manager.getActiveBranchId(this.id)
@@ -249,6 +251,10 @@ export class AgentSession {
         const activeMcpServerIds = [...(configuration.activeMcpServerIds ?? [])]
         const nextSnapshot = this.createSnapshot(nextContextUsage, tools, activeMcpServerIds)
 
+        if (configuration.agentId !== undefined && configuration.agentId !== this.agentId) {
+            this.manager.updateSessionAgent(this.id, configuration.agentId)
+            this.currentAgentId = configuration.agentId
+        }
         this.agent.updateConfiguration(nextConfiguration)
         this.systemPrompt = nextConfiguration.systemPrompt
         this.availableTools = availableTools

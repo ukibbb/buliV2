@@ -1,16 +1,20 @@
 import { expect, spyOn, test } from "bun:test"
-import { defineAgentTool, ToolAccess, type IAgentModel, type IAgentModelRequest } from "@/agent"
+import { defineAgentTool, ToolAccess, type IAgentModel, type IAgentModelRequest, type IRuntimeAgentTool } from "@/agent"
+import { createOpenAiWebSearchTool } from "@/providers/openai/search/openai-web-search-tool"
 import { AgentSession } from "@/sessions/agent-session"
 import { SQLiteSessionManager } from "@/sessions/sqlite/sqlite-session-manager"
 
-function fixture(model?: IAgentModel) {
+function fixture(model?: IAgentModel, additionalTools: readonly IRuntimeAgentTool[] = []) {
     const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
     manager.createSession({ id: "session", agentId: "agent", title: "Test", createdAt: 1, updatedAt: 1 })
     const requests: IAgentModelRequest[] = []
-    const tools = [ToolAccess.ReadOnly, ToolAccess.MayMutate].map((access, index) => defineAgentTool({
-        name: `tool_${index}`, description: "Tool", access,
-        inputSchema: { type: "object" }, async execute() { return "done" },
-    }))
+    const tools = [
+        ...[ToolAccess.ReadOnly, ToolAccess.MayMutate].map((access, index) => defineAgentTool({
+            name: `tool_${index}`, description: "Tool", access,
+            inputSchema: { type: "object" }, async execute() { return "done" },
+        })),
+        ...additionalTools,
+    ]
     const options = {
         agentId: "agent", sessionId: "session", manager, systemPrompt: "System", tools,
         resolveRunConfiguration: () => ({
@@ -28,6 +32,57 @@ function fixture(model?: IAgentModel) {
     }
     return { manager, requests, tools, options, session: new AgentSession(options) }
 }
+
+test("side branches execute web search without enabling mutation and return restores parent tools", async () => {
+    const searchRequests: object[] = []
+    const webSearch = createOpenAiWebSearchTool({
+        resolveBackend: async () => ({
+            modelId: "search-model",
+            search: async (request) => {
+                searchRequests.push(request)
+                return { output: "Search result" }
+            },
+        }),
+    })
+    let turn = 0
+    const offeredTools: string[][] = []
+    const { session, manager, tools } = fixture({
+        async *stream(request) {
+            offeredTools.push(request.tools.map((tool) => tool.name))
+            if (turn++ === 0) {
+                yield {
+                    type: "tool-call", toolCallId: "branch-search", toolName: "web_search",
+                    input: { search_query: [{ q: "TypeScript documentation" }] },
+                }
+                yield { type: "finish", reason: "tool-calls" }
+                return
+            }
+            yield { type: "finish", reason: "stop" }
+        },
+    }, [webSearch])
+    try {
+        session.createBranch()
+        expect(session.state.tools.map((tool) => tool.name)).toEqual(["tool_0", "web_search"])
+        await session.prompt("Find TypeScript documentation").runFinished
+        expect(searchRequests).toHaveLength(1)
+        expect(searchRequests[0]).toMatchObject({
+            id: "session",
+            commands: { search_query: [{ q: "TypeScript documentation" }] },
+        })
+        expect(offeredTools.every((names) => names.includes("web_search") && !names.includes("tool_1"))).toBe(true)
+        expect(manager.loadRequiredContext("session").messages).toContainEqual(expect.objectContaining({
+            role: "toolResult", toolName: "web_search", isError: false,
+        }))
+        session.returnToParentBranch()
+        expect(session.getSnapshot().activeBranchId).toBe("main")
+        expect(session.state.tools).toEqual(tools)
+        await session.prompt("Continue parent").runFinished
+        expect(offeredTools.at(-1)).toEqual(["tool_0", "tool_1", "web_search"])
+    } finally {
+        await session.dispose()
+        manager.dispose()
+    }
+})
 
 test("live snapshots reuse the branch ID and navigation refreshes it once", async () => {
     const { session, manager, options } = fixture()

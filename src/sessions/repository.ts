@@ -17,6 +17,7 @@ export interface ISessionManager {
     readonly createBranch: (sessionId: string, branchId: string) => void
     readonly returnToParentBranch: (sessionId: string) => void
     readonly createSession: (info: ISessionInfo) => void
+    readonly updateSessionAgent: (sessionId: string, agentId: string) => void
     readonly openSession: (sessionId: string) => void
     readonly releaseSession: (sessionId: string) => void
     readonly getSessionInfo: (sessionId: string) => ISessionInfo | undefined

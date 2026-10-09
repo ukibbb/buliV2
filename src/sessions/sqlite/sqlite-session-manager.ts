@@ -52,6 +52,15 @@ export class SQLiteSessionManager implements ISessionManager {
         }
     }
 
+    readonly updateSessionAgent = (sessionId: string, agentId: string): void => {
+        this.requireOwner(sessionId)
+        if (!agentId.trim()) throw new Error("Agent ID cannot be empty")
+        this.database.write((db) => {
+            const result = db.query("UPDATE sessions SET agent_id = ? WHERE id = ?").run(agentId, sessionId)
+            if (result.changes !== 1) throw new Error(`Session does not exist: ${sessionId}`)
+        })
+    }
+
     readonly openSession = (sessionId: string): void => {
         this.database.assertAvailable()
         if (this.owners.has(sessionId)) return

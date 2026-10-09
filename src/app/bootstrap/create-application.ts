@@ -14,6 +14,7 @@ import {
     createAuthentication,
     type IAuthenticationComposition,
 } from "@/app/bootstrap/create-authentication"
+import { createNovibeAgentDefinition } from "@/agent"
 import { loadWorkspaceInstructions } from "@/app/bootstrap/load-workspace-instructions"
 import { createFdPathSearcher } from "@/app/path-search/fd-path-search"
 import { createInjectedModelComposition } from "@/app/bootstrap/model-composition"
@@ -140,6 +141,12 @@ export async function createBuliApplication(
             additionalTools: modelComposition.additionalTools,
         })
 
+        const novibe = createNovibeAgentDefinition({
+            workspaceRoot,
+            toolOutputStore,
+            ...defaultToolExecutablePaths(),
+        }, modelComposition.additionalTools)
+
         const preferencesPath = options.preferencesPath ?? defaultModelPreferencesPath()
         const preferences = options.model === undefined ? loadModelPreferences(preferencesPath) : {}
         const applicationRuntime = new BuliApplicationRuntime({
@@ -152,7 +159,7 @@ export async function createBuliApplication(
             } : {}),
             workspaceRoot,
             manager,
-            agents: [buli],
+            agents: [buli, novibe],
             defaultAgentId: buli.id,
             models: modelComposition.models,
             selection: modelComposition.selection,

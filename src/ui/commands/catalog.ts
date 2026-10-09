@@ -167,7 +167,7 @@ export const BULI_COMMANDS: readonly TBuliCommand[] = [
     {
         kind: "action",
         name: "novibe",
-        description: "NoVibe: login, status, logout; /novibe włącza narzędzia, off wyłącza",
+        description: "NoVibe: przełącz agenta; off przywraca Buli; login, status, logout obsługują konto",
         handler: async (args, { application, sessionId, activateSession }) => {
             const argument = args.trim()
             if (argument === "login" || argument === "status" || argument === "logout") {

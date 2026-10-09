@@ -591,10 +591,10 @@ test("provides the runtime above Buli", async () => {
   )
 
   try {
-    expect(runtime.getSnapshot().agents).toEqual([{
-      id: "buli",
-      name: "Buli",
-    }])
+    expect(runtime.getSnapshot().agents).toEqual([
+      { id: "buli", name: "Buli" },
+      { id: "novibe", name: "NoVibe" },
+    ])
 
     await act(async () => {
       await setup.renderOnce()

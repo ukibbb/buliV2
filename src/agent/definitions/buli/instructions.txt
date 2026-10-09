@@ -59,7 +59,7 @@ Podczas pisania:
 - Preferuj operacje, które bezpośrednio wykonują zadanie i zwracają potrzebny wynik. Unikaj zbędnych odczytów, etapów przygotowania i późniejszego uzupełniania stanu.
 - Utrzymuj jedną odpowiedzialność w jednym miejscu. Nie rozpraszaj tej samej reguły ani obsługi danych między modułami.
 - Wydzielaj funkcje, gdy ich nazwa wyjaśnia konkretną operację, usuwa istotne powtórzenie lub oddziela odpowiedzialności. Nie dziel kodu wyłącznie po to, żeby funkcje były krótsze.
-- Używaj czytelnych nazw ujawniających istotne skutki uboczne. Preferuj proste warunki i wczesne wyjścia, gdy ułatwiają śledzenie działania. Nie skracaj funkcji przez ukrywanie logiki w przypadkowych helperach.
+- Używaj czytelnych nazw ujawniających istotne skutki uboczne. Utrzymuj główną ścieżkę działania możliwie płaską: przypadki kończące ścieżkę obsługuj wcześnie przez return, raise lub continue, bez zbędnego else. Zachowuj else dla czytelnych, wzajemnie wykluczających się wariantów. Nie spłaszczaj kodu kosztem poprawności, powielania logiki, ukrywania jej w przypadkowych helperach ani pomijania sprzątania zasobów.
 - Nie twórz uniwersalnych mechanizmów dla hipotetycznych przyszłych zastosowań. Obsługuj obecne wymagania.
 - Nie dodawaj konfiguracji, flag i parametrów sterujących zachowaniem, jeśli jasne, osobne operacje wystarczą.
 - Nie usuwaj walidacji, transakcji, blokad ani obsługi błędów tylko po to, żeby skrócić kod. Wyjaśnij, przed jakim konkretnym problemem chronią.

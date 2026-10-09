@@ -136,6 +136,8 @@ interface IToolPresentation {
 
 function toolPresentation(call: IToolCallContent): IToolPresentation {
     switch (call.toolName) {
+        case "delegate_task":
+            return { name: "Delegate tasks", target: `${Array.isArray(call.input.tasks) ? call.input.tasks.length : 0} zadań` }
         case "bash":
             return knownToolPresentation("Bash", call, "command", ["timeout"])
         case "read":

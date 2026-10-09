@@ -1,3 +1,4 @@
+import type { IDelegatedTask } from "@/sessions"
 import type {
     TReasoningEffort,
     IUserInputContent,
@@ -98,6 +99,14 @@ export interface IBuliSessionCreationOptions {
 export interface IBuliApplication
     extends ISnapshotSource<IBuliApplicationSnapshot> {
     readonly workspaceRoot: string
+    readonly delegatedTasks?: {
+        readonly subscribe: (listener: () => void) => () => void
+        readonly getSnapshot: () => number
+        readonly list: (sessionId: string, assistantMessageId: string, toolCallId: string) => readonly IDelegatedTask[]
+        readonly currentTool: (childSessionId: string) => string | undefined
+        readonly open: (childSessionId: string) => ISessionSource
+        readonly abort: (childSessionId: string) => Promise<void>
+    } | undefined
 
     readonly refreshModels: (signal?: AbortSignal) => Promise<void>
     readonly selectModel: (modelId: string) => void

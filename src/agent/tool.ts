@@ -30,6 +30,7 @@ export interface IAgentToolDescriptor<
 export interface IAgentToolContext {
     readonly sessionId: string
     readonly toolCallId: string
+    readonly assistantMessageId?: string
     readonly runId: string
     readonly modelProfile?: IModelProfile
     readonly providerAccountId?: string

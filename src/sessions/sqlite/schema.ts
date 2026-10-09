@@ -1,8 +1,8 @@
 /** The first SQLite-only history format. Existing JSONL files are never imported. */
-export const HISTORY_SCHEMA_VERSION = 1
+export const HISTORY_SCHEMA_VERSION = 2
 export const HISTORY_APPLICATION_ID = 0x42554c49 // BULI
 
-export const HISTORY_SCHEMA = `
+export const HISTORY_SCHEMA_V1 = `
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY NOT NULL CHECK (length(trim(id)) > 0),
     agent_id TEXT NOT NULL CHECK (length(trim(agent_id)) > 0),
@@ -97,3 +97,24 @@ CREATE INDEX branches_anchor ON branches(session_id, fork_message_id);
 CREATE INDEX branches_checkpoint ON branches(session_id, inherited_checkpoint_id);
 CREATE INDEX sessions_active_branch ON sessions(id, active_branch_id);
 `
+
+export const DELEGATED_TASK_SCHEMA = `
+CREATE TABLE delegated_tasks (
+    id TEXT PRIMARY KEY NOT NULL,
+    parent_session_id TEXT NOT NULL,
+    assistant_message_id TEXT NOT NULL,
+    tool_call_id TEXT NOT NULL,
+    child_session_id TEXT NOT NULL UNIQUE,
+    position INTEGER NOT NULL CHECK (position BETWEEN 0 AND 2),
+    payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+    UNIQUE (parent_session_id, assistant_message_id, tool_call_id, position),
+    CHECK (parent_session_id <> child_session_id),
+    FOREIGN KEY (parent_session_id, assistant_message_id, tool_call_id)
+        REFERENCES tool_calls(session_id, assistant_message_id, tool_call_id)
+        DEFERRABLE INITIALLY DEFERRED,
+    FOREIGN KEY (child_session_id) REFERENCES sessions(id)
+        DEFERRABLE INITIALLY DEFERRED
+) STRICT;
+`
+
+export const HISTORY_SCHEMA = HISTORY_SCHEMA_V1 + DELEGATED_TASK_SCHEMA

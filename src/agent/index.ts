@@ -1,4 +1,6 @@
 /** Public agent feature API used by sessions, adapters and application composition. */
+export { createExplorerAgentDefinition } from "@/agent/definitions/explorer"
+export { createDelegateTaskTool } from "@/agent/tools/delegate-task/delegate-task-tool"
 export { Agent } from "@/agent/engine/agent"
 export type { IAgentOptions } from "@/agent/engine/agent"
 export { createAgentDefinition } from "@/agent/create-agent-definition"

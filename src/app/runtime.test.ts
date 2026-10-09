@@ -1875,6 +1875,9 @@ test("submitPrompt rolls back a new session when its first prompt is not persist
   const deletedSessionIds: string[] = []
   const cleanupOperations: string[] = []
   const manager: ISessionManager = {
+    createDelegatedTask: memory.createDelegatedTask,
+    updateDelegatedTask: memory.updateDelegatedTask,
+    loadDelegatedTasks: memory.loadDelegatedTasks,
     updateSessionAgent: memory.updateSessionAgent,
     createSession: memory.createSession,
     getActiveBranchId: memory.getActiveBranchId,
@@ -2054,6 +2057,9 @@ test("new-session runFinished waits for rollback before exposing failure", async
   const memory = new SQLiteSessionManager({ databasePath: ":memory:" })
   const persistenceFailure = new Error("Disk write failed")
   const manager: ISessionManager = {
+    createDelegatedTask: memory.createDelegatedTask,
+    updateDelegatedTask: memory.updateDelegatedTask,
+    loadDelegatedTasks: memory.loadDelegatedTasks,
     updateSessionAgent: memory.updateSessionAgent,
     createSession: memory.createSession,
     getActiveBranchId: memory.getActiveBranchId,

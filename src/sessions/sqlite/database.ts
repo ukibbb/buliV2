@@ -5,6 +5,8 @@ import {
     HISTORY_APPLICATION_ID,
     HISTORY_SCHEMA,
     HISTORY_SCHEMA_VERSION,
+    HISTORY_SCHEMA_V1,
+    DELEGATED_TASK_SCHEMA,
 } from "@/sessions/sqlite/schema"
 
 const BUSY_TIMEOUT_MS = 1_000
@@ -106,7 +108,7 @@ export class HistoryDatabase {
             if (objects) throw new Error("Refusing to initialize a nonempty foreign history database")
             return
         }
-        if (application !== BigInt(HISTORY_APPLICATION_ID) || version !== BigInt(HISTORY_SCHEMA_VERSION)) {
+        if (application !== BigInt(HISTORY_APPLICATION_ID) || (version !== 1n && version !== BigInt(HISTORY_SCHEMA_VERSION))) {
             throw new Error(`Unsupported history database identity/version: ${String(application)}/${String(version)}`)
         }
     }
@@ -117,6 +119,17 @@ export class HistoryDatabase {
         if (pragma(this.connection, "user_version") === 0n) {
             this.connection.exec(HISTORY_SCHEMA)
             this.connection.exec(`PRAGMA application_id = ${HISTORY_APPLICATION_ID}`)
+            this.connection.exec(`PRAGMA user_version = ${HISTORY_SCHEMA_VERSION}`)
+        }
+        if (pragma(this.connection, "user_version") === 1n) {
+            const oldDefinitions = this.connection.query<{ sql: string }, []>(
+                "SELECT sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' AND sql IS NOT NULL",
+            ).all().map((row) => normalizeSchemaSql(row.sql)).sort()
+            const expected = HISTORY_SCHEMA_V1.split(";").map(normalizeSchemaSql).filter(Boolean).sort()
+            if (JSON.stringify(oldDefinitions) !== JSON.stringify(expected)) {
+                throw new Error("Invalid history database schema before migration")
+            }
+            this.connection.exec(DELEGATED_TASK_SCHEMA)
             this.connection.exec(`PRAGMA user_version = ${HISTORY_SCHEMA_VERSION}`)
         }
         const definitions = this.connection.query<{ sql: string }, []>(

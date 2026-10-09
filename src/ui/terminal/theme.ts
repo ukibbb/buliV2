@@ -14,6 +14,7 @@ export const glyphs = {
 export type GlyphName = keyof typeof glyphs
 
 export const theme = {
+    explorer: "#002575",
     amber: "#F59E0B",
     red: "#EF4444",
     green: "#10B981",

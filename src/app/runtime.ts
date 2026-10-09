@@ -1,3 +1,5 @@
+import { DelegatedTasks } from "@/app/delegated-tasks"
+import { createDelegateTaskTool } from "@/agent"
 import type {
     IAgentDefinition,
     IAgentModel,
@@ -60,6 +62,7 @@ export interface IBuliRuntimeOptions {
     readonly manager: ISessionManager
     readonly agents: readonly IAgentDefinition[]
     readonly defaultAgentId: string
+    readonly explorer?: IAgentDefinition
     // readonly tuiControler: ITuiController
     readonly models: readonly IBuliModelRuntimeConfig[]
     readonly selection: IBuliModelSelection
@@ -85,6 +88,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
     // working area
     readonly workspaceRoot: string
 
+    readonly delegatedTasks: DelegatedTasks | undefined
     private readonly manager: ISessionManager
     private readonly agents: readonly IAgentDefinition[]
     private readonly defaultAgentId: string
@@ -134,6 +138,15 @@ export class BuliApplicationRuntime implements IBuliApplication {
         this.openNovibeUrl = options.openNovibeUrl
         this.workspaceRoot = options.workspaceRoot
         this.manager = options.manager
+        this.delegatedTasks = options.explorer ? new DelegatedTasks({
+            manager: options.manager, explorer: options.explorer,
+            ...(options.toolOutputStore ? { toolOutputStore: options.toolOutputStore } : {}),
+        }) : undefined
+        const delegation = this.delegatedTasks ? createDelegateTaskTool((tasks, context) => {
+            const parent = this.sessions.get(context.sessionId)
+            if (!parent) throw new Error("Parent session is not open")
+            return this.delegatedTasks!.run(tasks, context, parent.getActiveRunConfiguration(context.runId))
+        }) : undefined
         const agentIds = new Set<string>()
         this.agents = options.agents.map((registration) => {
             if (agentIds.has(registration.id)) {
@@ -143,7 +156,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
 
             return {
                 ...registration,
-                tools: [...registration.tools],
+                tools: [...registration.tools, ...(delegation && ["buli", "novibe"].includes(registration.id) ? [delegation] : [])],
             }
         })
         this.defaultAgentId = options.defaultAgentId
@@ -564,6 +577,11 @@ export class BuliApplicationRuntime implements IBuliApplication {
         }
         try {
             await this.toolOutputStore?.dispose()
+        } catch (error) {
+            errors.push(error)
+        }
+        try {
+            await this.delegatedTasks?.dispose()
         } catch (error) {
             errors.push(error)
         }

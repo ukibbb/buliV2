@@ -1,3 +1,4 @@
+import { DelegatedTaskDisplay } from "@/ui/sessions/DelegatedTaskDisplay"
 import { useMemo, type ReactNode } from "react"
 
 import type { TAgentMessage, IAssistantMessage } from "@/agent"
@@ -191,7 +192,11 @@ function assistantBlocks(
                 kind = "tool"
                 const active = streaming || activeToolCallIds.has(content.toolCallId)
                 const phase = active ? runningToolCallIds.has(content.toolCallId) ? "running" : "pending" : undefined
-                node = <AssistantCard kind="tool" call={content} result={toolResults.get(content.toolCallId)} phase={phase} />
+                node = <>
+                    <AssistantCard kind="tool" call={content} result={toolResults.get(content.toolCallId)} phase={phase} />
+                    {content.toolName === "delegate_task" && !streaming && <DelegatedTaskDisplay
+                        sessionId={message.sessionId} assistantMessageId={message.id} toolCallId={content.toolCallId} />}
+                </>
                 break
             }
             default:

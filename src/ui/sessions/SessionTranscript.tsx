@@ -16,9 +16,10 @@ const TRANSCRIPT_SCROLLBAR = {
 }
 
 /** Keeps the latest page live; only explicit navigation opens archived pages. */
-export function SessionTranscript(props: { readonly sessionId: string }) {
+export function SessionTranscript(props: { readonly sessionId: string; readonly delegated?: boolean }) {
     const runtime = useBuliRuntime()
-    const controller = useMemo(() => new TranscriptController(runtime.openSession(props.sessionId)), [runtime, props.sessionId])
+    const controller = useMemo(() => new TranscriptController(props.delegated && runtime.delegatedTasks
+        ? runtime.delegatedTasks.open(props.sessionId) : runtime.openSession(props.sessionId)), [runtime, props.sessionId, props.delegated])
     const renderer = useRenderer()
     const scrollRef = useRef<ScrollBoxRenderable | null>(null)
     const anchorRef = useRef<{ block: Renderable; offset: number } | null>(null)

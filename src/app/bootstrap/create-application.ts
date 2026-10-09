@@ -1,3 +1,4 @@
+import { createExplorerAgentDefinition } from "@/agent"
 import { realpath } from "node:fs/promises"
 import { defaultModelPreferencesPath, loadModelPreferences, saveModelPreferences } from "@/app/preferences/model-preferences"
 import { dirname, resolve } from "node:path"
@@ -160,6 +161,11 @@ export async function createBuliApplication(
             workspaceRoot,
             manager,
             agents: [buli, novibe],
+            explorer: createExplorerAgentDefinition({
+                workspaceRoot, toolOutputStore,
+                ...(workspaceInstructions === undefined ? {} : { workspaceInstructions }),
+                ...defaultToolExecutablePaths(),
+            }),
             defaultAgentId: buli.id,
             models: modelComposition.models,
             selection: modelComposition.selection,

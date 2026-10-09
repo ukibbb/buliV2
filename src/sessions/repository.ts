@@ -2,6 +2,8 @@ import type { IUserPathReference } from "@/agent"
 import type { ICompactionCheckpoint } from "@/sessions/compaction/checkpoint"
 import type { IHistoryCursor, IHistoryPage, IRequiredContext, TAppendMessageResult, TStoredMessage } from "@/sessions/history-contracts"
 
+import type { IDelegatedTask } from "@/sessions/delegated-task"
+
 /** Lightweight session metadata used by navigation and persistence indexes. */
 export interface ISessionInfo {
     readonly id: string
@@ -13,6 +15,9 @@ export interface ISessionInfo {
 
 /** Selective durable reads; callers never own a second archive. */
 export interface ISessionManager {
+    readonly createDelegatedTask: (info: ISessionInfo, task: IDelegatedTask) => void
+    readonly updateDelegatedTask: (task: IDelegatedTask) => void
+    readonly loadDelegatedTasks: (parentSessionId: string, assistantMessageId: string, toolCallId: string) => readonly IDelegatedTask[]
     readonly getActiveBranchId: (sessionId: string) => string
     readonly createBranch: (sessionId: string, branchId: string) => void
     readonly returnToParentBranch: (sessionId: string) => void

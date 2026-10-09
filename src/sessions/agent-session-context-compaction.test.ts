@@ -917,6 +917,9 @@ test("AgentSession aborts preflight compaction without saving a checkpoint", asy
   seedTurn(memory)
   let checkpointSaves = 0
   const manager: ISessionManager = {
+    createDelegatedTask: memory.createDelegatedTask,
+    updateDelegatedTask: memory.updateDelegatedTask,
+    loadDelegatedTasks: memory.loadDelegatedTasks,
     updateSessionAgent: memory.updateSessionAgent,
     createSession: memory.createSession,
     getActiveBranchId: memory.getActiveBranchId,

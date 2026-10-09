@@ -1,3 +1,4 @@
+export type { IDelegatedTask, TDelegatedTaskStatus } from "@/sessions/delegated-task"
 /** Public sessions feature API for application composition and consumers. */
 export { MAIN_BRANCH_ID } from "@/sessions/branches"
 export { AgentSession, type IAgentSessionRunConfiguration, type ISessionConfiguration } from "@/sessions/agent-session"

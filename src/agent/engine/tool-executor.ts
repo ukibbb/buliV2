@@ -174,6 +174,7 @@ async function executeToolCall(
                 tool.name,
                 await tool.validateAndExecute(preparedInput, {
                     sessionId: options.sessionId,
+                    assistantMessageId: options.assistantMessageId,
                     toolCallId: toolCall.toolCallId,
                     runId: options.runId,
                     ...(options.modelProfile === undefined

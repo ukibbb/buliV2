@@ -96,7 +96,7 @@ test("passes workspace instructions to an injected model without attaching OpenA
     expect(modelRequest.reasoningEffort).toBe("medium")
     expect(modelRequest.tools.map((tool) => tool.name)).not.toContain("web_search")
     expect(modelRequest.tools.map((tool) => tool.name)).toEqual([
-      "read", "find", "grep", "tool_output", "edit", "write", "bash",
+      "read", "find", "grep", "tool_output", "edit", "write", "bash", "delegate_task",
     ])
     expect(modelRequest.systemPrompt).not.toContain("web_search")
     expect(modelRequest.systemPrompt).toContain("When a result contains outputId")

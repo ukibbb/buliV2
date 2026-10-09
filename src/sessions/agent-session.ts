@@ -123,6 +123,7 @@ export class AgentSession {
     private snapshot: ISessionSnapshot
     private contextUsage: IContextUsage | undefined
     private currentContextWindowTokens: number | undefined
+    private activeBaseConfiguration: IAgentSessionRunConfiguration | undefined
     private currentModelProfile: IModelProfile | undefined
     private currentEstimationPolicy: IContextEstimationPolicy | undefined
     private contextUsageRefreshPending = false
@@ -523,8 +524,20 @@ export class AgentSession {
         }
     }
 
+    assertPersistenceAvailable(): void {
+        if (this.persistenceError) throw this.persistenceError.cause
+    }
+
+    getActiveRunConfiguration(runId: string): IAgentSessionRunConfiguration {
+        if (!this.state.isRunning || this.state.activeRunId !== runId || !this.activeBaseConfiguration) {
+            throw new Error("Parent execution is not active")
+        }
+        return { ...this.activeBaseConfiguration }
+    }
+
     private resolveConversationRunConfiguration(): IAgentRunConfiguration {
         const runConfiguration = this.captureRunConfiguration()
+        this.activeBaseConfiguration = runConfiguration
         const contextWindowTokens =
             runConfiguration.modelProfile?.contextWindowTokens
         this.setCurrentContextConfiguration(runConfiguration)

@@ -1,3 +1,4 @@
+import type { IDelegatedTask } from "@/sessions/delegated-task"
 import type { Database } from "bun:sqlite"
 import type { IUserPathReference } from "@/agent"
 import { dirname, join } from "node:path"
@@ -52,6 +53,41 @@ export class SQLiteSessionManager implements ISessionManager {
         }
     }
 
+    readonly createDelegatedTask = (info: ISessionInfo, task: IDelegatedTask): void => {
+        this.requireOwner(task.parentSessionId)
+        assertSessionInfo(info)
+        if (info.id !== task.childSessionId || task.status !== "running") throw new Error("Invalid delegated task")
+        this.acquire(info.id)
+        try {
+            this.database.write((db) => {
+                db.query("INSERT INTO sessions (id, agent_id, title, created_at, updated_at, active_branch_id) VALUES (?, ?, ?, ?, ?, 'main')")
+                    .run(info.id, info.agentId, info.title, info.createdAt, info.updatedAt)
+                db.query("INSERT INTO branches (session_id, id) VALUES (?, 'main')").run(info.id)
+                db.query("INSERT INTO delegated_tasks VALUES (?, ?, ?, ?, ?, ?, ?)")
+                    .run(task.id, task.parentSessionId, task.assistantMessageId, task.toolCallId, task.childSessionId, task.position, JSON.stringify(task))
+            })
+        } catch (error) {
+            this.releaseSession(info.id)
+            throw error
+        }
+    }
+
+    readonly updateDelegatedTask = (task: IDelegatedTask): void => {
+        this.requireOwner(task.parentSessionId)
+        this.database.write((db) => {
+            const result = db.query("UPDATE delegated_tasks SET payload_json = ? WHERE id = ? AND parent_session_id = ? AND child_session_id = ?")
+                .run(JSON.stringify(task), task.id, task.parentSessionId, task.childSessionId)
+            if (result.changes !== 1) throw new Error("Delegated task does not exist")
+        })
+    }
+
+    readonly loadDelegatedTasks = (parentSessionId: string, assistantMessageId: string, toolCallId: string): readonly IDelegatedTask[] => {
+        this.requireOwner(parentSessionId)
+        return this.database.read((db) => db.query<{ payload_json: string }, [string, string, string]>(
+            "SELECT payload_json FROM delegated_tasks WHERE parent_session_id = ? AND assistant_message_id = ? AND tool_call_id = ? ORDER BY position",
+        ).all(parentSessionId, assistantMessageId, toolCallId).map((row) => JSON.parse(row.payload_json) as IDelegatedTask))
+    }
+
     readonly updateSessionAgent = (sessionId: string, agentId: string): void => {
         this.requireOwner(sessionId)
         if (!agentId.trim()) throw new Error("Agent ID cannot be empty")
@@ -81,7 +117,7 @@ export class SQLiteSessionManager implements ISessionManager {
     }
 
     readonly listSessions = (): readonly ISessionInfo[] => this.database.read((db) => db.query<ISessionRow, []>(
-        "SELECT id, agent_id, title, created_at, updated_at FROM sessions ORDER BY updated_at DESC, created_at DESC, id",
+        "SELECT id, agent_id, title, created_at, updated_at FROM sessions WHERE NOT EXISTS (SELECT 1 FROM delegated_tasks WHERE child_session_id = sessions.id) ORDER BY updated_at DESC, created_at DESC, id",
     ).all().map(sessionInfo))
 
     readonly getSessionInfo = (sessionId: string): ISessionInfo | undefined => this.database.read((db) => {
@@ -103,7 +139,17 @@ export class SQLiteSessionManager implements ISessionManager {
 
     readonly recoverInterruptedTools = (sessionId: string): void => {
         this.requireOwner(sessionId)
-        this.database.write((db) => recoverInterruptedTools(db, this.activeHistory(db, sessionId)))
+        this.database.write((db) => {
+            recoverInterruptedTools(db, this.activeHistory(db, sessionId))
+            const rows = db.query<{ id: string; payload_json: string }, [string]>(
+                "SELECT id, payload_json FROM delegated_tasks WHERE parent_session_id = ?",
+            ).all(sessionId)
+            for (const row of rows) {
+                const task = JSON.parse(row.payload_json) as IDelegatedTask
+                if (task.status === "running") db.query("UPDATE delegated_tasks SET payload_json = ? WHERE id = ?")
+                    .run(JSON.stringify({ ...task, status: "interrupted", finishedAt: Date.now(), error: "Application stopped before task completion" }), row.id)
+            }
+        })
     }
 
     readonly loadRequiredContext = (sessionId: string): IRequiredContext => {
@@ -184,13 +230,25 @@ export class SQLiteSessionManager implements ISessionManager {
 
     readonly deleteSession = (sessionId: string): void => {
         this.requireOwner(sessionId)
+        const children = this.database.read((db) => db.query<{ child_session_id: string }, [string]>(
+            "SELECT child_session_id FROM delegated_tasks WHERE parent_session_id = ?",
+        ).all(sessionId).map((row) => row.child_session_id))
+        for (const child of children) this.openSession(child)
         this.database.write((db) => {
+            db.query("DELETE FROM delegated_tasks WHERE parent_session_id = ?").run(sessionId)
+            for (const child of children) {
+                for (const table of ["tool_calls", "checkpoints", "messages", "branches"]) {
+                    db.query(`DELETE FROM ${table} WHERE session_id = ?`).run(child)
+                }
+                db.query("DELETE FROM sessions WHERE id = ?").run(child)
+            }
             // All cross-table constraints are deferred; ownership stays held until safe release.
             for (const table of ["tool_calls", "checkpoints", "messages", "branches"]) {
                 db.query(`DELETE FROM ${table} WHERE session_id = ?`).run(sessionId)
             }
             db.query("DELETE FROM sessions WHERE id = ?").run(sessionId)
         })
+        for (const child of children) this.releaseSession(child)
     }
 
     readonly dispose = (): void => {

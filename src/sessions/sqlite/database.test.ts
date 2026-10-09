@@ -155,7 +155,7 @@ describe("SQLite history connection", () => {
         const directory = await mkdtemp(join(tmpdir(), "buli-sqlite-schema-"))
         try {
             for (const [index, alteration] of [
-                "PRAGMA user_version = 2",
+                "PRAGMA user_version = 999",
                 "PRAGMA application_id = 123",
                 "DROP INDEX messages_branch_order",
                 "CREATE TRIGGER unexpected AFTER INSERT ON messages BEGIN SELECT 1; END",

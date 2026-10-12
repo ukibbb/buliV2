@@ -13,6 +13,8 @@ test("Buli selects inspection and action tools and composes their instructions w
 
     expect(definition.id).toBe("buli")
     expect(definition.name).toBe("Buli")
+    expect(definition.systemPrompt).toContain("możesz uruchomić do 3 Explorerów przez `delegate_task`")
+    expect(definition.systemPrompt).toContain("nie widzą naszej rozmowy")
     expect(definition.tools.map((tool) => tool.name)).toEqual([
         "read", "find", "grep", "tool_output", "edit", "write", "bash",
     ])

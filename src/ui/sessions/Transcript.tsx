@@ -27,7 +27,7 @@ export interface ITranscriptProps {
     readonly checkpointOutsidePage?: boolean
 }
 
-type VisualKind = "tool" | "reasoning" | "text" | "user" | "diff" | "error" | "checkpoint"
+type VisualKind = "explorers" | "tool" | "reasoning" | "text" | "user" | "diff" | "error" | "checkpoint"
 interface ITranscriptBlock {
     readonly key: string
     readonly kind: VisualKind
@@ -87,7 +87,7 @@ export function Transcript(props: ITranscriptProps): ReactNode {
         flexShrink={0}
         flexDirection="column"
         paddingTop={gapBefore(blocks[index - 1]?.kind, block.kind)}
-        paddingBottom={index === blocks.length - 1 && (isCompact(block.kind) || block.kind === "user") ? TRANSCRIPT_GROUP_GAP : 0}
+        paddingBottom={index === blocks.length - 1 && (isCompact(block.kind) || block.kind === "user" || block.kind === "explorers") ? TRANSCRIPT_GROUP_GAP : 0}
     >{block.node}</box>)}</>
 }
 
@@ -96,7 +96,7 @@ function isCompact(kind: VisualKind): boolean {
 }
 
 function gapBefore(previous: VisualKind | undefined, current: VisualKind): number {
-    if (previous === undefined) return isCompact(current) || current === "user" ? TRANSCRIPT_GROUP_GAP : 0
+    if (previous === undefined) return isCompact(current) || current === "user" || current === "explorers" ? TRANSCRIPT_GROUP_GAP : 0
     return previous === current && isCompact(current) ? 0 : TRANSCRIPT_GROUP_GAP
 }
 
@@ -155,7 +155,7 @@ function messageBlocks(
         case "assistant":
             return assistantBlocks(message, false, projection, runningToolCallIds, currentErrorMessageId)
         case "toolResult":
-            return projection.matchedToolResultMessageIds.has(message.id) || !isVisibleTool(message.toolName)
+            return projection.matchedToolResultMessageIds.has(message.id) || !isVisibleTool(message.toolName) || message.toolName === "delegate_task"
                 ? []
                 : [{ key: message.id, kind: "tool", node: <ToolCallDisplay result={message} /> }]
     }
@@ -192,11 +192,14 @@ function assistantBlocks(
                 kind = "tool"
                 const active = streaming || activeToolCallIds.has(content.toolCallId)
                 const phase = active ? runningToolCallIds.has(content.toolCallId) ? "running" : "pending" : undefined
-                node = <>
-                    <AssistantCard kind="tool" call={content} result={toolResults.get(content.toolCallId)} phase={phase} />
-                    {content.toolName === "delegate_task" && !streaming && <DelegatedTaskDisplay
-                        sessionId={message.sessionId} assistantMessageId={message.id} toolCallId={content.toolCallId} />}
-                </>
+                if (content.toolName === "delegate_task") {
+                    if (streaming) continue
+                    kind = "explorers"
+                    node = <DelegatedTaskDisplay
+                        sessionId={message.sessionId} assistantMessageId={message.id} toolCallId={content.toolCallId} />
+                } else {
+                    node = <AssistantCard kind="tool" call={content} result={toolResults.get(content.toolCallId)} phase={phase} />
+                }
                 break
             }
             default:

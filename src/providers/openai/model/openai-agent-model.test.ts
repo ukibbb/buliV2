@@ -922,6 +922,52 @@ test("classifies only explicit OpenAI context-limit failures", async () => {
     )
 })
 
+test.each([
+  {
+    name: "top-level stream error",
+    chunk: { type: "error", sequence_number: 1, code: "server_error", message: "Provider interrupted the response" },
+    message: "OpenAI stream failed: Provider interrupted the response",
+  },
+  {
+    name: "nested stream error",
+    chunk: { type: "error", sequence_number: 1, error: { type: "server_error", code: "server_error", message: "Provider interrupted the response", param: null } },
+    message: "OpenAI stream failed: Provider interrupted the response",
+  },
+  {
+    name: "failed response",
+    chunk: { type: "response.failed", sequence_number: 1, response: { error: { code: "server_error", message: "Provider interrupted the response" } } },
+    message: "OpenAI stream failed: Provider interrupted the response",
+  },
+  {
+    name: "empty error message",
+    chunk: { type: "error", sequence_number: 1, message: " " },
+    message: "OpenAI model request failed: provider returned no error message",
+  },
+  {
+    name: "long error message",
+    chunk: { type: "error", sequence_number: 1, message: "x".repeat(3_000) },
+    message: (`OpenAI stream failed: ${"x".repeat(3_000)}`).slice(0, 1_997) + "...",
+  },
+])("normalizes $name after partial text", async ({ chunk, message }) => {
+  const model = createModel(async () => eventStream([
+    { type: "response.created", response: { id: "response-error", created_at: 1, model: "gpt-5.6-sol", service_tier: null } },
+    { type: "response.output_item.added", output_index: 0, item: { type: "message", id: "answer" } },
+    { type: "response.output_text.delta", item_id: "answer", delta: "Partial answer", logprobs: null },
+    chunk,
+  ]))
+
+  const events = await collectEvents(model, [userMessage("Hello")], [])
+
+  expect(events.some((event) => event.type === "text-delta" && event.delta === "Partial answer")).toBe(true)
+  const terminal = events.at(-1)
+  expect(terminal?.type).toBe("error")
+  if (terminal?.type !== "error") throw new Error("Expected terminal error")
+  expect(terminal.error).toBeInstanceOf(Error)
+  expect((terminal.error as Error).message).toBe(message)
+  expect((terminal.error as Error).cause).toMatchObject(chunk)
+  expect(events.some((event) => event.type === "finish")).toBe(false)
+})
+
 test("rejects a discovered model after the authenticated account changes", async () => {
   let networkCalls = 0
   const model = new OpenAiAgentModel({

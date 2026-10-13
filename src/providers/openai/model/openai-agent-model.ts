@@ -286,7 +286,7 @@ function normalizeOpenAiModelError(error: unknown): unknown {
             cause: error,
         })
     }
-    if (!APICallError.isInstance(error)) return error
+    if (error instanceof Error && !APICallError.isInstance(error)) return error
     return new Error(openAiErrorMessage(error), { cause: error })
 }
 
@@ -319,9 +319,14 @@ const CONTEXT_OVERFLOW_PATTERNS = [
 
 function openAiErrorMessage(error: unknown): string {
     if (!APICallError.isInstance(error)) {
-        return error instanceof Error
-            ? error.message
-            : "OpenAI model request failed"
+        const detail = nestedErrorMessage(error)
+            ?? (isRecord(error) ? nestedErrorMessage(error.response) : undefined)
+        return truncateErrorMessage(
+            detail
+                ? `OpenAI stream failed: ${detail}`
+                : "OpenAI model request failed: provider returned no error message",
+            2_000,
+        )
     }
     const status = error.statusCode === undefined ? "" : ` (${error.statusCode})`
     const detail = nestedErrorMessage(error.data)

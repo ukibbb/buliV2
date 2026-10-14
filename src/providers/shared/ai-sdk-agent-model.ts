@@ -5,6 +5,7 @@ type SdkOptions = Parameters<typeof streamText<ToolSet>>[0]
 export type IAiSdkPreparedTurn = Pick<SdkOptions, "model" | "system" | "providerOptions"> & {
     readonly messages: NonNullable<SdkOptions["messages"]>
     readonly normalizeError: (error: unknown) => unknown
+    readonly maxRetries?: number
     readonly toolCallReasoning: { readonly mode: "not-required" } | {
         readonly mode: "require-nonempty"
         readonly reason: string
@@ -36,7 +37,7 @@ export async function* streamAiSdkTurn(
             model: prepared.model, messages: prepared.messages, tools,
             ...(prepared.system === undefined ? {} : { system: prepared.system }),
             ...(prepared.providerOptions === undefined ? {} : { providerOptions: prepared.providerOptions }),
-            abortSignal: request.signal, maxRetries: 0, stopWhen: isStepCount(1), onError: () => {},
+            abortSignal: request.signal, maxRetries: prepared.maxRetries ?? 0, stopWhen: isStepCount(1), onError: () => {},
         })
         for await (const event of result.stream) {
             if (event.type === "abort") {

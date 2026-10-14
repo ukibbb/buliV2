@@ -22,6 +22,61 @@ function fixture(deltas: Record<string, unknown>[], finish = "stop", policy: IAi
     const prepared: IAiSdkPreparedTurn = { model, messages: [{ role: "user", content: "test" }], toolCallReasoning: policy, normalizeError: () => new Error("sanitized") }
     return { collect: (input = request) => Array.fromAsync(streamAiSdkTurn(input, prepared)), count: () => count }
 }
+function retryFixture(statuses: number[], maxRetries?: number) {
+    let count = 0
+    const model = createDeepSeek({ apiKey: "synthetic", fetch: Object.assign(async () => {
+        const status = statuses[count++] ?? 503
+        if (status !== 200) return new Response("synthetic failure", {
+            status, headers: { "retry-after-ms": "0" },
+        })
+        const chunk = {
+            id: "s", object: "chat.completion.chunk", created: 1, model: "deepseek-flash",
+            choices: [{ index: 0, delta: { content: "Recovered" }, finish_reason: "stop" }],
+        }
+        return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
+            headers: { "content-type": "text/event-stream" },
+        })
+    }, { preconnect: () => undefined }) })("deepseek-flash")
+    const prepared: IAiSdkPreparedTurn = {
+        model, messages: [{ role: "user", content: "test" }],
+        toolCallReasoning: { mode: "not-required" }, normalizeError: error => error,
+        ...(maxRetries === undefined ? {} : { maxRetries }),
+    }
+    return {
+        collect: () => Array.fromAsync(streamAiSdkTurn(request, prepared)),
+        count: () => count,
+    }
+}
+
+test("three SDK retries recover a transient HTTP failure", async () => {
+    const f = retryFixture([503, 503, 503, 200], 3)
+    const events = await f.collect()
+    expect(f.count()).toBe(4)
+    expect(events).toContainEqual(expect.objectContaining({ type: "text-delta", delta: "Recovered" }))
+    expect(events.at(-1)).toMatchObject({ type: "finish", reason: "stop" })
+})
+
+test("three SDK retries stop after four failed attempts", async () => {
+    const f = retryFixture([503, 503, 503, 503], 3)
+    const events = await f.collect()
+    expect(f.count()).toBe(4)
+    expect(events.at(-1)).toMatchObject({ type: "error" })
+})
+
+test("SDK retries do not repeat a non-retryable HTTP failure", async () => {
+    const f = retryFixture([400, 200], 3)
+    const events = await f.collect()
+    expect(f.count()).toBe(1)
+    expect(events.at(-1)).toMatchObject({ type: "error" })
+})
+
+test("unspecified retry policy still makes only one attempt", async () => {
+    const f = retryFixture([503, 200])
+    const events = await f.collect()
+    expect(f.count()).toBe(1)
+    expect(events.at(-1)).toMatchObject({ type: "error" })
+})
+
 test("maps text, reasoning and zero usage without retries", async () => {
     const f = fixture([{ reasoning_content: "think" }, { content: "answer" }])
     const events = await f.collect()

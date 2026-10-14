@@ -968,6 +968,30 @@ test.each([
   expect(events.some((event) => event.type === "finish")).toBe(false)
 })
 
+test("OpenAI enables three SDK retries for transient HTTP failures", async () => {
+  let networkCalls = 0
+  const model = new OpenAiAgentModel({
+    auth: {
+      authenticatedFetch: fetchImplementation(async () => {
+        networkCalls++
+        if (networkCalls < 4) return new Response(JSON.stringify({ error: { message: "Overloaded" } }), {
+          status: 503,
+          headers: { "content-type": "application/json", "retry-after-ms": "0" },
+        })
+        return streamResponse()
+      }),
+      requireCredential: async () => ({}),
+    },
+  })
+  const events = await Array.fromAsync(model.stream({
+    sessionId: "session-1", runId: "run-1", systemPrompt: "System",
+    messages: [userMessage("Hello")], tools: [], reasoningEffort: "medium",
+    signal: new AbortController().signal,
+  }))
+  expect(networkCalls).toBe(4)
+  expect(events.at(-1)).toMatchObject({ type: "finish", reason: "stop" })
+})
+
 test("rejects a discovered model after the authenticated account changes", async () => {
   let networkCalls = 0
   const model = new OpenAiAgentModel({

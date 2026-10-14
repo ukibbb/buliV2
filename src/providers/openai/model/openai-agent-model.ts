@@ -135,6 +135,7 @@ export class OpenAiAgentModel implements IAgentModel {
             },
             toolCallReasoning: { mode: "not-required" },
             normalizeError: normalizeOpenAiModelError,
+            maxRetries: 3,
         })
     }
 }

@@ -97,7 +97,7 @@ function isCompact(kind: VisualKind): boolean {
 
 function gapBefore(previous: VisualKind | undefined, current: VisualKind): number {
     if (previous === undefined) return isCompact(current) || current === "user" || current === "explorers" ? TRANSCRIPT_GROUP_GAP : 0
-    return previous === current && isCompact(current) ? 0 : TRANSCRIPT_GROUP_GAP
+    return previous === "tool" && current === "tool" ? 0 : TRANSCRIPT_GROUP_GAP
 }
 
 function buildHistoryBlocks(

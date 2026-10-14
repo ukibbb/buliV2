@@ -37,8 +37,8 @@ for (const width of [40, 80]) {
             expect(row("first.ts")).toBe(1)
             expect(row("second.ts")).toBe(row("first.ts") + 1)
             expect(row("First summary")).toBe(row("second.ts") + 2)
-            expect(row("Second summary")).toBe(row("First summary") + 1)
-            expect(row("Live summary")).toBe(row("Second summary") + 1)
+            expect(row("Second summary")).toBe(row("First summary") + 2)
+            expect(row("Live summary")).toBe(row("Second summary") + 2)
             expect(row("last.ts")).toBe(row("Live summary") + 2)
             expect(row("Footer")).toBe(row("last.ts") + 2)
         } finally { act(() => setup.renderer.destroy()) }

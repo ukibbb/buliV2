@@ -1813,7 +1813,7 @@ test.each([false, true])("restores the previous checkpoint or empty transcript w
         await act(async () => { await setup.renderOnce() })
         expect(setup.captureCharFrame()).toContain("Unaccepted preview")
         expect(setup.captureCharFrame()).not.toContain("Previous checkpoint")
-        expect(setup.captureCharFrame()).not.toContain("Start conversation")
+        expect(setup.captureCharFrame()).not.toContain("BULI")
         act(() => clear?.())
         await act(async () => {
             await setup.renderOnce()
@@ -1824,7 +1824,7 @@ test.each([false, true])("restores the previous checkpoint or empty transcript w
         })
         expect(setup.captureCharFrame()).not.toContain("Unaccepted preview")
         expect(setup.captureCharFrame()).not.toContain("Compacting context")
-        expect(setup.captureCharFrame()).toContain(hasPrevious ? "Previous checkpoint" : "Start conversation")
+        expect(setup.captureCharFrame()).toContain(hasPrevious ? "Previous checkpoint" : "BULI")
         expect(markdownRenderables(setup.renderer.root)).toHaveLength(hasPrevious ? 1 : 0)
     } finally {
         act(() => setup.renderer.destroy())
@@ -1950,7 +1950,7 @@ test("treats a checkpoint-only transcript as non-empty", async () => {
         const frame = setup.captureCharFrame()
         expect(frame).toContain("Context compacted")
         expect(frame).toContain("Checkpoint without loaded messages")
-        expect(frame).not.toContain("Start conversation")
+        expect(frame).not.toContain("BULI")
     } finally {
         act(() => {
             setup.renderer.destroy()

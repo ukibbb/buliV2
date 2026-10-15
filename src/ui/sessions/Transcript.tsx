@@ -80,7 +80,7 @@ export function Transcript(props: ITranscriptProps): ReactNode {
     )
 
     if (blocks.length === 0) {
-        return <text fg={theme.textSecondary} selectable={false}>Start conversation</text>
+        return <text fg={theme.textSecondary} selectable={false}>BULI</text>
     }
 
     // Direct scrollbox children preserve viewport culling, even for long activity groups.

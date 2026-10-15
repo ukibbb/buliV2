@@ -238,6 +238,25 @@ export class AgentSession {
         this.switchBranch(() => this.manager.returnToParentBranch(this.id))
     }
 
+    /** Changes agent instructions at the next model request without replacing active tools. */
+    updateAgentInstructions(agentId: string, systemPrompt: string): void {
+        if (this.disposed) throw new Error("AgentSession is disposed")
+        this.assertBranchContextAvailable()
+        if (this.persistenceError !== undefined) {
+            throw new Error("Session persistence failed. Reopen the session before updating configuration.")
+        }
+        if (this.compactionTask) throw new Error("Cannot update configuration while compacting")
+        const contextUsage = this.estimateProjectedContext({ systemPrompt, tools: this.tools })
+        const snapshot = this.createSnapshot(contextUsage, this.tools, this.activeMcpServerIds, agentId)
+        this.manager.updateSessionAgent(this.id, agentId)
+        this.currentAgentId = agentId
+        this.agent.updateSystemPrompt(systemPrompt)
+        this.systemPrompt = systemPrompt
+        this.contextUsage = contextUsage
+        this.snapshot = snapshot
+        this.notifyListeners()
+    }
+
     /** Applies complete model configuration without replacing conversation history. */
     updateConfiguration(configuration: ISessionConfiguration): void {
         this.assertCanUpdateConfiguration()

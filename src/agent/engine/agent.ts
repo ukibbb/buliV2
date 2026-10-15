@@ -276,6 +276,11 @@ export class Agent {
         }
     }
 
+    /** Changes instructions for subsequent model requests without interrupting tools or queued input. */
+    updateSystemPrompt(systemPrompt: string): void {
+        this.stateValue = { ...this.stateValue, systemPrompt }
+    }
+
     /** Updates model configuration without replacing conversation history. */
     updateConfiguration(
         configuration: Pick<IAgentOptions, "systemPrompt" | "tools">,
@@ -328,8 +333,9 @@ export class Agent {
         let failure: unknown
 
         try {
+            const agent = this
             const agentContext: IAgentContext = {
-                systemPrompt: this.stateValue.systemPrompt,
+                get systemPrompt() { return agent.stateValue.systemPrompt },
                 getContext: this.getContext,
                 tools: this.stateValue.tools,
                 selectedPathReferences: this.stateValue.tools.some((tool) => tool.acceptsSelectedPathReferences)

@@ -2,6 +2,7 @@ import type {
     IBuliApplication,
     ISnapshotSource,
 } from "@/app/contracts"
+import { BULI_YOLO_AGENT_ID } from "@/agent"
 import { BULI_COMMANDS } from "@/ui/commands/catalog"
 import type {
     IBuliCommandContext,
@@ -161,13 +162,14 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     readonly toggleBuliAgent = async (): Promise<void> => {
         if (this.agentChangePending || this.navigationPending || this.store.isDisposed) return
         const sessionId = this.activeSessionId()
-        if (!sessionId) {
-            this.store.setInputError(new Error("Start a conversation before enabling YOLO"))
-            return
-        }
         this.agentChangePending = true
         try {
-            await this.application.toggleBuliAgent(sessionId)
+            if (sessionId) {
+                await this.application.toggleBuliAgent(sessionId)
+            } else {
+                const session = this.application.createSession({ agentId: BULI_YOLO_AGENT_ID, title: "New conversation" })
+                await this.activateSession(session.id)
+            }
         } catch (error) {
             this.store.setInputError(error)
         } finally {

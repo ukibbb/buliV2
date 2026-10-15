@@ -821,6 +821,66 @@ test("Agent requests include all external accepted context without a presentatio
   expect(requests[0]?.contextSummary).toBe(owner.getContext().contextSummary)
 })
 
+test("instruction changes during tool execution reach the next model request", async () => {
+  const started = Promise.withResolvers<void>()
+  const resume = Promise.withResolvers<void>()
+  const requests: IAgentModelRequest[] = []
+  const tool = defineAgentTool({
+    name: "wait", description: "Wait", inputSchema: { type: "object" },
+    async execute() { started.resolve(); await resume.promise; return "Done" },
+  })
+  const { agent } = createAgentFixture({
+    sessionId: "session-1", systemPrompt: "Original", tools: [tool],
+    resolveRunConfiguration: () => ({ reasoningEffort: "medium", model: {
+      async *stream(request) {
+        requests.push(request)
+        if (requests.length === 1) {
+          yield { type: "tool-call", toolCallId: "wait-call", toolName: "wait", input: {} }
+          yield { type: "finish", reason: "tool-calls" }
+          return
+        }
+        yield { type: "finish", reason: "stop" }
+      },
+    } }),
+  })
+  const run = agent.prompt("Start")
+  await started.promise
+  agent.updateSystemPrompt("YOLO")
+  expect(agent.state.pendingToolCallIds.size).toBe(1)
+  resume.resolve()
+  await run.runFinished
+  expect(requests.map(request => request.systemPrompt)).toEqual(["Original", "YOLO"])
+})
+
+test("instruction changes reach subsequent requests in the same run and preserve queued input", async () => {
+  const started = Promise.withResolvers<void>()
+  const resume = Promise.withResolvers<void>()
+  const requests: IAgentModelRequest[] = []
+  const { agent } = createAgentFixture({
+    sessionId: "session-1", systemPrompt: "Original", tools: [],
+    resolveRunConfiguration: () => ({ reasoningEffort: "medium", model: {
+      async *stream(request) {
+        requests.push(request)
+        if (requests.length === 1) {
+          started.resolve()
+          await resume.promise
+        }
+        yield { type: "finish", reason: "stop" }
+      },
+    } }),
+  })
+  const run = agent.prompt("Start")
+  await started.promise
+  agent.followUp("Continue")
+  agent.updateSystemPrompt("YOLO")
+  expect(agent.state.isRunning).toBe(true)
+  expect(requests[0]?.signal.aborted).toBe(false)
+  resume.resolve()
+  await run.runFinished
+  expect(requests.map(request => request.systemPrompt)).toEqual(["Original", "YOLO"])
+  expect(requests[1]?.messages.at(-1)).toMatchObject({ content: "Continue" })
+})
+
 test("Agent observes an external replacement during an active run and removes the old summary", async () => {
   const requests: IAgentModelRequest[] = []
   const { agent, owner } = createAgentFixture({

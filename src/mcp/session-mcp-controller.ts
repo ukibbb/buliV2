@@ -20,7 +20,7 @@ const INSTRUCTION_SEPARATOR = "\n\n"
 
 /** Owns MCP activation for one live session; transport ownership belongs to the host. */
 export class SessionMcpController {
-    private readonly baseConfiguration: ISessionConfiguration
+    private baseConfiguration: ISessionConfiguration
     private registrations = new Map<string, IMcpSessionContribution>()
     private changingConfiguration = false
     private disposed = false
@@ -29,6 +29,19 @@ export class SessionMcpController {
         this.baseConfiguration = {
             systemPrompt: options.baseConfiguration.systemPrompt,
             tools: [...options.baseConfiguration.tools],
+        }
+    }
+
+    /** Replaces only agent instructions, preserving registered tools and their executors. */
+    updateSystemPrompt(systemPrompt: string, apply: (systemPrompt: string) => void): void {
+        this.assertCanChange()
+        const previous = this.baseConfiguration
+        this.baseConfiguration = { ...previous, systemPrompt }
+        try {
+            apply(this.composeConfiguration(this.registrations).systemPrompt)
+        } catch (error) {
+            this.baseConfiguration = previous
+            throw error
         }
     }
 

@@ -200,9 +200,12 @@ permissions; unapproved destructive and production operations remain excluded.
 These are model instructions, not a guarantee of success or an OS-level security
 boundary. The agent loop and tool policies are unchanged.
 
-YOLO cannot be enabled during a running response. Disabling it during a YOLO run
-waits for cancellation; it does not undo completed actions or start another model
-request to generate a report. Queued input must be restored before switching agents.
+Press `Tab` before the first message to create an empty YOLO conversation without
+clearing the draft. During a response, switching in either direction does not
+cancel the current request or running tools. Updated instructions take effect at
+the next model request, including a continuation after tool execution; an already
+submitted request keeps its original instructions. Queued messages and connected
+MCP tools are preserved. Switching remains blocked during context compaction.
 The selected agent is saved with the conversation and restored when reopened.
 Work does not continue after Buli exits.
 

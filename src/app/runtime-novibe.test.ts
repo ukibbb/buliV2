@@ -100,22 +100,22 @@ test("YOLO switches identity, preserves history and persists on reopen without a
     } finally { await f.dispose() }
 })
 
-test("YOLO cannot be enabled mid-run and disabling waits for cancellation", async () => {
+test("YOLO switches both ways mid-run without cancellation", async () => {
     const f = fixture({ waitForModel: true })
     try {
         const collaborative = f.runtime.submitPrompt({ sessionId: f.first, text: "Start" })
         await collaborative.promptPersisted
-        await expect(f.runtime.toggleBuliAgent(f.first)).rejects.toThrow("Stop the active response")
+        await f.runtime.toggleBuliAgent(f.first)
+        expect(f.runtime.openSession(f.first).getSnapshot()).toMatchObject({
+            agentId: "buli-yolo", isRunning: true,
+        })
+        await f.runtime.toggleBuliAgent(f.first)
+        expect(f.runtime.openSession(f.first).getSnapshot()).toMatchObject({
+            agentId: "test", isRunning: true,
+        })
+        expect(f.requests.every(request => !request.signal.aborted)).toBe(true)
         await f.runtime.abort(f.first)
         await collaborative.runFinished
-        await f.runtime.toggleBuliAgent(f.first)
-        const autonomous = f.runtime.submitPrompt({ sessionId: f.first, text: "Execute approved plan" })
-        await autonomous.promptPersisted
-        await f.runtime.toggleBuliAgent(f.first)
-        await autonomous.runFinished
-        expect(f.runtime.openSession(f.first).getSnapshot()).toMatchObject({
-            agentId: "test", isRunning: false,
-        })
     } finally { await f.dispose() }
 })
 

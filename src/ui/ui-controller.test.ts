@@ -182,6 +182,20 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
   }
 }
 
+test("YOLO from Home creates an empty session and preserves the first draft", async () => {
+  const f = applicationSpy()
+  const controller = new BuliUiController({ application: f.application })
+  controller.updateInput("Keep this draft")
+  await controller.toggleBuliAgent()
+  expect(f.created).toEqual([{ agentId: "buli-yolo", title: "New conversation" }])
+  expect(f.prompts).toHaveLength(0)
+  expect(controller.getInputDraft().text).toBe("Keep this draft")
+  await controller.submitInput("Keep this draft")
+  expect(f.prompts[0]?.sessionId).toBeDefined()
+  expect(f.created).toHaveLength(1)
+  controller.dispose()
+})
+
 test("learn submits the workflow and opens its conversation from Home", async () => {
   const spy = applicationSpy()
   const controller = new BuliUiController({ application: spy.application })

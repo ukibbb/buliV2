@@ -365,16 +365,10 @@ export class BuliApplicationRuntime implements IBuliApplication {
         if (this.disposed) throw new Error("Buli runtime is disposed")
         const session = this.getOrOpenAgentSession(sessionId)
         if (session.agentId !== this.defaultAgentId && session.agentId !== BULI_YOLO_AGENT_ID) return
-        const leavingYolo = session.agentId === BULI_YOLO_AGENT_ID
-        if (session.getSnapshot().isRunning) {
-            if (!leavingYolo) throw new Error("Stop the active response before enabling YOLO")
-            await session.abort()
-            if (this.sessions.get(sessionId) !== session) throw new Error("Session changed while stopping YOLO")
-        }
-        const agent = this.resolveAgent(leavingYolo ? this.defaultAgentId : BULI_YOLO_AGENT_ID)
-        session.updateConfiguration({ agentId: agent.id, systemPrompt: agent.systemPrompt, tools: agent.tools })
-        this.sessionMcpControllers.get(sessionId)!.dispose()
-        this.sessionMcpControllers.set(sessionId, this.createSessionMcpController(session, agent))
+        const agent = this.resolveAgent(session.agentId === BULI_YOLO_AGENT_ID ? this.defaultAgentId : BULI_YOLO_AGENT_ID)
+        this.sessionMcpControllers.get(sessionId)!.updateSystemPrompt(agent.systemPrompt, (systemPrompt) => {
+            session.updateAgentInstructions(agent.id, systemPrompt)
+        })
     }
 
     readonly startLearning = async (request: { readonly sessionId?: string; readonly scope: string }): Promise<IBuliPromptRun> => {
@@ -1015,7 +1009,10 @@ export class BuliApplicationRuntime implements IBuliApplication {
     private createSessionMcpController(session: AgentSession, agent: IAgentDefinition): SessionMcpController {
         return new SessionMcpController({
             baseConfiguration: { systemPrompt: agent.systemPrompt, tools: agent.tools },
-            applyConfiguration: (configuration) => session.updateConfiguration({ ...configuration, agentId: agent.id }),
+            applyConfiguration: (configuration) => session.updateConfiguration({
+                ...configuration,
+                agentId: agent.id === this.defaultAgentId || agent.id === BULI_YOLO_AGENT_ID ? session.agentId : agent.id,
+            }),
             assertToolExecutionAllowed: (tool, context) => session.assertToolExecutionAllowed(tool, context),
         })
     }

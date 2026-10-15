@@ -38,6 +38,20 @@ function fixture() {
     }
 }
 
+test("changing agent instructions preserves MCP instructions and live executors", async () => {
+    const f = fixture()
+    f.controller.activate("notes", f.contribution)
+    const executor = f.configurations.at(-1)!.tools[0]!
+    let instructions = ""
+    f.controller.updateSystemPrompt("YOLO", value => { instructions = value })
+    expect(instructions).toBe("YOLO\n\nNotes")
+    expect(f.controller.isActive("notes")).toBe(true)
+    expect(await executor.validateAndExecute({}, context)).toBe("note")
+    expect(() => f.controller.updateSystemPrompt("Rejected", () => { throw new Error("Storage") })).toThrow("Storage")
+    f.controller.deactivate("notes")
+    expect(f.configurations.at(-1)?.systemPrompt).toBe("YOLO")
+})
+
 test("MCP is inactive by default and activation is idempotent", () => {
     const { controller, configurations, contribution } = fixture()
     expect(controller.isActive("novibe")).toBe(false)

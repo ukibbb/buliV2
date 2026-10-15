@@ -8,6 +8,7 @@ export type TBuliKeyboardScope = "global" | "input" | "menu"
 export type TBuliKeyboardAction =
     | "cancel"
     | "console.toggle"
+    | "input.toggleBuliAgent"
     | "input.followUp"
     | "input.pasteClipboard"
     | "menu.previous"
@@ -23,6 +24,7 @@ const SHORTCUTS: readonly TBuliKeyboardShortcut[] = [
     { scope: "global", key: { name: "escape" }, action: "cancel" },
     { scope: "global", key: { name: "d", ctrl: true }, action: "console.toggle" },
     { scope: "input", key: { name: "v", ctrl: true }, action: "input.pasteClipboard" },
+    { scope: "input", key: { name: "tab" }, action: "input.toggleBuliAgent" },
     // Raw terminals encode Alt as `meta`; Kitty additionally marks `option`.
     // Register both shapes so Alt+Enter behaves identically in either protocol.
     { scope: "input", key: { name: "return", meta: true }, action: "input.followUp" },

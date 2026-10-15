@@ -1,8 +1,7 @@
-import { BULI_COMMANDS } from "@/ui/commands/catalog"
 import type { TBuliInputSubmitResult } from "@/ui/controller/input-submission"
 import type {
     IBuliCommandContext,
-    IBuliCommandInfo,
+    TBuliCommand,
 } from "@/ui/commands/types"
 import {
     BuliUiStateStore,
@@ -12,7 +11,7 @@ import {
 
 interface IBuliCommandMenuOptions {
     readonly store: BuliUiStateStore
-    readonly commands: readonly IBuliCommandInfo[]
+    readonly commands: () => readonly TBuliCommand[]
     readonly commandContext: () => IBuliCommandContext
     readonly submitPromptCommand: (text: string) => Promise<TBuliInputSubmitResult>
 }
@@ -20,7 +19,7 @@ interface IBuliCommandMenuOptions {
 /** Owns slash suggestions, picker loading, selection, and menu activation. */
 export class BuliCommandMenu {
     private readonly store: BuliUiStateStore
-    private readonly commands: readonly IBuliCommandInfo[]
+    private readonly commands: () => readonly TBuliCommand[]
     private readonly commandContext: () => IBuliCommandContext
     private readonly submitPromptCommand: (text: string) => Promise<TBuliInputSubmitResult>
     private activationPending = false
@@ -57,7 +56,7 @@ export class BuliCommandMenu {
         const query = input.match(/^\/([^\s/]*)$/)?.[1]
         const items = query === undefined
             ? []
-            : this.commands
+            : this.commands()
                 .filter((command) =>
                     command.name.toLowerCase().startsWith(query.toLowerCase())
                 )
@@ -111,7 +110,7 @@ export class BuliCommandMenu {
         name: string,
         args: string,
     ): Promise<boolean> => {
-        const command = BULI_COMMANDS.find((candidate) => candidate.name === name)
+        const command = this.commands().find((candidate) => candidate.name === name)
         if (!command || command.kind === "prompt") return false
 
         const context = this.commandContext()
@@ -195,7 +194,7 @@ export class BuliCommandMenu {
 
         if (menu.mode === "commands") {
             try {
-                const command = BULI_COMMANDS.find(
+                const command = this.commands().find(
                     (candidate) => candidate.name === selected.id,
                 )
                 if (command?.kind === "prompt") {
@@ -219,7 +218,7 @@ export class BuliCommandMenu {
             return
         }
 
-        const command = BULI_COMMANDS.find(
+        const command = this.commands().find(
             (candidate) => candidate.name === menu.commandName,
         )
         if (!command || command.kind !== "picker") {

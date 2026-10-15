@@ -39,7 +39,14 @@ export type TBuliRoute =
     | { readonly type: "home" }
     | { readonly type: "session"; readonly sessionId: string }
 
+export interface ICommandPanelSnapshot {
+    readonly mode: "list" | "add"
+    readonly commands: readonly import("@/app/contracts").IUserPromptCommand[]
+    readonly error: string | null
+}
+
 export interface IBuliUiSnapshot {
+    readonly commandPanel?: ICommandPanelSnapshot | null
     readonly route: TBuliRoute
     readonly authenticationMode: TAuthenticationMode | null
     readonly menu: TBuliMenuSnapshot | null

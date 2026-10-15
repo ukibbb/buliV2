@@ -1,3 +1,6 @@
+import type { IUserPromptCommands } from "@/app/prompt-commands"
+export type { IUserPromptCommand, IUserPromptCommands } from "@/app/prompt-commands"
+
 import type { IDelegatedTask } from "@/sessions"
 import type {
     TReasoningEffort,
@@ -99,6 +102,7 @@ export interface IBuliSessionCreationOptions {
 export interface IBuliApplication
     extends ISnapshotSource<IBuliApplicationSnapshot> {
     readonly workspaceRoot: string
+    readonly promptCommands?: IUserPromptCommands | undefined
     readonly delegatedTasks?: {
         readonly subscribe: (listener: () => void) => () => void
         readonly getSnapshot: () => number
@@ -114,6 +118,7 @@ export interface IBuliApplication
         reasoningEffort: TReasoningEffort,
     ) => void
 
+    readonly toggleBuliAgent: (sessionId: string) => Promise<void>
     readonly startLearning: (request: { readonly sessionId?: string; readonly scope: string }) => Promise<IBuliPromptRun>
     readonly submitPrompt: (prompt: IBuliPromptInput) => IBuliPromptRun
     readonly steer: (

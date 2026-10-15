@@ -1,4 +1,5 @@
 import { expect, spyOn, test } from "bun:test"
+import { createBuliYoloAgentDefinition } from "@/agent"
 import { BuliApplicationRuntime } from "@/app/runtime"
 import { McpConnection } from "@/mcp/mcp-connection"
 import { NOVIBE_READ_TOOL_NAMES } from "@/mcp/novibe"
@@ -7,7 +8,7 @@ import type { IAgentModelRequest } from "@/agent/model"
 
 const locationToolNames = ["create_cabinet", "create_catalog", "create_category", "create_folder", "create_subfolder"]
 
-function fixture(options: { missingTool?: boolean; instructions?: string; waitForList?: Promise<void> } = {}) {
+function fixture(options: { missingTool?: boolean; instructions?: string; waitForList?: Promise<void>; waitForModel?: boolean } = {}) {
     let initializations = 0
     const listStarted = Promise.withResolvers<void>()
     const server = Bun.serve({
@@ -48,10 +49,18 @@ function fixture(options: { missingTool?: boolean; instructions?: string; waitFo
         workspaceRoot: "/workspace", manager,
         agents: [
             { id: "test", name: "Test", systemPrompt: "Base", tools: [] },
+            createBuliYoloAgentDefinition({ id: "test", name: "Test", systemPrompt: "Base", tools: [] }),
             { id: "novibe", name: "NoVibe", systemPrompt: "Local tool instructions", tools: [] },
         ], defaultAgentId: "test",
         models: [{ id: "test", name: "Test", reasoningEfforts: ["medium"], defaultReasoningEffort: "medium",
-            model: { async *stream(request) { requests.push(request); yield { type: "finish", reason: "stop" } } } }],
+            model: { async *stream(request) {
+                requests.push(request)
+                if (options.waitForModel) await new Promise<void>(resolve => {
+                    if (request.signal.aborted) resolve()
+                    else request.signal.addEventListener("abort", () => resolve(), { once: true })
+                })
+                yield { type: "finish", reason: "stop" }
+            } } }],
         selection: { modelId: "test", reasoningEffort: "medium" }, generateId: () => `session-${++id}`,
     })
     const first = runtime.createSession({ agentId: "test", title: "First" }).id
@@ -65,6 +74,60 @@ function fixture(options: { missingTool?: boolean; instructions?: string; waitFo
         },
     }
 }
+
+test("YOLO switches identity, preserves history and persists on reopen without affecting NoVibe", async () => {
+    const f = fixture()
+    try {
+        await f.prompt(f.first)
+        await f.runtime.toggleBuliAgent(f.first)
+        expect(f.runtime.openSession(f.first).getSnapshot().agentId).toBe("buli-yolo")
+        await f.prompt(f.first)
+        expect(f.requests.at(-1)?.systemPrompt).toContain("Agent: Buli YOLO")
+        expect(JSON.stringify(f.requests.at(-1)?.messages)).toContain("Read")
+        await f.runtime.closeSession(f.first)
+        expect(f.runtime.openSession(f.first).getSnapshot().agentId).toBe("buli-yolo")
+        await f.runtime.activateNovibe(f.first)
+        await f.runtime.toggleBuliAgent(f.first)
+        expect(f.runtime.openSession(f.first).getSnapshot().agentId).toBe("novibe")
+        await f.prompt(f.first)
+        expect(f.requests.at(-1)?.systemPrompt).toContain("Test NoVibe instructions")
+        expect(f.requests.at(-1)?.systemPrompt).not.toContain("Agent: Buli YOLO")
+        await f.runtime.deactivateNovibe(f.first)
+        expect(f.runtime.openSession(f.first).getSnapshot().agentId).toBe("test")
+        await f.prompt(f.first)
+        expect(f.requests.at(-1)?.systemPrompt).not.toContain("Agent: Buli YOLO")
+    } finally { await f.dispose() }
+})
+
+test("YOLO cannot be enabled mid-run and disabling waits for cancellation", async () => {
+    const f = fixture({ waitForModel: true })
+    try {
+        const collaborative = f.runtime.submitPrompt({ sessionId: f.first, text: "Start" })
+        await collaborative.promptPersisted
+        await expect(f.runtime.toggleBuliAgent(f.first)).rejects.toThrow("Stop the active response")
+        await f.runtime.abort(f.first)
+        await collaborative.runFinished
+        await f.runtime.toggleBuliAgent(f.first)
+        const autonomous = f.runtime.submitPrompt({ sessionId: f.first, text: "Execute approved plan" })
+        await autonomous.promptPersisted
+        await f.runtime.toggleBuliAgent(f.first)
+        await autonomous.runFinished
+        expect(f.runtime.openSession(f.first).getSnapshot()).toMatchObject({
+            agentId: "test", isRunning: false,
+        })
+    } finally { await f.dispose() }
+})
+
+test("Tab in a NoVibe read-only branch preserves its restricted tools", async () => {
+    const f = fixture()
+    try {
+        await f.runtime.activateNovibe(f.first)
+        f.runtime.createBranch(f.first)
+        await f.runtime.toggleBuliAgent(f.first)
+        await f.prompt(f.first)
+        expect(f.requests.at(-1)?.tools.map(tool => tool.name)).toEqual(NOVIBE_READ_TOOL_NAMES.map(name => `novibe__${name}`))
+    } finally { await f.dispose() }
+})
 
 test("learn activates NoVibe, forwards scope and reuses the connection", async () => {
     const f = fixture()

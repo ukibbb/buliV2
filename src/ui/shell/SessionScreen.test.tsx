@@ -100,6 +100,7 @@ function createSessionHarness(initialSnapshot: ISessionTestData) {
     refreshModels: async () => undefined,
     selectModel: () => undefined,
     selectReasoningEffort: () => undefined,
+    toggleBuliAgent: async () => undefined,
     startLearning: async () => { throw new Error("Not used in this fixture") },
     submitPrompt: () => ({
       sessionId: SESSION_ID,

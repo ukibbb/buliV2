@@ -9,6 +9,22 @@ function assistant(id: string, content: IAssistantMessage["content"]): IAssistan
 }
 
 for (const width of [40, 80]) {
+    test(`separates Edit and Write while keeping reads compact at ${width} columns`, async () => {
+        const names = ["read", "read", "edit", "edit", "write", "read", "read"]
+        const message = assistant("file-tools", names.map((toolName, index) => ({
+            type: "toolCall" as const, toolName, toolCallId: `call-${index}`, input: { path: `file-${index}.ts` },
+        })))
+        const setup = await testRender(<box flexDirection="column"><Transcript messages={[message]} /><text>Footer</text></box>, { width, height: 24 })
+        try {
+            await act(async () => { await setup.renderOnce() })
+            const rows = setup.captureCharFrame().split("\n").map(row => row.trim())
+            const positions = names.map((_, index) => rows.findIndex(row => row.includes(`file-${index}.ts`)))
+            expect(positions.every(position => position >= 0)).toBe(true)
+            expect(positions.slice(1).map((position, index) => position - positions[index]!)).toEqual([1, 2, 2, 2, 2, 1])
+            expect(rows.findIndex(row => row.includes("Footer"))).toBe(positions.at(-1)! + 2)
+        } finally { act(() => setup.renderer.destroy()) }
+    })
+
     test(`spaces visible groups across messages and live content at ${width} columns`, async () => {
         const messages: TAgentMessage[] = [
             assistant("tools", [

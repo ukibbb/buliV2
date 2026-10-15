@@ -15,6 +15,28 @@ import { theme } from "@/ui/terminal/theme"
 import type { IPathCompletion } from "@/ui/controller/path-menu"
 import type { IUserInputContent } from "@/agent"
 
+test("YOLO editor is amber and Tab toggles without changing the draft", async () => {
+  let toggles = 0
+  const setup = await testRender(<PromptEditor
+    value={{ text: "Keep this draft" }} menuOpen={false} agentId="buli-yolo"
+    getCurrentValue={() => ({ text: "Keep this draft" })}
+    onValueChange={() => {}} onSubmit={async () => "retained"}
+    onMoveMenuSelection={() => {}} onActivateMenuItem={async () => {}}
+    onError={error => { throw error }} onToggleBuliAgent={async () => { toggles++ }}
+  />, { width: 80, height: 10 })
+  try {
+    await act(async () => {
+      await setup.renderOnce()
+      setup.renderer.keyInput.processParsedKey({ name: "tab", sequence: "\t", ctrl: false, meta: false, shift: false } as Parameters<typeof setup.renderer.keyInput.processParsedKey>[0])
+      await setup.renderOnce()
+    })
+    const textarea = findTextarea(setup.renderer.root)
+    expect(toggles).toBe(1)
+    expect(textarea.plainText).toBe("Keep this draft")
+    expect((textarea.parent as BoxRenderable).borderColor.equals(RGBA.fromHex(theme.amber))).toBe(true)
+  } finally { act(() => setup.renderer.destroy()) }
+})
+
 test("prompt editor uses a pink border", async () => {
   const setup = await testRender(<PromptHarness onSubmit={() => {}} />, { width: 80, height: 10 })
 

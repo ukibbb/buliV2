@@ -5,7 +5,7 @@ import type {
 import { BULI_COMMANDS } from "@/ui/commands/catalog"
 import type {
     IBuliCommandContext,
-    IBuliCommandInfo,
+    TBuliCommand,
 } from "@/ui/commands/types"
 import { BuliCommandMenu } from "@/ui/controller/command-menu"
 import {
@@ -54,7 +54,13 @@ interface IBuliUiControllerOptions {
 /** Coordinates application UI routing, input, menus, and async interactions. */
 export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     readonly workspaceRoot: string
-    readonly commands: readonly IBuliCommandInfo[]
+    get commands(): readonly TBuliCommand[] {
+        return [...BULI_COMMANDS, ...this.userCommands.map(command => ({
+            kind: "prompt" as const, name: command.name, description: command.prompt.split("\n")[0] ?? "Saved prompt", prompt: command.prompt,
+        }))]
+    }
+
+    private userCommands: readonly import("@/app/contracts").IUserPromptCommand[] = []
 
     private readonly application: IBuliApplication
     private readonly store = new BuliUiStateStore()
@@ -63,16 +69,15 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     private readonly inputSubmission: BuliInputSubmission
     private inputDraft: IUserInputContent = { text: "" }
     private navigationPending = false
+    private agentChangePending = false
 
     constructor(options: IBuliUiControllerOptions) {
         this.application = options.application
         this.workspaceRoot = options.application.workspaceRoot
-        this.commands = BULI_COMMANDS.map(
-            ({ name, description }) => ({ name, description }),
-        )
+        try { this.userCommands = this.loadUserCommands() } catch (error) { this.store.setInputError(error) }
         this.commandMenu = new BuliCommandMenu({
             store: this.store,
-            commands: this.commands,
+            commands: () => this.commands,
             commandContext: this.commandContext,
             submitPromptCommand: (text) => this.submitInput(text),
         })
@@ -83,11 +88,62 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
         this.inputSubmission = new BuliInputSubmission({
             application: this.application,
             store: this.store,
-            commands: BULI_COMMANDS,
+            commands: () => this.commands,
             activeSessionId: this.activeSessionId,
             executeCommand: this.commandMenu.executeCommand,
             consumeInput: this.consumeInputDraft,
         })
+    }
+
+    private loadUserCommands() {
+        return (this.application.promptCommands?.list() ?? []).filter(command => !BULI_COMMANDS.some(builtin => builtin.name === command.name))
+    }
+
+    readonly openCommands = (): void => {
+        try {
+            if (!this.application.promptCommands) throw new Error("Prompt command storage is unavailable")
+            this.userCommands = this.loadUserCommands()
+            this.showCommandList()
+        } catch (error) { this.store.setInputError(error) }
+    }
+
+    readonly closeCommands = (): void => {
+        this.store.setSnapshot({ ...this.store.getSnapshot(), commandPanel: null })
+    }
+
+    readonly showAddCommand = (): void => {
+        this.store.setSnapshot({ ...this.store.getSnapshot(), commandPanel: { mode: "add", commands: this.userCommands, error: null } })
+    }
+
+    readonly saveCommand = (name: string, prompt: string): boolean => {
+        try {
+            if (!this.application.promptCommands) throw new Error("Prompt command storage is unavailable")
+            const normalizedName = name.trim().replace(/^\//, "")
+            if (BULI_COMMANDS.some(command => command.name === normalizedName)) throw new Error(`Command /${normalizedName} is built in`)
+            this.application.promptCommands.add({ name: normalizedName, prompt })
+            this.userCommands = [...this.userCommands, { name: normalizedName, prompt }].sort((left, right) => left.name.localeCompare(right.name))
+            this.showCommandList()
+            return true
+        } catch (error) { this.setCommandError(error); return false }
+    }
+
+    readonly removeCommand = (name: string): void => {
+        try {
+            if (!this.application.promptCommands) throw new Error("Prompt command storage is unavailable")
+            this.application.promptCommands.remove(name)
+            this.userCommands = this.userCommands.filter(command => command.name !== name)
+            this.showCommandList()
+        } catch (error) { this.setCommandError(error) }
+    }
+
+    private showCommandList(): void {
+        this.store.setSnapshot({ ...this.store.getSnapshot(), menu: null, commandPanel: { mode: "list", commands: this.userCommands, error: null } })
+    }
+
+    private setCommandError(error: unknown): void {
+        const snapshot = this.store.getSnapshot()
+        if (!snapshot.commandPanel) return
+        this.store.setSnapshot({ ...snapshot, commandPanel: { ...snapshot.commandPanel, error: error instanceof Error ? error.message : String(error) } })
     }
 
     readonly getSnapshot = (): IBuliUiSnapshot => this.store.getSnapshot()
@@ -100,6 +156,23 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
         this.commandMenu.cancelPendingLoad()
         this.pathMenu.cancel()
         this.store.dispose()
+    }
+
+    readonly toggleBuliAgent = async (): Promise<void> => {
+        if (this.agentChangePending || this.navigationPending || this.store.isDisposed) return
+        const sessionId = this.activeSessionId()
+        if (!sessionId) {
+            this.store.setInputError(new Error("Start a conversation before enabling YOLO"))
+            return
+        }
+        this.agentChangePending = true
+        try {
+            await this.application.toggleBuliAgent(sessionId)
+        } catch (error) {
+            this.store.setInputError(error)
+        } finally {
+            this.agentChangePending = false
+        }
     }
 
     readonly updateInput = (input: string): void => {
@@ -177,6 +250,12 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
     readonly escape = (): void => {
         if (this.store.isDisposed) return
         const snapshot = this.store.getSnapshot()
+
+        if (snapshot.commandPanel) {
+            if (snapshot.commandPanel.mode === "add") this.openCommands()
+            else this.closeCommands()
+            return
+        }
 
         if (snapshot.authenticationMode) {
             this.closeAuthentication()
@@ -301,6 +380,7 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
         activateSession: this.activateSession,
         goHome: this.goHome,
         openAuthentication: this.openAuthentication,
+        openCommands: this.openCommands,
     })
 
     private assertCanSwitchSession(): void {

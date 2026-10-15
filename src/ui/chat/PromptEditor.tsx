@@ -17,6 +17,7 @@ import {
     sameUserInput,
     type IPathMention,
 } from "@/ui/chat/prompt-draft"
+import { BULI_YOLO_AGENT_ID } from "@/agent"
 import { buliKeyboardShortcuts } from "@/ui/keyboard-shortcuts"
 import { theme } from "@/ui/terminal/theme"
 import type {
@@ -46,6 +47,9 @@ const chatTextAreaKeybindings: KeyBinding[] = [
 interface IPromptEditorProps {
     readonly value: IUserInputContent
     readonly menuOpen: boolean
+    readonly disabled?: boolean
+    readonly agentId?: string
+    readonly onToggleBuliAgent?: () => Promise<void>
     readonly clipboard?: Pick<ClipboardService, "read">
     readonly getCurrentValue: () => IUserInputContent
     readonly onValueChange: (
@@ -164,6 +168,7 @@ export function PromptEditor(props: IPromptEditorProps) {
     }
 
     const submitInput = (delivery: TBuliInputDelivery): void => {
+        if (props.disabled) return
         cancelClipboardRead("Prompt was submitted")
         const input = currentDraft()
         if (!input.text.trim() && !input.attachments?.length) return
@@ -326,11 +331,21 @@ export function PromptEditor(props: IPromptEditorProps) {
     }
 
     const handleKeyDown = (key: KeyEvent): void => {
+        if (props.disabled) {
+            key.preventDefault()
+            return
+        }
         const inputAction = buliKeyboardShortcuts.resolve("input", key)
         if (inputAction === "input.pasteClipboard" && props.clipboard) {
             key.preventDefault()
             key.stopPropagation()
             pasteClipboard()
+            return
+        }
+        if (inputAction === "input.toggleBuliAgent" && props.onToggleBuliAgent) {
+            key.preventDefault()
+            key.stopPropagation()
+            void props.onToggleBuliAgent().catch(props.onError)
             return
         }
         if (inputAction === "input.followUp") {
@@ -358,7 +373,7 @@ export function PromptEditor(props: IPromptEditorProps) {
             width="100%"
             border={["top", "bottom"]}
             borderStyle="single"
-            borderColor={theme.pink}
+            borderColor={props.agentId === BULI_YOLO_AGENT_ID ? theme.amber : theme.pink}
             style={{
                 minHeight: CHAT_MIN_ROW_COUNT,
                 maxHeight: CHAT_MAX_ROW_COUNT,
@@ -377,7 +392,7 @@ export function PromptEditor(props: IPromptEditorProps) {
                     if (!sameUserInput(input, props.getCurrentValue())) publishDraft()
                 }}
                 onCursorChange={publishDraft}
-                focused
+                focused={!props.disabled}
                 style={{ keyBindings: chatTextAreaKeybindings }}
             />
         </box>

@@ -1,4 +1,5 @@
 /** Public agent feature API used by sessions, adapters and application composition. */
+export { BULI_YOLO_AGENT_ID, createBuliYoloAgentDefinition } from "@/agent/definitions/buli-yolo"
 export { createExplorerAgentDefinition } from "@/agent/definitions/explorer"
 export { createDelegateTaskTool } from "@/agent/tools/delegate-task/delegate-task-tool"
 export { Agent } from "@/agent/engine/agent"

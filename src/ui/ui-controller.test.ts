@@ -36,6 +36,7 @@ const APPLICATION_SNAPSHOT: IBuliApplicationSnapshot = {
 }
 
 interface IApplicationSpyOptions {
+  readonly promptCommands?: IBuliApplication["promptCommands"]
   readonly activateNovibe?: IBuliApplication["activateNovibe"]
   readonly deactivateNovibe?: IBuliApplication["deactivateNovibe"]
   readonly runningSessionId?: string
@@ -94,6 +95,7 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
 
   const application: IBuliApplication = {
     workspaceRoot: "/workspace",
+    promptCommands: options.promptCommands,
     subscribe: () => () => undefined,
     getSnapshot: () => options.getSnapshot?.() ?? APPLICATION_SNAPSHOT,
     refreshModels: async (signal) => {
@@ -118,6 +120,7 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
     },
     closeSession: async () => undefined,
     listSessions: () => structuredClone([...infos.values()]),
+    toggleBuliAgent: async () => undefined,
     startLearning: async ({ sessionId, scope }) => application.submitPrompt({ ...(sessionId ? { sessionId } : {}), text: `Learn: ${scope}` }),
     submitPrompt: (prompt) => {
       prompts.push(prompt)
@@ -336,8 +339,75 @@ test("publishes all command suggestions from slash input", () => {
     "compact",
     "novibe",
     "learn",
+    "commands",
   ])
   expect(notifications).toBe(1)
+})
+
+test("saved command panel registers, suggests, expands and removes global prompts", async () => {
+  const saved = new Map<string, string>()
+  const spy = applicationSpy({ promptCommands: {
+    list: () => [...saved].map(([name, prompt]) => ({ name, prompt })),
+    add: ({ name, prompt }) => { if (saved.has(name)) throw new Error("Already exists"); saved.set(name, prompt) },
+    remove: name => { saved.delete(name) },
+  } })
+  const controller = new BuliUiController({ application: spy.application })
+  await controller.submitInput("/commands")
+  expect(controller.getSnapshot().commandPanel?.mode).toBe("list")
+  expect(spy.prompts).toEqual([])
+  controller.showAddCommand()
+  expect(controller.saveCommand("model", "Forbidden")).toBe(false)
+  expect(controller.getSnapshot().commandPanel?.error).toContain("built in")
+  expect(controller.saveCommand("review", "Review code.\nExplain errors.")).toBe(true)
+  expect(controller.getSnapshot().commandPanel?.commands).toEqual([{ name: "review", prompt: "Review code.\nExplain errors." }])
+  controller.closeCommands()
+  controller.updateInput("/rev")
+  expect(controller.getSnapshot().menu?.items.map(item => item.id)).toEqual(["review"])
+  await controller.activateSelectedMenuItem()
+  expect(spy.prompts.at(-1)?.text).toBe("Review code.\nExplain errors.")
+  await controller.submitInput("/review authentication")
+  expect(spy.prompts.at(-1)?.text).toBe("Review code.\nExplain errors.\n\nauthentication")
+  controller.openCommands()
+  controller.removeCommand("review")
+  expect(controller.getSnapshot().commandPanel?.commands).toEqual([])
+  controller.closeCommands()
+  controller.updateInput("/rev")
+  expect(controller.getSnapshot().menu).toBeNull()
+  controller.dispose()
+})
+
+test("command write errors retain form and deletion errors retain list; Escape does not abort", () => {
+  const spy = applicationSpy({ promptCommands: {
+    list: () => [{ name: "review", prompt: "Review" }],
+    add: () => { throw new Error("Disk full") },
+    remove: () => { throw new Error("Access denied") },
+  } })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.openCommands()
+  controller.showAddCommand()
+  expect(controller.saveCommand("explain", "Explain")).toBe(false)
+  expect(controller.getSnapshot().commandPanel).toMatchObject({ mode: "add", error: "Disk full" })
+  controller.escape()
+  expect(controller.getSnapshot().commandPanel?.mode).toBe("list")
+  controller.removeCommand("review")
+  expect(controller.getSnapshot().commandPanel).toMatchObject({ commands: [{ name: "review", prompt: "Review" }], error: "Access denied" })
+  controller.escape()
+  expect(controller.getSnapshot().commandPanel).toBeNull()
+  expect(spy.aborted).toEqual([])
+  controller.dispose()
+})
+
+test("saved commands expand for steering and follow-up without changing agent", async () => {
+  const spy = applicationSpy({ runningSessionId: "session-1", promptCommands: {
+    list: () => [{ name: "review", prompt: "Review code" }], add: () => {}, remove: () => {},
+  } })
+  const controller = new BuliUiController({ application: spy.application })
+  await controller.activateSession("session-1")
+  await controller.submitInput("/review now")
+  await controller.submitInput("/review later", "followUp")
+  expect(spy.steering).toEqual([{ sessionId: "session-1", text: "Review code\n\nnow" }])
+  expect(spy.followUps).toEqual([{ sessionId: "session-1", text: "Review code\n\nlater" }])
+  controller.dispose()
 })
 
 test("publishes fd path suggestions and returns a selected capability", async () => {

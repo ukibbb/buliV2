@@ -27,7 +27,7 @@ export interface ITranscriptProps {
     readonly checkpointOutsidePage?: boolean
 }
 
-type VisualKind = "explorers" | "tool" | "reasoning" | "text" | "user" | "diff" | "error" | "checkpoint"
+type VisualKind = "explorers" | "tool" | "file-tool" | "reasoning" | "text" | "user" | "diff" | "error" | "checkpoint"
 interface ITranscriptBlock {
     readonly key: string
     readonly kind: VisualKind
@@ -92,7 +92,11 @@ export function Transcript(props: ITranscriptProps): ReactNode {
 }
 
 function isCompact(kind: VisualKind): boolean {
-    return kind === "tool" || kind === "reasoning"
+    return kind === "tool" || kind === "file-tool" || kind === "reasoning"
+}
+
+function toolVisualKind(toolName: string): VisualKind {
+    return toolName === "edit" || toolName === "write" ? "file-tool" : "tool"
 }
 
 function gapBefore(previous: VisualKind | undefined, current: VisualKind): number {
@@ -157,7 +161,7 @@ function messageBlocks(
         case "toolResult":
             return projection.matchedToolResultMessageIds.has(message.id) || !isVisibleTool(message.toolName) || message.toolName === "delegate_task"
                 ? []
-                : [{ key: message.id, kind: "tool", node: <ToolCallDisplay result={message} /> }]
+                : [{ key: message.id, kind: toolVisualKind(message.toolName), node: <ToolCallDisplay result={message} /> }]
     }
 }
 
@@ -189,7 +193,7 @@ function assistantBlocks(
                 break
             case "toolCall": {
                 if (!isVisibleTool(content.toolName)) continue
-                kind = "tool"
+                kind = toolVisualKind(content.toolName)
                 const active = streaming || activeToolCallIds.has(content.toolCallId)
                 const phase = active ? runningToolCallIds.has(content.toolCallId) ? "running" : "pending" : undefined
                 if (content.toolName === "delegate_task") {

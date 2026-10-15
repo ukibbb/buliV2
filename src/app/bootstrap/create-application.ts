@@ -1,4 +1,5 @@
-import { createExplorerAgentDefinition } from "@/agent"
+import { createBuliYoloAgentDefinition, createExplorerAgentDefinition } from "@/agent"
+import { FilePromptCommands } from "@/app/prompt-commands"
 import { realpath } from "node:fs/promises"
 import { defaultModelPreferencesPath, loadModelPreferences, saveModelPreferences } from "@/app/preferences/model-preferences"
 import { dirname, resolve } from "node:path"
@@ -160,7 +161,8 @@ export async function createBuliApplication(
             } : {}),
             workspaceRoot,
             manager,
-            agents: [buli, novibe],
+            promptCommands: new FilePromptCommands(),
+            agents: [buli, createBuliYoloAgentDefinition(buli), novibe],
             explorer: createExplorerAgentDefinition({
                 workspaceRoot, toolOutputStore,
                 ...(workspaceInstructions === undefined ? {} : { workspaceInstructions }),

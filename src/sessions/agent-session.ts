@@ -250,7 +250,7 @@ export class AgentSession {
         }
         const nextContextUsage = this.estimateProjectedContext(nextConfiguration)
         const activeMcpServerIds = [...(configuration.activeMcpServerIds ?? [])]
-        const nextSnapshot = this.createSnapshot(nextContextUsage, tools, activeMcpServerIds)
+        const nextSnapshot = this.createSnapshot(nextContextUsage, tools, activeMcpServerIds, configuration.agentId ?? this.agentId)
 
         if (configuration.agentId !== undefined && configuration.agentId !== this.agentId) {
             this.manager.updateSessionAgent(this.id, configuration.agentId)
@@ -798,6 +798,7 @@ export class AgentSession {
         contextUsage: IContextUsage | undefined = this.contextUsage,
         tools: readonly IRuntimeAgentTool[] = this.tools,
         activeMcpServerIds: readonly string[] = this.activeMcpServerIds,
+        agentId: string = this.agentId,
     ): ISessionSnapshot {
         const state = this.agent.state
 
@@ -815,6 +816,7 @@ export class AgentSession {
 
         return freezeSessionSnapshot({
             activeBranchId: this.activeBranchId,
+            agentId,
             ...(activeMcpServerIds.length === 0 ? {} : {
                 activeMcpServers: this.snapshotMcpServers(tools, activeMcpServerIds),
             }),

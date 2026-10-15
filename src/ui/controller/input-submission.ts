@@ -13,7 +13,7 @@ export type TBuliInputDelivery = "auto" | "followUp"
 interface IBuliInputSubmissionOptions {
     readonly application: IBuliApplication
     readonly store: BuliUiStateStore
-    readonly commands: readonly TBuliCommand[]
+    readonly commands: () => readonly TBuliCommand[]
     readonly activeSessionId: () => string | null
     readonly executeCommand: (name: string, args: string) => Promise<boolean>
     readonly consumeInput: (input: IUserInputContent) => void
@@ -23,7 +23,7 @@ interface IBuliInputSubmissionOptions {
 export class BuliInputSubmission {
     private readonly application: IBuliApplication
     private readonly store: BuliUiStateStore
-    private readonly commands: readonly TBuliCommand[]
+    private readonly commands: () => readonly TBuliCommand[]
     private readonly activeSessionId: () => string | null
     private readonly executeCommand: (
         name: string,
@@ -89,7 +89,7 @@ export class BuliInputSubmission {
         const name = invocation?.[1]
         const args = invocation?.[2] ?? ""
         const knownCommand = name
-            ? this.commands.find((command) => command.name === name)
+            ? this.commands().find((command) => command.name === name)
             : undefined
 
         if (knownCommand?.kind === "picker" && args) {
@@ -106,7 +106,7 @@ export class BuliInputSubmission {
                     return "consumed"
                 }
             } catch (error) {
-                const command = this.commands.find(
+                const command = this.commands().find(
                     (candidate) => candidate.name === name,
                 )
                 if (command) {
@@ -129,6 +129,9 @@ export class BuliInputSubmission {
         }
 
         try {
+            if (knownCommand?.kind === "prompt" && knownCommand.prompt !== undefined) {
+                normalized = { text: args.trim() ? `${knownCommand.prompt}\n\n${args.trim()}` : knownCommand.prompt }
+            }
             const learning = name === "learn" && knownCommand?.kind === "prompt"
             if (learning && (activeSession?.isRunning || delivery === "followUp")) {
                 throw new Error("Stop the active response before starting /learn")

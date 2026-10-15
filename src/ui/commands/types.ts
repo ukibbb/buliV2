@@ -11,6 +11,7 @@ export interface IBuliCommandContext {
     readonly sessionId: string | null
     readonly activateSession: (sessionId: string) => Promise<void>
     readonly goHome: () => Promise<void>
+    readonly openCommands: () => void
     readonly openAuthentication: (mode: TAuthenticationMode) => void
 }
 
@@ -35,6 +36,7 @@ type TBuliCommandHandler = (
 export type TBuliCommand = IBuliCommandInfo & (
     | {
         readonly kind: "prompt"
+        readonly prompt?: string
     }
     | {
         readonly kind: "action"

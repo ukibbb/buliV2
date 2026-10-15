@@ -150,6 +150,7 @@ It does not automatically switch to a cheaper model.
 | `@` | Complete a file or directory path for the model to inspect when needed. |
 | `Enter` | Send a prompt; during a response, queue steering for the next model request. |
 | `Alt+Enter` | Queue follow-up work after tools and steering finish. |
+| `Tab` | Switch between Buli and Buli YOLO, preserving history. Returning from an active YOLO run stops it first. No effect in NoVibe. |
 | `Escape` | Stop the active response and restore undelivered queued input to the editor. |
 | `Ctrl+V` | Paste clipboard content, including image attachments where supported. |
 | Mouse selection | Copy selected terminal text to the clipboard. |
@@ -157,6 +158,50 @@ It does not automatically switch to a cheaper model.
 
 Image support depends on the selected provider and model. Pending steering and
 follow-up messages are held in memory: exiting or crashing can discard them.
+
+### Saved prompt commands
+
+Use `/commands` to open the command manager above the chat input. Select or click
+`[Add new]`, enter a name and a multiline prompt, then select or click `[OK]`.
+Tab moves between fields and buttons; Enter in the prompt inserts a newline.
+Escape returns from the form to the list, then closes the panel. The existing
+chat draft is preserved while managing commands.
+
+Saved commands appear in slash suggestions. `/review` sends the saved prompt to
+the current agent in the current conversation. `/review authentication` appends
+`authentication` after the prompt. During an active response, it is delivered as
+steering; Alt+Enter queues it as follow-up, just like a normal message. Saving a
+command does not execute it, switch agents, or grant permissions.
+
+Commands are global Markdown files in `~/.buli/commands/`, one file per command
+(for example, `review.md`). Names must start with a lowercase letter and contain
+only lowercase letters, digits, or hyphens, up to 64 characters. Built-in names
+and existing files cannot be overwritten. The `[×]` beside a command deletes it
+immediately; arrow keys select the delete buttons or `[Add new]`, and Enter
+activates the selection. Built-in commands are not removable.
+
+This version has no in-app editing of saved commands or live synchronization
+between running instances. Reopening `/commands` reloads the files from disk.
+
+### Buli YOLO agent
+
+Press `Tab` in a Buli conversation to switch between Buli and Buli YOLO without
+replacing its history. A pink editor border indicates Buli; amber indicates Buli
+YOLO. There is no additional label. NoVibe is independent: Tab does nothing there,
+and `/novibe off` restores ordinary Buli. Agree on the goal, plan, constraints,
+and completion criteria before authorizing execution. Selecting Buli YOLO alone
+does not approve a task or grant additional tool access.
+
+YOLO instructs the agent to execute the approved plan, verify results, fix problems
+within scope, and finish with a detailed explanatory report rather than asking for
+approval at every step. These are model instructions, not a guarantee of success
+or an OS-level security boundary. The agent loop and tool policies are unchanged.
+
+YOLO cannot be enabled during a running response. Disabling it during a YOLO run
+waits for cancellation; it does not undo completed actions or start another model
+request to generate a report. Queued input must be restored before switching agents.
+The selected agent is saved with the conversation and restored when reopened.
+Work does not continue after Buli exits.
 
 ### NoVibe integration
 

@@ -1,5 +1,6 @@
+import type { IUserPromptCommands } from "@/app/prompt-commands"
 import { DelegatedTasks } from "@/app/delegated-tasks"
-import { createDelegateTaskTool } from "@/agent"
+import { BULI_YOLO_AGENT_ID, createDelegateTaskTool } from "@/agent"
 import type {
     IAgentDefinition,
     IAgentModel,
@@ -58,6 +59,7 @@ export type TBuliModelRegistrationLoader = (
 export type { TBuliPathSearcher } from "@/app/contracts"
 
 export interface IBuliRuntimeOptions {
+    readonly promptCommands?: IUserPromptCommands
     readonly workspaceRoot: string
     readonly manager: ISessionManager
     readonly agents: readonly IAgentDefinition[]
@@ -85,6 +87,7 @@ export interface IBuliRuntimeOptions {
 
 /** Owns and reuses one AgentSession for each requested session ID. */
 export class BuliApplicationRuntime implements IBuliApplication {
+    readonly promptCommands: IUserPromptCommands | undefined
     // working area
     readonly workspaceRoot: string
 
@@ -134,6 +137,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
     private readonly listeners = new Set<TBuliRuntimeListener>()
 
     constructor(options: IBuliRuntimeOptions) {
+        this.promptCommands = options.promptCommands
         this.novibeAuth = options.novibeAuth
         this.openNovibeUrl = options.openNovibeUrl
         this.workspaceRoot = options.workspaceRoot
@@ -355,6 +359,22 @@ export class BuliApplicationRuntime implements IBuliApplication {
             || right.createdAt - left.createdAt
             || left.id.localeCompare(right.id)
         )
+    }
+
+    readonly toggleBuliAgent = async (sessionId: string): Promise<void> => {
+        if (this.disposed) throw new Error("Buli runtime is disposed")
+        const session = this.getOrOpenAgentSession(sessionId)
+        if (session.agentId !== this.defaultAgentId && session.agentId !== BULI_YOLO_AGENT_ID) return
+        const leavingYolo = session.agentId === BULI_YOLO_AGENT_ID
+        if (session.getSnapshot().isRunning) {
+            if (!leavingYolo) throw new Error("Stop the active response before enabling YOLO")
+            await session.abort()
+            if (this.sessions.get(sessionId) !== session) throw new Error("Session changed while stopping YOLO")
+        }
+        const agent = this.resolveAgent(leavingYolo ? this.defaultAgentId : BULI_YOLO_AGENT_ID)
+        session.updateConfiguration({ agentId: agent.id, systemPrompt: agent.systemPrompt, tools: agent.tools })
+        this.sessionMcpControllers.get(sessionId)!.dispose()
+        this.sessionMcpControllers.set(sessionId, this.createSessionMcpController(session, agent))
     }
 
     readonly startLearning = async (request: { readonly sessionId?: string; readonly scope: string }): Promise<IBuliPromptRun> => {

@@ -14,6 +14,7 @@ export interface ISessionMcpStatus {
 
 /** Immutable read model published by one live agent session. */
 export interface ISessionSnapshot {
+    readonly agentId?: string
     readonly activeBranchId: string
     readonly activeMcpServers?: readonly ISessionMcpStatus[]
     readonly assistantError?: { readonly id: string; readonly runId: string; readonly errorMessage: string }
@@ -47,6 +48,7 @@ export function freezeSessionSnapshot(
     // reuse their frozen public copy while every publication gets a new shell.
     const frozen: ISessionSnapshot = Object.freeze({
         activeBranchId: snapshot.activeBranchId,
+        ...(snapshot.agentId === undefined ? {} : { agentId: snapshot.agentId }),
         ...(snapshot.activeMcpServers === undefined ? {} : {
             activeMcpServers: freezeBranch(snapshot.activeMcpServers, previousSource?.activeMcpServers, previousValue?.activeMcpServers),
         }),

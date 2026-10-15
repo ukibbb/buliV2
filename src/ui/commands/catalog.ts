@@ -197,6 +197,15 @@ export const BULI_COMMANDS: readonly TBuliCommand[] = [
         name: "learn",
         description: "Poznaj mechanizmy repozytorium z agentem NoVibe; opcjonalnie podaj zakres",
     },
+    {
+        kind: "action",
+        name: "commands",
+        description: "Manage your saved prompt commands",
+        handler: (args, context) => {
+            assertNoArguments("commands", args)
+            context.openCommands()
+        },
+    },
 ]
 
 function assertNoArguments(name: string, args: string): void {

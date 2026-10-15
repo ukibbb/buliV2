@@ -192,6 +192,11 @@ export const BULI_COMMANDS: readonly TBuliCommand[] = [
             return application.activateNovibe(session.id)
         },
     },
+    {
+        kind: "prompt",
+        name: "learn",
+        description: "Poznaj mechanizmy repozytorium z agentem NoVibe; opcjonalnie podaj zakres",
+    },
 ]
 
 function assertNoArguments(name: string, args: string): void {

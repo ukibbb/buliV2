@@ -14,12 +14,12 @@ function fixture(options: { missingTool?: boolean; instructions?: string; waitFo
         hostname: "127.0.0.1", port: 0,
         async fetch(request) {
             if (request.method !== "POST") return new Response(null, { status: 405 })
-            const message = await request.json() as { id?: number; method: string }
+            const message = await request.json() as { id?: number; method: string; params?: { arguments?: { scope?: string } } }
             if (message.id === undefined) return new Response(null, { status: 202 })
             const respond = (result: unknown) => Response.json({ jsonrpc: "2.0", id: message.id, result })
             if (message.method === "initialize") {
                 initializations++
-                return respond({ protocolVersion: "2025-11-25", capabilities: { tools: {} },
+                return respond({ protocolVersion: "2025-11-25", capabilities: { tools: {}, prompts: {} },
                     serverInfo: { name: "test", version: "1" }, instructions: options.instructions ?? "Test NoVibe instructions" })
             }
             if (message.method === "tools/list") {
@@ -27,6 +27,9 @@ function fixture(options: { missingTool?: boolean; instructions?: string; waitFo
                 await options.waitForList
                 const names = options.missingTool ? [] : [...NOVIBE_READ_TOOL_NAMES, "edit_document", "create_document", ...locationToolNames, "future_tool"]
                 return respond({ tools: names.map((name) => ({ name, inputSchema: { type: "object" } })) })
+            }
+            if (message.method === "prompts/get") {
+                return respond({ messages: [{ role: "user", content: { type: "text", text: `Learn repository: ${message.params?.arguments?.scope ?? ""}` } }] })
             }
             return respond({ content: [{ type: "text", text: "Test note" }] })
         },
@@ -62,6 +65,44 @@ function fixture(options: { missingTool?: boolean; instructions?: string; waitFo
         },
     }
 }
+
+test("learn activates NoVibe, forwards scope and reuses the connection", async () => {
+    const f = fixture()
+    try {
+        const first = await f.runtime.startLearning({ sessionId: f.first, scope: "  authentication  " })
+        await first.runFinished
+        expect(f.requests.at(-1)?.systemPrompt).toContain("Test NoVibe instructions")
+        expect(JSON.stringify(f.requests.at(-1)?.messages)).toContain("Learn repository: authentication")
+        const next = await f.runtime.startLearning({ sessionId: f.first, scope: "" })
+        await next.runFinished
+        expect(f.initializations()).toBe(1)
+    } finally { await f.dispose() }
+})
+
+test("learn from Home creates a NoVibe conversation and rejects read-only branches", async () => {
+    const f = fixture()
+    try {
+        const run = await f.runtime.startLearning({ scope: "tools" })
+        await run.runFinished
+        expect(f.manager.getSessionInfo(run.sessionId)?.agentId).toBe("novibe")
+        f.runtime.createBranch(run.sessionId)
+        const count = f.requests.length
+        await expect(f.runtime.startLearning({ sessionId: run.sessionId, scope: "" })).rejects.toThrow("read-only")
+        expect(f.requests).toHaveLength(count)
+    } finally { await f.dispose() }
+})
+
+test("learn does not run the model if prompt retrieval fails", async () => {
+    const f = fixture()
+    const retrieval = spyOn(McpConnection.prototype, "getTextPrompt").mockRejectedValue(new Error("Prompt unavailable"))
+    try {
+        await expect(f.runtime.startLearning({ sessionId: f.first, scope: "" })).rejects.toThrow("Prompt unavailable")
+        expect(f.requests).toHaveLength(0)
+        const sessionsBefore = f.runtime.listSessions().length
+        await expect(f.runtime.startLearning({ scope: "" })).rejects.toThrow("Prompt unavailable")
+        expect(f.runtime.listSessions()).toHaveLength(sessionsBefore)
+    } finally { retrieval.mockRestore(); await f.dispose() }
+})
 
 test("NoVibe activation discovers all tools, is session-local and idempotent; off preserves history", async () => {
     const f = fixture()

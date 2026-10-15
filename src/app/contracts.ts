@@ -114,6 +114,7 @@ export interface IBuliApplication
         reasoningEffort: TReasoningEffort,
     ) => void
 
+    readonly startLearning: (request: { readonly sessionId?: string; readonly scope: string }) => Promise<IBuliPromptRun>
     readonly submitPrompt: (prompt: IBuliPromptInput) => IBuliPromptRun
     readonly steer: (
         sessionId: string,

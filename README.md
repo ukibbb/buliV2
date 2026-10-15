@@ -128,6 +128,7 @@ for account discovery and request settings.
 | `/branch` | Start a read-only side conversation in the active session. |
 | `/return` | Return to the parent branch without transferring side messages. |
 | `/compact` | Summarize older context without deleting saved history. |
+| `/learn [scope]` | Activate NoVibe if needed and start learning the repository's mechanisms, optionally scoped to an area. |
 | `/novibe` | Connect the active session to the local NoVibe MCP server. |
 | `/novibe off` | Disconnect NoVibe from the active session without logging out. |
 | `/novibe login` | Authorize Buli through the NoVibe browser consent screen. |
@@ -164,6 +165,14 @@ follow-up messages are held in memory: exiting or crashing can discard them.
 specific NoVibe integration, not a general-purpose server configuration interface.
 Only connect a server you trust: its tools and instructions become available to
 the session.
+
+`/learn` uses the NoVibe server's `learn_repository` MCP prompt and its teaching
+instructions. It reads the local workspace and uses NoVibe tools to save materials
+and continuation context. The agent first agrees on the plan, destination, and
+bounds of a series of writes; invoking `/learn` alone does not approve writes.
+It does not run in the background after Buli exits. Existing `/novibe` commands
+are unchanged. Restart an updated NoVibe server and reconnect an active NoVibe
+session to refresh its instructions.
 
 Run `/novibe login` before activating tools. The authorization server is pinned
 to `http://localhost:8000`; the browser UI normally runs at `http://localhost:3000`.

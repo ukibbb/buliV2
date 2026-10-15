@@ -141,6 +141,7 @@ function fakeApplication(options: IFakeApplicationOptions = {}) {
     openSession: () => session,
     closeSession: async () => undefined,
     listSessions: () => [],
+    startLearning: async ({ sessionId, scope }) => application.submitPrompt({ ...(sessionId ? { sessionId } : {}), text: `Learn: ${scope}` }),
     submitPrompt: (prompt) => {
       prompts.push(prompt)
       return options.submitPrompt?.(prompt) ?? {
@@ -1446,7 +1447,7 @@ test("keeps a long scrollable queue above menus without displacing the editor an
         expect(textarea.plainText).toBe("/")
         const frame = setup.captureCharFrame()
         expect(frame.split("\n")[0]!.trim()).toBe(WORKSPACE_ROOT)
-        expect(frame).toContain("→ novibe")
+        expect(frame).toContain("→ learn")
         expect(frame.replace(/\s+/g, "")).toContain("ctx~142k/200k(71%)")
         expect(frame.match(/ctx ~/g)).toHaveLength(1)
         expect(frame.split(glyphs.snakeHead).length - 1).toBe(1)
@@ -1535,7 +1536,7 @@ test("keeps slash commands above the focused editor through narrow terminal resi
       const activity = setup.renderer.root.findDescendantById("chat-activity")
       const status = setup.renderer.root.findDescendantById("chat-status")!
       expect(Boolean(activity)).toBe(fake.application.openSession("default").getSnapshot().isRunning)
-      expect(frame).toContain("→ novibe")
+      expect(frame).toContain("→ learn")
       expect(frame.replace(/\s+/g, ""))
         .toContain("ctx~142k/200k(71%)")
       expect(frame).not.toContain("budget)")
@@ -1575,8 +1576,8 @@ test("keeps slash commands above the focused editor through narrow terminal resi
       const resizedFrame = setup.captureCharFrame()
       if (height === 30) {
         for (const commandName of [
-          "new", "model", "reasoning", "sessions", "login", "logout",
-          "branch", "return",
+          "model", "reasoning", "sessions", "login", "logout",
+          "branch", "return", "compact", "novibe",
         ]) {
           expect(resizedFrame).toContain(`   ${commandName}`)
         }

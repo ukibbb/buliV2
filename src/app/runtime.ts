@@ -357,6 +357,41 @@ export class BuliApplicationRuntime implements IBuliApplication {
         )
     }
 
+    readonly startLearning = async (request: { readonly sessionId?: string; readonly scope: string }): Promise<IBuliPromptRun> => {
+        if (this.disposed) throw new Error("Buli runtime is disposed")
+        this.assertModelCatalogReady()
+        const sessionId = request.sessionId ?? this.createSession({
+            agentId: this.defaultAgentId, title: request.scope.trim() || "Learn repository",
+        }).id
+        const session = this.getOrOpenAgentSession(sessionId)
+        const assertReady = () => {
+            session.assertCanUpdateConfiguration()
+            if (session.getSnapshot().activeBranchId !== "main") {
+                throw new Error("/learn requires the main conversation, not a read-only branch")
+            }
+        }
+        try {
+            assertReady()
+            await this.activateNovibe(sessionId)
+            const connection = this.novibeConnections.get(sessionId)
+            if (!connection) throw new Error("NoVibe connection is unavailable")
+            const text = await connection.getTextPrompt("learn_repository", { scope: request.scope.trim() }, this.lifetime.signal)
+            assertReady()
+            if (this.sessions.get(sessionId) !== session || this.novibeConnections.get(sessionId) !== connection) {
+                throw new Error("NoVibe session changed while preparing /learn")
+            }
+            return this.submitPrompt({ sessionId, text })
+        } catch (error) {
+            if (request.sessionId === undefined) {
+                await this.closeNovibeConnection(sessionId)
+                this.sessionMcpControllers.get(sessionId)?.dispose()
+                this.sessionMcpControllers.delete(sessionId)
+                await this.rollbackSession(sessionId, session)
+            }
+            throw error
+        }
+    }
+
     readonly submitPrompt = (prompt: IBuliPromptInput): IBuliPromptRun => {
         if (this.disposed) throw new Error("Buli runtime is disposed")
         // Reject synchronously before creating a session or persisting a prompt;

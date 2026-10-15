@@ -26,7 +26,7 @@ interface IRequest {
 }
 
 /** Minimal stateless MCP HTTP peer; it never accesses application data. */
-function startServer() {
+function startServer(promptMessages: unknown = [{ role: "user", content: { type: "text", text: "Learn mechanisms" } }]) {
     const calls: IRequest[] = []
     const server = Bun.serve({
         hostname: "127.0.0.1",
@@ -40,12 +40,15 @@ function startServer() {
                 case "initialize":
                     return respond({
                         protocolVersion: "2025-11-25",
-                        capabilities: { tools: {} },
+                        capabilities: { tools: {}, prompts: {} },
                         serverInfo: { name: "test-notes", version: "1.0.0" },
                         instructions: "Read test notes only.",
                     })
                 case "tools/list":
                     return respond({ tools: [remoteTool] })
+                case "prompts/get":
+                    calls.push(message)
+                    return respond({ messages: promptMessages })
                 case "tools/call":
                     calls.push(message)
                     return respond({ content: [{ type: "text", text: "Test note content" }] })
@@ -89,6 +92,32 @@ test("Buli executor reads through HTTP MCP and rejects invalid arguments before 
         await expect(connection.callTool(remoteTool, { id: "note" }, context.signal)).rejects.toThrow("closed")
     } finally {
         try { await connection?.close() } finally { await server.stop(true) }
+    }
+})
+
+test("MCP text prompts forward arguments and reject unsupported messages", async () => {
+    for (const messages of [
+        [{ role: "user", content: { type: "text", text: "Learn mechanisms" } }],
+        [],
+        [{ role: "assistant", content: { type: "text", text: "Wrong role" } }],
+        [{ role: "user", content: { type: "text", text: " " } }],
+    ]) {
+        const { server, calls } = startServer(messages)
+        const connection = await McpConnection.connect({
+            endpoint: new URL("/mcp/", server.url),
+            clientInfo: { name: "test", version: "1" }, signal: context.signal,
+        })
+        try {
+            const result = connection.getTextPrompt("learn_repository", { scope: "tools" }, context.signal)
+            if (messages[0]?.content.text === "Learn mechanisms") {
+                expect(await result).toBe("Learn mechanisms")
+                expect(calls[0]?.params).toEqual({ name: "learn_repository", arguments: { scope: "tools" } })
+            } else {
+                await expect(result).rejects.toThrow("Unsupported MCP prompt format")
+            }
+            await connection.close()
+            await expect(connection.getTextPrompt("learn_repository", {}, context.signal)).rejects.toThrow("closed")
+        } finally { await connection.close(); await server.stop(true) }
     }
 })
 

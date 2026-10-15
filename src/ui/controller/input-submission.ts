@@ -129,6 +129,10 @@ export class BuliInputSubmission {
         }
 
         try {
+            const learning = name === "learn" && knownCommand?.kind === "prompt"
+            if (learning && (activeSession?.isRunning || delivery === "followUp")) {
+                throw new Error("Stop the active response before starting /learn")
+            }
             if (delivery === "followUp") {
                 if (!activeSessionId || !activeSession?.isRunning) {
                     throw new Error("Follow-up requires an active run")
@@ -153,10 +157,15 @@ export class BuliInputSubmission {
             }
 
 
-            const promptRun = this.application.submitPrompt({
-                ...(activeSessionId ? { sessionId: activeSessionId } : {}),
-                ...normalized,
-            })
+            const promptRun = learning
+                ? await this.application.startLearning({
+                    ...(activeSessionId ? { sessionId: activeSessionId } : {}),
+                    scope: args,
+                })
+                : this.application.submitPrompt({
+                    ...(activeSessionId ? { sessionId: activeSessionId } : {}),
+                    ...normalized,
+                })
             void promptRun.runFinished.catch(() => { })
             await promptRun.promptPersisted
             this.consumeInput(input)

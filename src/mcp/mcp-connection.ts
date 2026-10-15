@@ -54,6 +54,20 @@ export class McpConnection {
         })
     }
 
+    async getTextPrompt(name: string, args: Record<string, string>, signal: AbortSignal): Promise<string> {
+        if (this.closed) throw new Error("MCP connection is closed")
+        signal.throwIfAborted()
+        const result = await this.client.getPrompt({ name, arguments: args }, {
+            signal, timeout: this.timeoutMs,
+        })
+        const [message] = result.messages
+        if (result.messages.length !== 1 || message?.role !== "user"
+            || message.content.type !== "text" || !message.content.text.trim()) {
+            throw new Error("Unsupported MCP prompt format: expected one non-empty user text message")
+        }
+        return message.content.text
+    }
+
     async close(): Promise<void> {
         if (this.closed) return
         this.closed = true

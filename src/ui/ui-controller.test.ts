@@ -118,6 +118,7 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
     },
     closeSession: async () => undefined,
     listSessions: () => structuredClone([...infos.values()]),
+    startLearning: async ({ sessionId, scope }) => application.submitPrompt({ ...(sessionId ? { sessionId } : {}), text: `Learn: ${scope}` }),
     submitPrompt: (prompt) => {
       prompts.push(prompt)
       if (options.submitPrompt) return options.submitPrompt(prompt)
@@ -177,6 +178,25 @@ function applicationSpy(options: IApplicationSpyOptions = {}) {
     compacted,
   }
 }
+
+test("learn submits the workflow and opens its conversation from Home", async () => {
+  const spy = applicationSpy()
+  const controller = new BuliUiController({ application: spy.application })
+  controller.updateInput("/learn authentication")
+  await controller.submitInput("/learn authentication")
+  expect(spy.prompts[0]?.text).toBe("Learn: authentication")
+  expect(controller.getSnapshot().route.type).toBe("session")
+})
+
+test("learn is not delivered as steering during a running response", async () => {
+  const spy = applicationSpy({ runningSessionId: "session-1" })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+  expect(await controller.submitInput("/learn tools")).toBe("retained")
+  expect(spy.prompts).toHaveLength(0)
+  expect(spy.steering).toHaveLength(0)
+  expect(controller.getSnapshot().inputError).toContain("Stop the active response")
+})
 
 test("occupied navigation target leaves the current conversation open", async () => {
   const spy = applicationSpy()
@@ -315,6 +335,7 @@ test("publishes all command suggestions from slash input", () => {
     "return",
     "compact",
     "novibe",
+    "learn",
   ])
   expect(notifications).toBe(1)
 })

@@ -32,13 +32,22 @@ export class SessionMcpController {
         }
     }
 
-    /** Replaces only agent instructions, preserving registered tools and their executors. */
-    updateSystemPrompt(systemPrompt: string, apply: (systemPrompt: string) => void): void {
+    /** Updates agent text while preserving registered tools and their executors. */
+    updateSystemPrompt(systemPrompt: string, apply: (systemPrompt: string, tools: readonly IRuntimeAgentTool[]) => void, agentTools: readonly IRuntimeAgentTool[] = []): void {
         this.assertCanChange()
         const previous = this.baseConfiguration
-        this.baseConfiguration = { ...previous, systemPrompt }
+        const descriptions = new Map(agentTools.map(tool => [tool.name, tool.description]))
+        this.baseConfiguration = {
+            ...previous,
+            systemPrompt,
+            tools: previous.tools.map(tool => {
+                const description = descriptions.get(tool.name)
+                return description === undefined ? tool : { ...tool, description }
+            }),
+        }
         try {
-            apply(this.composeConfiguration(this.registrations).systemPrompt)
+            const configuration = this.composeConfiguration(this.registrations)
+            apply(configuration.systemPrompt, configuration.tools)
         } catch (error) {
             this.baseConfiguration = previous
             throw error

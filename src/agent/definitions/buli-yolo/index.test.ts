@@ -32,6 +32,25 @@ test("Buli and YOLO share quality requirements but have independent workflows", 
     expect(yolo.tools.map(tool => tool.name)).toEqual(buli.tools.map(tool => tool.name))
 })
 
+test("YOLO overrides Bash approval guidance without changing Buli or access policy", () => {
+    const deps = dependencies()
+    const buli = createBuliAgentDefinition(deps)
+    const yolo = createBuliYoloAgentDefinition(deps)
+    const defaultBash = buli.tools.find(tool => tool.name === "bash")!
+    const yoloBash = yolo.tools.find(tool => tool.name === "bash")!
+
+    expect(defaultBash.description).toContain("Obtain the conversational approval")
+    expect(yoloBash.description).not.toContain("Obtain the conversational approval")
+    expect(yoloBash.description).toContain("without asking for additional approval")
+    expect(yoloBash.description).toContain("including read-only commands and tests")
+    expect(yoloBash.description).toContain("unagreed destructive operations or production actions")
+    expect(yoloBash.description).toContain("It is not a sandbox")
+    expect(yoloBash.inputSchema).toBe(defaultBash.inputSchema)
+    expect(yoloBash.access).toBe(defaultBash.access)
+    expect(createBuliAgentDefinition(deps).tools.find(tool => tool.name === "bash")!.description)
+        .toBe(defaultBash.description)
+})
+
 test("YOLO retains workspace context, tool instructions and injected tools", () => {
     const deps = dependencies()
     const workspaceInstructions = { source: ".buli/BULI.md", content: "Use project conventions." }

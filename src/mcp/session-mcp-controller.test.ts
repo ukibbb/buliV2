@@ -52,6 +52,29 @@ test("changing agent instructions preserves MCP instructions and live executors"
     expect(f.configurations.at(-1)?.systemPrompt).toBe("YOLO")
 })
 
+test("agent descriptions survive MCP updates and roll back on failure", () => {
+    const f = fixture()
+    const baseTool = { ...f.tool, name: "local", description: "Default" }
+    const configurations: ISessionConfiguration[] = []
+    const controller = new SessionMcpController({
+        baseConfiguration: { systemPrompt: "Base", tools: [baseTool] },
+        applyConfiguration: configuration => { configurations.push(configuration) },
+        assertToolExecutionAllowed() {},
+    })
+    controller.updateSystemPrompt("YOLO", (_prompt, tools) => {
+        expect(tools[0]?.description).toBe("YOLO description")
+        expect(tools[0]?.validateAndExecute).toBe(baseTool.validateAndExecute)
+    }, [{ ...baseTool, description: "YOLO description" }])
+    controller.activate("notes", f.contribution)
+    expect(configurations.at(-1)?.tools[0]?.description).toBe("YOLO description")
+    expect(() => controller.updateSystemPrompt("Rejected", () => {
+        throw new Error("Storage")
+    }, [{ ...baseTool, description: "Rejected description" }])).toThrow("Storage")
+    controller.deactivate("notes")
+    expect(configurations.at(-1)?.tools[0]?.description).toBe("YOLO description")
+    expect(baseTool.description).toBe("Default")
+})
+
 test("MCP is inactive by default and activation is idempotent", () => {
     const { controller, configurations, contribution } = fixture()
     expect(controller.isActive("novibe")).toBe(false)

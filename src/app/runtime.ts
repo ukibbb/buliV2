@@ -366,9 +366,9 @@ export class BuliApplicationRuntime implements IBuliApplication {
         const session = this.getOrOpenAgentSession(sessionId)
         if (session.agentId !== this.defaultAgentId && session.agentId !== BULI_YOLO_AGENT_ID) return
         const agent = this.resolveAgent(session.agentId === BULI_YOLO_AGENT_ID ? this.defaultAgentId : BULI_YOLO_AGENT_ID)
-        this.sessionMcpControllers.get(sessionId)!.updateSystemPrompt(agent.systemPrompt, (systemPrompt) => {
-            session.updateAgentInstructions(agent.id, systemPrompt)
-        })
+        this.sessionMcpControllers.get(sessionId)!.updateSystemPrompt(agent.systemPrompt, (systemPrompt, tools) => {
+            session.updateAgentInstructions(agent.id, systemPrompt, tools)
+        }, agent.tools)
     }
 
     readonly startLearning = async (request: { readonly sessionId?: string; readonly scope: string }): Promise<IBuliPromptRun> => {

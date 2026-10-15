@@ -1,4 +1,5 @@
 import { expect, spyOn, test } from "bun:test"
+import { createBuliAgentDefinition } from "@/agent/definitions/buli"
 import { createBuliYoloAgentDefinition } from "@/agent"
 import { EphemeralToolOutputStore } from "@/agent/tools/output/ephemeral-tool-output-store"
 import { BuliApplicationRuntime } from "@/app/runtime"
@@ -98,6 +99,39 @@ test("YOLO switches identity, preserves history and persists on reopen without a
         await f.prompt(f.first)
         expect(f.requests.at(-1)?.systemPrompt).not.toContain("Agent: Buli YOLO")
     } finally { await f.dispose() }
+})
+
+test("Tab switches Bash descriptions both ways and preserves them on reopen", async () => {
+    const deps = { workspaceRoot: "/workspace", toolOutputStore: new EphemeralToolOutputStore() }
+    const requests: IAgentModelRequest[] = []
+    const runtime = new BuliApplicationRuntime({
+        workspaceRoot: deps.workspaceRoot,
+        manager: new SQLiteSessionManager({ databasePath: ":memory:" }),
+        agents: [createBuliAgentDefinition(deps), createBuliYoloAgentDefinition(deps)],
+        defaultAgentId: "buli",
+        models: [{ id: "test", name: "Test", reasoningEfforts: ["medium"], defaultReasoningEffort: "medium",
+            model: { async *stream(request) {
+                requests.push(request)
+                yield { type: "finish", reason: "stop" }
+            } } }],
+        selection: { modelId: "test", reasoningEffort: "medium" },
+    })
+    const sessionId = runtime.createSession({ agentId: "buli", title: "Test" }).id
+    const description = () => requests.at(-1)?.tools.find(tool => tool.name === "bash")?.description
+    const prompt = async () => { await runtime.submitPrompt({ sessionId, text: "Read" }).runFinished }
+    try {
+        await prompt()
+        expect(description()).toContain("Obtain the conversational approval")
+        await runtime.toggleBuliAgent(sessionId)
+        await prompt()
+        expect(description()).toContain("without asking for additional approval")
+        await runtime.closeSession(sessionId)
+        await prompt()
+        expect(description()).toContain("without asking for additional approval")
+        await runtime.toggleBuliAgent(sessionId)
+        await prompt()
+        expect(description()).toContain("Obtain the conversational approval")
+    } finally { await runtime.dispose() }
 })
 
 test("YOLO switches both ways mid-run without cancellation", async () => {

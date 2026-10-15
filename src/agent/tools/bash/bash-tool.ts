@@ -29,6 +29,8 @@ const BASH_INPUT_SCHEMA = Type.Object({
     })),
 })
 
+export const BASH_EXECUTION_DESCRIPTION = `Execute one Bash command immediately in the workspace root using ${PROCESS_INTERPRETER_DISPLAY}. Returns separate stdout and stderr previews; timeout is optional and has no default. It is not a sandbox, and deliberately detached descendants may outlive the run.`
+
 /** Creates the tool for running one Bash command in the workspace root. */
 export function createBashTool(
     workspaceRoot: string,
@@ -37,7 +39,7 @@ export function createBashTool(
     return defineAgentTool({
         name: "bash",
         access: ToolAccess.MayMutate,
-        description: `Execute one Bash command immediately in the workspace root using ${PROCESS_INTERPRETER_DISPLAY}. Returns separate stdout and stderr previews; timeout is optional and has no default. It is not a sandbox, and deliberately detached descendants may outlive the run. Obtain the conversational approval required by the system prompt before calling this tool. Prefer read, find, and grep for inspection, and edit or write for file changes.`,
+        description: `${BASH_EXECUTION_DESCRIPTION} Obtain the conversational approval required by the system prompt before calling this tool. Prefer read, find, and grep for inspection, and edit or write for file changes.`,
         inputSchema: BASH_INPUT_SCHEMA,
         execute: async (input, context) => {
             assertOnlyInputKeys(input)

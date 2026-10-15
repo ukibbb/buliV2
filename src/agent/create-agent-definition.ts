@@ -23,7 +23,9 @@ export function createAgentDefinition<TDependencies>(
                 `Agent tool name mismatch: expected ${tool.name}, received ${instance.name}`,
             )
         }
-        return instance
+        return tool.description === undefined
+            ? instance
+            : { ...instance, description: tool.description }
     })
 
     const toolInstructions = declaration.tools.flatMap(

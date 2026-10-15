@@ -845,11 +845,12 @@ test("instruction changes during tool execution reach the next model request", a
   })
   const run = agent.prompt("Start")
   await started.promise
-  agent.updateSystemPrompt("YOLO")
+  agent.updateSystemPrompt("YOLO", [{ ...tool, description: "YOLO wait" }])
   expect(agent.state.pendingToolCallIds.size).toBe(1)
   resume.resolve()
   await run.runFinished
   expect(requests.map(request => request.systemPrompt)).toEqual(["Original", "YOLO"])
+  expect(requests.map(request => request.tools[0]?.description)).toEqual(["Wait", "YOLO wait"])
 })
 
 test("instruction changes reach subsequent requests in the same run and preserve queued input", async () => {

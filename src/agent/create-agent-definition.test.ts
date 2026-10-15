@@ -64,6 +64,37 @@ test("agents independently compose selected tools and their instructions", () =>
     }
 })
 
+test("an agent can override a tool description without mutating the shared tool", async () => {
+    const instance = runtimeTool("bash")
+    const tool: IAgentToolDeclaration<{}> = {
+        name: "bash",
+        instructions: ["Default instruction"],
+        create: () => instance,
+    }
+    const declaration = {
+        id: "default", name: "Default", instructions: "Work.", tools: [tool],
+    }
+    const overridden = createAgentDefinition({
+        ...declaration,
+        tools: [{ ...tool, description: "Agent-specific description", instructions: ["Agent-specific instruction"] }],
+    }, {})
+    const original = createAgentDefinition(declaration, {})
+    const customized = overridden.tools[0]!
+
+    expect(customized.description).toBe("Agent-specific description")
+    expect(original.tools[0]).toBe(instance)
+    expect(instance.description).toBe("bash test tool")
+    expect(customized.inputSchema).toBe(instance.inputSchema)
+    expect(customized.validateAndExecute).toBe(instance.validateAndExecute)
+    expect(await customized.validateAndExecute({}, {
+        sessionId: "session", toolCallId: "call", runId: "run",
+        signal: new AbortController().signal,
+    })).toBe("Test result")
+    expect(overridden.systemPrompt).toContain("Agent-specific instruction")
+    expect(overridden.systemPrompt).not.toContain("Default instruction")
+    expect(original.systemPrompt).toContain("Default instruction")
+})
+
 test("an agent without tools has no tool instruction section", () => {
     const definition = createAgentDefinition({
         id: "conversation",

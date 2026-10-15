@@ -4,6 +4,7 @@ import type { IRuntimeAgentTool } from "@/agent/tool"
 export interface IAgentToolDeclaration<TDependencies> {
     readonly name: string
     readonly instructions: readonly string[]
+    readonly description?: string
     readonly create: (dependencies: TDependencies) => IRuntimeAgentTool
 }
 

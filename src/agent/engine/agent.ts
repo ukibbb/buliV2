@@ -277,8 +277,8 @@ export class Agent {
     }
 
     /** Changes instructions for subsequent model requests without interrupting tools or queued input. */
-    updateSystemPrompt(systemPrompt: string): void {
-        this.stateValue = { ...this.stateValue, systemPrompt }
+    updateSystemPrompt(systemPrompt: string, tools: readonly IRuntimeAgentTool[] = this.stateValue.tools): void {
+        this.stateValue = { ...this.stateValue, systemPrompt, tools }
     }
 
     /** Updates model configuration without replacing conversation history. */
@@ -337,7 +337,7 @@ export class Agent {
             const agentContext: IAgentContext = {
                 get systemPrompt() { return agent.stateValue.systemPrompt },
                 getContext: this.getContext,
-                tools: this.stateValue.tools,
+                get tools() { return agent.stateValue.tools },
                 selectedPathReferences: this.stateValue.tools.some((tool) => tool.acceptsSelectedPathReferences)
                     ? this.getSelectedPathReferences()
                     : [],

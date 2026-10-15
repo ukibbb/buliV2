@@ -238,19 +238,23 @@ export class AgentSession {
         this.switchBranch(() => this.manager.returnToParentBranch(this.id))
     }
 
-    /** Changes agent instructions at the next model request without replacing active tools. */
-    updateAgentInstructions(agentId: string, systemPrompt: string): void {
+    /** Changes agent instructions and tool descriptions without replacing active executors. */
+    updateAgentInstructions(agentId: string, systemPrompt: string, agentTools: readonly IRuntimeAgentTool[] = []): void {
         if (this.disposed) throw new Error("AgentSession is disposed")
         this.assertBranchContextAvailable()
         if (this.persistenceError !== undefined) {
             throw new Error("Session persistence failed. Reopen the session before updating configuration.")
         }
         if (this.compactionTask) throw new Error("Cannot update configuration while compacting")
-        const contextUsage = this.estimateProjectedContext({ systemPrompt, tools: this.tools })
-        const snapshot = this.createSnapshot(contextUsage, this.tools, this.activeMcpServerIds, agentId)
+        const availableTools = agentTools.length === 0 ? this.availableTools : [...agentTools]
+        const tools = this.resolveActiveTools(availableTools)
+        const contextUsage = this.estimateProjectedContext({ systemPrompt, tools })
+        const snapshot = this.createSnapshot(contextUsage, tools, this.activeMcpServerIds, agentId)
         this.manager.updateSessionAgent(this.id, agentId)
         this.currentAgentId = agentId
-        this.agent.updateSystemPrompt(systemPrompt)
+        this.agent.updateSystemPrompt(systemPrompt, tools)
+        this.availableTools = availableTools
+        this.tools = tools
         this.systemPrompt = systemPrompt
         this.contextUsage = contextUsage
         this.snapshot = snapshot

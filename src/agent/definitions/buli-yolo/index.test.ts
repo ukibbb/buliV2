@@ -1,14 +1,48 @@
 import { expect, test } from "bun:test"
+import { createBuliAgentDefinition } from "@/agent/definitions/buli"
+import { QUALITY_INSTRUCTIONS } from "@/agent/definitions/shared/quality-instructions"
+import { EphemeralToolOutputStore } from "@/agent/tools/output/ephemeral-tool-output-store"
 import { createBuliYoloAgentDefinition } from "./index"
 
-test("Buli YOLO is a separate definition sharing Buli tools and quality rules", () => {
-    const buli = { id: "buli", name: "Buli", systemPrompt: "Base agent instructions", tools: [] }
-    const yolo = createBuliYoloAgentDefinition(buli)
+const dependencies = () => ({
+    workspaceRoot: "/workspace",
+    toolOutputStore: new EphemeralToolOutputStore(),
+})
+
+test("Buli and YOLO share quality requirements but have independent workflows", () => {
+    const deps = dependencies()
+    const buli = createBuliAgentDefinition(deps)
+    const originalPrompt = buli.systemPrompt
+    const yolo = createBuliYoloAgentDefinition(deps)
+
     expect(yolo.id).toBe("buli-yolo")
-    expect(yolo.tools).toBe(buli.tools)
-    expect(yolo.systemPrompt).toStartWith(buli.systemPrompt)
-    expect(buli.systemPrompt).not.toContain("Agent: Buli YOLO")
+    expect(yolo.name).toBe("Buli YOLO")
+    expect(buli.systemPrompt).toContain(QUALITY_INSTRUCTIONS)
+    expect(yolo.systemPrompt).toContain(QUALITY_INSTRUCTIONS)
+    expect(buli.systemPrompt).toContain("Nie zmieniaj plików, dopóki wyraźnie nie zgodzę się")
+    expect(yolo.systemPrompt).not.toContain("Nie zmieniaj plików, dopóki wyraźnie nie zgodzę się")
+    expect(yolo.systemPrompt).not.toContain("3. Plan przed edycją")
+    expect(yolo.systemPrompt).not.toContain("4. Zgoda i wdrożenie")
+    expect(yolo.systemPrompt).toContain("Nie wymagaj osobnego zatwierdzenia")
+    expect(yolo.systemPrompt).toContain("Pytania, prośby o wyjaśnienie i porównywanie opcji nie są poleceniem wdrożenia.")
+    expect(yolo.systemPrompt).toContain("Nie osłabiaj kryteriów ukończenia ani testów")
     expect(yolo.systemPrompt).toContain("Raport jest częścią zadania")
-    expect(yolo.systemPrompt).toContain("Samo włączenie trybu nie zatwierdza zadania")
-    expect(yolo.systemPrompt).toContain("Nie osłabiaj kryteriów ukończenia")
+    expect(yolo.systemPrompt).toContain("Nie wykonuj nieuzgodnionych operacji destrukcyjnych")
+    expect(buli.systemPrompt).toBe(originalPrompt)
+    expect(yolo.tools.map(tool => tool.name)).toEqual(buli.tools.map(tool => tool.name))
+})
+
+test("YOLO retains workspace context, tool instructions and injected tools", () => {
+    const deps = dependencies()
+    const workspaceInstructions = { source: ".buli/BULI.md", content: "Use project conventions." }
+    const yolo = createBuliYoloAgentDefinition({ ...deps, workspaceInstructions })
+    expect(yolo.systemPrompt).toContain("Current working directory and workspace root: /workspace.")
+    expect(yolo.systemPrompt).toContain(JSON.stringify({ workspaceInstructions }))
+    expect(yolo.systemPrompt).toContain("### Text reading")
+    expect(yolo.systemPrompt).toContain("Active tools: read, find, grep, tool_output, edit, write, bash.")
+
+    const injected = yolo.tools.find(tool => tool.name === "read")!
+    const custom = createBuliYoloAgentDefinition(deps, { tools: [injected] })
+    expect(custom.tools.map(tool => tool.name)).toEqual(["read", "tool_output"])
+    expect(custom.tools[0]).toBe(injected)
 })

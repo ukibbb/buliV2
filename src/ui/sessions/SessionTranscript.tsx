@@ -3,10 +3,14 @@ import { useKeyboard, useRenderer } from "@opentui/react"
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react"
 
 import { useBuliRuntime } from "@/ui/context/application-context"
+import { useSnapshotSelector } from "@/ui/context/use-snapshot-selector"
+import type { ISessionSnapshot } from "@/sessions"
 import { Transcript } from "@/ui/sessions/Transcript"
 import { currentAssistantError } from "@/ui/sessions/current-error"
 import { TranscriptController } from "@/ui/sessions/transcript-controller"
 import { theme } from "@/ui/terminal/theme"
+
+const selectAgentId = (snapshot: ISessionSnapshot) => snapshot.agentId
 
 const TRANSCRIPT_SCROLL_ACCELERATION = { A: 1, tau: 3, maxMultiplier: 8 }
 const TRANSCRIPT_SCROLLBAR = {
@@ -18,8 +22,10 @@ const TRANSCRIPT_SCROLLBAR = {
 /** Keeps the latest page live; only explicit navigation opens archived pages. */
 export function SessionTranscript(props: { readonly sessionId: string; readonly delegated?: boolean }) {
     const runtime = useBuliRuntime()
-    const controller = useMemo(() => new TranscriptController(props.delegated && runtime.delegatedTasks
-        ? runtime.delegatedTasks.open(props.sessionId) : runtime.openSession(props.sessionId)), [runtime, props.sessionId, props.delegated])
+    const source = useMemo(() => props.delegated && runtime.delegatedTasks
+        ? runtime.delegatedTasks.open(props.sessionId) : runtime.openSession(props.sessionId), [runtime, props.sessionId, props.delegated])
+    const controller = useMemo(() => new TranscriptController(source), [source])
+    const agentId = useSnapshotSelector(source, selectAgentId)
     const renderer = useRenderer()
     const scrollRef = useRef<ScrollBoxRenderable | null>(null)
     const anchorRef = useRef<{ block: Renderable; offset: number } | null>(null)
@@ -117,7 +123,7 @@ export function SessionTranscript(props: { readonly sessionId: string; readonly 
             {page?.olderCursor && <text id="history-older" fg={theme.green} selectable={false} onMouseDown={() => { void controller.older() }}>
                 ━━━ Wczytaj starszą historię ━━━
             </text>}
-            <Transcript messages={page?.messages ?? []}
+            <Transcript messages={page?.messages ?? []} agentId={agentId}
                 {...(latest && currentAssistantError(session)?.id ? { currentErrorMessageId: currentAssistantError(session)!.id } : {})}
                 {...(stream ? { streamingMessage: stream } : {})}
                 {...(checkpoint && (latest || anchored) ? { compactionCheckpoint: checkpoint } : {})}

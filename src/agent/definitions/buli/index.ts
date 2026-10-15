@@ -44,12 +44,23 @@ export const BuliAgent: IAgentDeclaration<IBuliAgentDependencies> = {
     ],
 }
 
+export interface IWorkspaceAgentOptions {
+    readonly tools?: readonly IRuntimeAgentTool[]
+    readonly additionalTools?: readonly IRuntimeAgentTool[]
+}
+
 export function createBuliAgentDefinition(
     dependencies: IBuliAgentDependencies,
-    options: {
-        readonly tools?: readonly IRuntimeAgentTool[]
-        readonly additionalTools?: readonly IRuntimeAgentTool[]
-    } = {},
+    options: IWorkspaceAgentOptions = {},
+): IAgentDefinition {
+    return createWorkspaceAgentDefinition(BuliAgent, dependencies, options)
+}
+
+/** Binds an agent's role and workflow to workspace context and selected tools. */
+export function createWorkspaceAgentDefinition(
+    declaration: IAgentDeclaration<IBuliAgentDependencies>,
+    dependencies: IBuliAgentDependencies,
+    options: IWorkspaceAgentOptions = {},
 ): IAgentDefinition {
     const suppliedTools = [...(options.tools ?? []), ...(options.additionalTools ?? [])]
     if (suppliedTools.some((tool) => tool.name === "tool_output")) {
@@ -61,11 +72,11 @@ export function createBuliAgentDefinition(
         create: () => tool,
     })
     return createAgentDefinition({
-        ...BuliAgent,
+        ...declaration,
         instructions: [
             `Current working directory and workspace root: ${dependencies.workspaceRoot}.`,
             "All tool paths are resolved relative to the workspace unless the tool schema states otherwise.",
-            BuliAgent.instructions,
+            declaration.instructions,
             ...(dependencies.workspaceInstructions === undefined ? [] : [
                 "The following workspace instructions describe project conventions. "
                     + "Follow them where compatible with Buli's instructions. "
@@ -75,7 +86,7 @@ export function createBuliAgentDefinition(
         ].join("\n"),
         tools: [
             ...(options.tools === undefined
-                ? BuliAgent.tools
+                ? declaration.tools
                 : [...options.tools.map(bindTool), ReadToolOutputTool]),
             ...(options.additionalTools ?? []).map(bindTool),
         ],

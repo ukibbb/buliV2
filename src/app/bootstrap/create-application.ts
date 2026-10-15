@@ -133,15 +133,18 @@ export async function createBuliApplication(
                 includeWebSearch: options.tools === undefined,
             })
             : createInjectedModelComposition(options.model)
-        const buli = createBuliAgentDefinition({
+        const agentDependencies = {
             workspaceRoot,
             toolOutputStore,
             ...(workspaceInstructions === undefined ? {} : { workspaceInstructions }),
             ...defaultToolExecutablePaths(),
-        }, {
+        }
+        const agentOptions = {
             ...(options.tools === undefined ? {} : { tools: options.tools }),
             additionalTools: modelComposition.additionalTools,
-        })
+        }
+        const buli = createBuliAgentDefinition(agentDependencies, agentOptions)
+        const yolo = createBuliYoloAgentDefinition(agentDependencies, agentOptions)
 
         const novibe = createNovibeAgentDefinition({
             workspaceRoot,
@@ -162,7 +165,7 @@ export async function createBuliApplication(
             workspaceRoot,
             manager,
             promptCommands: new FilePromptCommands(),
-            agents: [buli, createBuliYoloAgentDefinition(buli), novibe],
+            agents: [buli, yolo, novibe],
             explorer: createExplorerAgentDefinition({
                 workspaceRoot, toolOutputStore,
                 ...(workspaceInstructions === undefined ? {} : { workspaceInstructions }),

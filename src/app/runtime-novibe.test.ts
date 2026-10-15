@@ -1,5 +1,6 @@
 import { expect, spyOn, test } from "bun:test"
 import { createBuliYoloAgentDefinition } from "@/agent"
+import { EphemeralToolOutputStore } from "@/agent/tools/output/ephemeral-tool-output-store"
 import { BuliApplicationRuntime } from "@/app/runtime"
 import { McpConnection } from "@/mcp/mcp-connection"
 import { NOVIBE_READ_TOOL_NAMES } from "@/mcp/novibe"
@@ -49,7 +50,7 @@ function fixture(options: { missingTool?: boolean; instructions?: string; waitFo
         workspaceRoot: "/workspace", manager,
         agents: [
             { id: "test", name: "Test", systemPrompt: "Base", tools: [] },
-            createBuliYoloAgentDefinition({ id: "test", name: "Test", systemPrompt: "Base", tools: [] }),
+            createBuliYoloAgentDefinition({ workspaceRoot: "/workspace", toolOutputStore: new EphemeralToolOutputStore() }, { tools: [] }),
             { id: "novibe", name: "NoVibe", systemPrompt: "Local tool instructions", tools: [] },
         ], defaultAgentId: "test",
         models: [{ id: "test", name: "Test", reasoningEfforts: ["medium"], defaultReasoningEffort: "medium",

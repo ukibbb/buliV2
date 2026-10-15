@@ -15,8 +15,10 @@ import {
     type IToolActivityProjection,
 } from "@/ui/sessions/transcript-projection"
 import { theme } from "@/ui/terminal/theme"
+import { agentAccentColor } from "@/ui/terminal/agent-accent-color"
 
 export interface ITranscriptProps {
+    readonly agentId?: string | undefined
     readonly messages: readonly TAgentMessage[]
     readonly streamingMessage?: IAssistantMessage
     readonly compactionCheckpoint?: ICompactionCheckpoint
@@ -51,9 +53,10 @@ export function Transcript(props: ITranscriptProps): ReactNode {
             : new Set(props.pendingToolCallIds),
         [props.pendingToolCallIds],
     )
+    const accentColor = agentAccentColor(props.agentId)
     const history = useMemo(
-        () => buildHistoryBlocks(props.messages, projection, runningToolCallIds, props.currentErrorMessageId),
-        [props.messages, projection, runningToolCallIds, props.currentErrorMessageId],
+        () => buildHistoryBlocks(props.messages, projection, runningToolCallIds, props.currentErrorMessageId, accentColor),
+        [props.messages, projection, runningToolCallIds, props.currentErrorMessageId, accentColor],
     )
     const liveBlocks = useMemo(
         () => props.streamingMessage
@@ -109,11 +112,12 @@ function buildHistoryBlocks(
     projection: IToolActivityProjection,
     runningToolCallIds: ReadonlySet<string>,
     currentErrorMessageId: string | undefined,
+    accentColor: string,
 ): IHistoryBlocks {
     const blocks: ITranscriptBlock[] = []
     const positionsAfterMessage = new Map<string, number>()
     for (const message of messages) {
-        blocks.push(...messageBlocks(message, projection, runningToolCallIds, currentErrorMessageId))
+        blocks.push(...messageBlocks(message, projection, runningToolCallIds, currentErrorMessageId, accentColor))
         // Invisible messages still provide valid checkpoint boundaries.
         positionsAfterMessage.set(message.id, blocks.length)
     }
@@ -148,13 +152,14 @@ function messageBlocks(
     projection: IToolActivityProjection,
     runningToolCallIds: ReadonlySet<string>,
     currentErrorMessageId: string | undefined,
+    accentColor: string,
 ): ITranscriptBlock[] {
     switch (message.role) {
         case "user":
             return [{
                 key: message.id,
                 kind: "user",
-                node: <MessageCard id={`user-message-${message.id}`} content={message.content} borderColor={theme.pink} />,
+                node: <MessageCard id={`user-message-${message.id}`} content={message.content} borderColor={accentColor} />,
             }]
         case "assistant":
             return assistantBlocks(message, false, projection, runningToolCallIds, currentErrorMessageId)

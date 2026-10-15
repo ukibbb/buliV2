@@ -188,14 +188,17 @@ between running instances. Reopening `/commands` reloads the files from disk.
 Press `Tab` in a Buli conversation to switch between Buli and Buli YOLO without
 replacing its history. A pink editor border indicates Buli; amber indicates Buli
 YOLO. There is no additional label. NoVibe is independent: Tab does nothing there,
-and `/novibe off` restores ordinary Buli. Agree on the goal, plan, constraints,
-and completion criteria before authorizing execution. Selecting Buli YOLO alone
-does not approve a task or grant additional tool access.
+and `/novibe off` restores ordinary Buli. Selecting Buli YOLO alone does not
+request execution of a task or grant additional tool access.
 
-YOLO instructs the agent to execute the approved plan, verify results, fix problems
-within scope, and finish with a detailed explanatory report rather than asking for
-approval at every step. These are model instructions, not a guarantee of success
-or an OS-level security boundary. The agent loop and tool policies are unchanged.
+Buli and YOLO share code-quality, verification, and explanatory-report requirements,
+but use independent workflows. A request to perform a task authorizes YOLO to plan,
+edit files, run commands and tests within that task without separate plan or
+per-operation approval. Questions and option comparisons do not authorize edits.
+YOLO must stop for missing essential information, scope expansion, or unavailable
+permissions; unapproved destructive and production operations remain excluded.
+These are model instructions, not a guarantee of success or an OS-level security
+boundary. The agent loop and tool policies are unchanged.
 
 YOLO cannot be enabled during a running response. Disabling it during a YOLO run
 waits for cancellation; it does not undo completed actions or start another model

@@ -62,6 +62,28 @@ function tableRenderables(root: Renderable): TextTableRenderable[] {
     ])
 }
 
+test("existing user cards follow agent changes without changing message content", async () => {
+    const messages: TAgentMessage[] = [{
+        id: "accent", sessionId: "session", runId: "run", role: "user",
+        source: "prompt", createdAt: 1, content: "Keep this message",
+    }]
+    let selectAgent!: (agentId: string) => void
+    function Harness() {
+        const [agentId, setAgentId] = useState("buli")
+        selectAgent = setAgentId
+        return <Transcript messages={messages} agentId={agentId} />
+    }
+    const setup = await testRender(<Harness />, { width: 80, height: 20 })
+    try {
+        for (const [agentId, color] of [["buli", theme.pink], ["buli-yolo", theme.amber], ["buli", theme.pink]] as const) {
+            await act(async () => { selectAgent(agentId); await setup.renderOnce() })
+            const card = setup.renderer.root.findDescendantById("user-message-accent") as BoxRenderable
+            expect(card.borderColor.equals(RGBA.fromHex(color))).toBe(true)
+            expect((card.getChildren()[0] as TextRenderable).plainText).toBe("Keep this message")
+        }
+    } finally { act(() => setup.renderer.destroy()) }
+})
+
 test.each([40, 80])("renders untitled full-width user cards with literal content at %i columns", async (width) => {
     const content = [
         "",

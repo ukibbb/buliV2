@@ -2,6 +2,7 @@ import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 
 import {
     useBuliRuntime,
+    useSessionSelector,
 } from "@/ui/context/application-context"
 import {
     useBuliUiController,
@@ -14,7 +15,10 @@ import { SessionScreen } from "@/ui/shell/SessionScreen"
 import type { IAuthenticationService } from "@/authentication"
 import { AuthenticationFlow } from "@/ui/authentication"
 import { TerminalViewport } from "@/ui/terminal"
-import { theme } from "@/ui/terminal/theme"
+import { agentAccentColor } from "@/ui/terminal/agent-accent-color"
+import type { ISessionSnapshot } from "@/sessions"
+
+const selectAgentId = (snapshot: ISessionSnapshot) => snapshot.agentId
 
 interface IBuliTuiProps {
     readonly authentication: IAuthenticationService
@@ -27,6 +31,7 @@ export function BuliTui(props: IBuliTuiProps) {
     const controller = useBuliUiController()
     const runtime = useBuliRuntime()
     const ui = useBuliNavigationSnapshot()
+    const agentId = useSessionSelector(ui.route.type === "session" ? ui.route.sessionId : undefined, selectAgentId)
     const renderer = useRenderer()
     const { width, height } = useTerminalDimensions()
 
@@ -54,7 +59,7 @@ export function BuliTui(props: IBuliTuiProps) {
             {!ui.authenticationMode ? (
                 <text
                     id="workspace-header"
-                    fg={theme.pink}
+                    fg={agentAccentColor(agentId)}
                     width="100%"
                     height={1}
                     flexShrink={0}

@@ -220,6 +220,31 @@ function buliElementWithController(
   })
 }
 
+test("header, editor and existing user frames share the selected agent accent", async () => {
+  const fake = fakeApplication({ sessionSnapshot: {
+    activeBranchId: "main", agentId: "buli", messages: [{
+      id: "accent-message", sessionId: "default", runId: "history", role: "user",
+      source: "prompt", content: "Existing message", createdAt: 1,
+    }], pendingSteeringMessages: [], pendingFollowUpMessages: [], isRunning: false,
+    isCompacting: false, pendingToolCallIds: [],
+  } })
+  const setup = await testRender(buliElement(fake.application, "default"), { width: 80, height: 24 })
+  try {
+    for (const [agentId, color] of [["buli", theme.pink], ["buli-yolo", theme.amber], ["buli", theme.pink]] as const) {
+      await act(async () => {
+        fake.setSessionSnapshot({ ...fake.getSessionData(), agentId })
+        await setup.renderOnce()
+      })
+      const header = setup.renderer.root.findDescendantById("workspace-header") as TextRenderable
+      const card = setup.renderer.root.findDescendantById("user-message-accent-message") as BoxRenderable
+      const editor = textareaRenderable(setup.renderer.root).parent as BoxRenderable
+      expect(header.fg.equals(RGBA.fromHex(color))).toBe(true)
+      expect(card.borderColor.equals(RGBA.fromHex(color))).toBe(true)
+      expect(editor.borderColor.equals(RGBA.fromHex(color))).toBe(true)
+    }
+  } finally { act(() => setup.renderer.destroy()) }
+})
+
 test.each([WORKSPACE_ROOT, `${WORKSPACE_ROOT}/${"long-directory/".repeat(12)}`])(
   "keeps workspace %s in a single fixed header outside authentication",
   async (workspaceRoot) => {

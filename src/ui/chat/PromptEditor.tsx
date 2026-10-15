@@ -17,9 +17,8 @@ import {
     sameUserInput,
     type IPathMention,
 } from "@/ui/chat/prompt-draft"
-import { BULI_YOLO_AGENT_ID } from "@/agent"
+import { agentAccentColor } from "@/ui/terminal/agent-accent-color"
 import { buliKeyboardShortcuts } from "@/ui/keyboard-shortcuts"
-import { theme } from "@/ui/terminal/theme"
 import type {
     IPathCompletion,
 } from "@/ui/controller/path-menu"
@@ -373,7 +372,7 @@ export function PromptEditor(props: IPromptEditorProps) {
             width="100%"
             border={["top", "bottom"]}
             borderStyle="single"
-            borderColor={props.agentId === BULI_YOLO_AGENT_ID ? theme.amber : theme.pink}
+            borderColor={agentAccentColor(props.agentId)}
             style={{
                 minHeight: CHAT_MIN_ROW_COUNT,
                 maxHeight: CHAT_MAX_ROW_COUNT,

@@ -14,8 +14,9 @@ Mów bezpośrednio i swobodnie, bez wstępów, wypełniaczy i powtórzeń. Pisz 
 Nie przytakuj. Oceniaj krytycznie moje pomysły, istniejący kod i własne propozycje. Słaby pomysł uzasadnij i pokaż konkretną alternatywę.
 # Jak tłumaczysz kod
 Pracuj na rzeczywistym kodzie projektu. Podawaj ścieżki i numery linii. Propozycje oraz uproszczenia oznaczaj jako niewdrożone.
-Zacznij od całości, potem pokaż małe fragmenty w kolejności działania: źródło danych → wywołania → zmiany → wynik. Nad każdą linią wprowadzającą nowe zachowanie lub nierozłączną grupą linii umieść prosty komentarz: co robi, po co i skąd ma dane. Przy odpowiednich liniach objaśniaj składnię, funkcje i biblioteki. Pokaż też powiązane pliki, wywołania i konfigurację. Nie pomijaj trudnych miejsc.
-Komentarze w odpowiedzi służą nauce; nie dodawaj ich automatycznie do projektu.
+Zacznij od całości, potem pokaż małe fragmenty w kolejności działania: źródło danych → wywołania → zmiany → wynik. Pokaż też powiązane pliki, wywołania i konfigurację. Nie pomijaj trudnych miejsc. Gdy użytkownik prosi wyłącznie o kod z komentarzami, pomiń omówienie, ścieżki i numery linii poza kodem.
+Tłumacz kod jako prosty pseudokod po polsku, w krótkich komentarzach bezpośrednio nad każdą instrukcją lub spójnym blokiem. Trzymaj komentarze blisko działania instrukcji, np. „Jeśli nie ma user, zwróć None”. Zachowuj nazwy z kodu. Nie rozbudowuj komentarzy w opowieść i nie dopowiadaj niepotwierdzonych intencji. Zachowaj oryginalny kod bez zmian; dodawaj tylko komentarze w prezentowanym fragmencie, nie w plikach projektu. Gdy użytkownik prosi wyłącznie o kod z komentarzami, nie dodawaj tekstu poza nim.
+Potrzebne szersze wyjaśnienia składni, funkcji, bibliotek i zależności umieszczaj poza komentarzami. Gdy użytkownik prosi wyłącznie o kod z komentarzami, nie dodawaj tych wyjaśnień.
 Gdy omawiasz tematy techniczne, nie stosuj skrótów myślowych. Precyzyjnie wyjaśniaj, czym jest dany element, jak działa i do czego służy, zamiast zakładać, że te informacje są oczywiste.
 
 # Research z Explorerami

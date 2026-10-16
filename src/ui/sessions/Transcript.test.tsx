@@ -18,7 +18,7 @@ import { act, useState } from "react"
 import type { TAgentMessage, IAssistantMessage } from "@/agent"
 import type { ICompactionCheckpoint, ICompactionProgress } from "@/sessions"
 import { Transcript } from "@/ui/sessions"
-import { syntax, theme } from "@/ui/terminal/theme"
+import { getSyntaxStyle, theme } from "@/ui/terminal/theme"
 
 function codeRenderables(root: Renderable): CodeRenderable[] {
     return root.getChildren().flatMap((child) => [
@@ -1078,7 +1078,7 @@ test("keeps completed headings stable while streaming markdown grows", async () 
             borders: true,
             outerBorder: true,
             borderStyle: "single",
-            borderColor: theme.textSecondary,
+            borderColor: RGBA.fromHex(theme.textSecondary),
             selectable: true,
         })
         const headingBefore = markdownBefore?._blockStates[0]?.renderable
@@ -1676,7 +1676,7 @@ test("renders a checkpoint at its anchor before uncompacted and streaming messag
         const markdown = markdownRenderables(setup.renderer.root)
         expect(markdown).toHaveLength(2)
         expect(markdown[0]?.content).toBe(checkpoint.summary)
-        expect(markdown[0]?.syntaxStyle).toBe(syntax)
+        expect(markdown[0]?.syntaxStyle).toBe(getSyntaxStyle(setup.renderer.nativeScene))
         expect(markdown[0]?.conceal).toBe(true)
         expect(markdown[0]?.concealCode).toBe(false)
         expect(markdown[0]?.internalBlockMode).toBe("top-level")
@@ -2019,7 +2019,7 @@ test("styles rich Markdown and renders code without line numbers", async () => {
         })
 
         const markdown = markdownRenderables(setup.renderer.root)[0]
-        expect(markdown?.syntaxStyle).toBe(syntax)
+        expect(markdown?.syntaxStyle).toBe(getSyntaxStyle(setup.renderer.nativeScene))
         expect(markdown?.conceal).toBe(true)
         expect(markdown?.concealCode).toBe(false)
         expect(markdown?.internalBlockMode).toBe("top-level")
@@ -2057,7 +2057,7 @@ test("styles rich Markdown and renders code without line numbers", async () => {
             "bash",
             "diff",
         ])
-        expect(fencedCode.every((renderable) => renderable.syntaxStyle === syntax))
+        expect(fencedCode.every((renderable) => renderable.syntaxStyle === getSyntaxStyle(setup.renderer.nativeScene)))
             .toBe(true)
 
         expect(fencedCode.find((renderable) => renderable.filetype === "diff")?.content)

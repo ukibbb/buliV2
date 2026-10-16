@@ -41,7 +41,7 @@ export function SessionTranscript(props: { readonly sessionId: string; readonly 
                 const block = scroll.content.getChildren().find((child) =>
                     child.id !== "history-older" && child.y + child.height > scroll.viewport.y)
                 if (block && !anchorRef.current) {
-                    anchorRef.current = { block, offset: block.getLayoutNode().getComputedTop() - scroll.scrollTop }
+                    anchorRef.current = { block, offset: block.getLayout().top - scroll.scrollTop }
                 }
             }
             previous = next
@@ -57,7 +57,7 @@ export function SessionTranscript(props: { readonly sessionId: string; readonly 
             anchorRef.current = null
             if (!anchor || !scroll || anchor.block.isDestroyed) return
             // Yoga has the new positions before OpenTUI copies them into renderable.y.
-            scroll.scrollTo(anchor.block.getLayoutNode().getComputedTop() - anchor.offset)
+            scroll.scrollTo(anchor.block.getLayout().top - anchor.offset)
         }
         renderer.root.on(LayoutEvents.LAYOUT_CHANGED, restoreAnchor)
         return () => {

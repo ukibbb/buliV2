@@ -26,7 +26,7 @@ Before releasing, confirm that:
 - npm Trusted Publishing for `@ukibbb/buli` points to owner `ukibbb`, repository
   `buliV2`, and workflow `release.yml`
 - the GitHub repository variable `NPM_TRUSTED_PUBLISHING` is exactly `true`
-- Bun 1.3.12 or newer, ripgrep, and fd are available locally
+- Bun 1.3.14 or newer, ripgrep, and fd are available locally
 
 Do not use a long-lived npm token for routine releases. The workflow publishes
 through GitHub OIDC.

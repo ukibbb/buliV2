@@ -332,7 +332,7 @@ npm install --global @ukibbb/buli@next
 
 To run from source, install:
 
-- [Bun](https://bun.sh) 1.3.12 or newer;
+- [Bun](https://bun.sh) 1.3.14 or newer;
 - [ripgrep](https://github.com/BurntSushi/ripgrep), available as `rg`;
 - [fd](https://github.com/sharkdp/fd), available as `fd`.
 

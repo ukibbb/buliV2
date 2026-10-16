@@ -1,24 +1,19 @@
-import { BoxRenderable } from "@opentui/core"
-import { extend, type ExtendedComponentProps } from "@opentui/react"
+import { LayoutEvents, type BoxRenderable } from "@opentui/core"
+import { useRenderer, type BoxProps } from "@opentui/react"
+import { useLayoutEffect, useRef } from "react"
 
-/** OpenTUI 0.5.12 clamps public sizes to one; clipping must still respect zero rows. */
-class ClippedBoxRenderable extends BoxRenderable {
-    protected override getScissorRect() {
-        const bounds = super.getScissorRect()
-        const layout = this.getLayoutNode().getComputedLayout()
-        return { ...bounds, width: layout.width, height: layout.height }
-    }
-}
-
-extend({ clippedBox: ClippedBoxRenderable })
-
-declare module "@opentui/react" {
-    interface OpenTUIComponents {
-        clippedBox: typeof ClippedBoxRenderable
-    }
-}
-
-/** Clips descendants to their allocated space without feeding geometry back into layout. */
-export function ClippedBox(props: ExtendedComponentProps<typeof ClippedBoxRenderable>) {
-    return <clippedBox {...props} overflow="hidden" />
+/** Clips descendants, suppressing paint when native dimensions round zero up to one. */
+export function ClippedBox(props: BoxProps) {
+    const renderer = useRenderer()
+    const box = useRef<BoxRenderable | null>(null)
+    useLayoutEffect(() => {
+        const updateOpacity = () => {
+            if (box.current && !box.current.isDestroyed) {
+                box.current.opacity = box.current.getLayout().height === 0 ? 0 : (props.opacity ?? 1)
+            }
+        }
+        renderer.root.on(LayoutEvents.LAYOUT_CHANGED, updateOpacity)
+        return () => { renderer.root.off(LayoutEvents.LAYOUT_CHANGED, updateOpacity) }
+    }, [renderer, props.opacity])
+    return <box {...props} ref={box} overflow="hidden" />
 }

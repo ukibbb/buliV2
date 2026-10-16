@@ -299,7 +299,7 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
   ]))
 
   const grepContinuation = (await thirdRequest.json()) as Record<string, unknown>
-  expect(JSON.stringify(grepContinuation.input)).toContain("bun@1.3.12")
+  expect(JSON.stringify(grepContinuation.input)).toContain("bun@1.3.14")
 
   const readContinuation = (await fourthRequest.json()) as Record<string, unknown>
   expect(JSON.stringify(readContinuation.input)).toContain("scripts")
@@ -342,7 +342,7 @@ test("runs an OAuth tool chain through Agent-owned iterations", async () => {
       role: "toolResult",
       toolCallId: "call-grep",
       toolName: "grep",
-      content: expect.stringContaining("bun@1.3.12"),
+      content: expect.stringContaining("bun@1.3.14"),
       isError: false,
     }),
     expect.objectContaining({

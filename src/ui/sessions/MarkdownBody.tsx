@@ -1,6 +1,7 @@
+import { useRenderer } from "@opentui/react"
 import type { ReactNode } from "react"
 
-import { syntax, theme } from "@/ui/terminal/theme"
+import { getSyntaxStyle, theme } from "@/ui/terminal/theme"
 
 const MARKDOWN_TABLE_OPTIONS = {
     style: "grid",
@@ -21,10 +22,11 @@ export function MarkdownBody(props: {
     readonly content: string
     readonly streaming: boolean
 }): ReactNode {
+    const renderer = useRenderer()
     return <markdown
         fg={theme.text}
         content={props.content}
-        syntaxStyle={syntax}
+        syntaxStyle={getSyntaxStyle(renderer.nativeScene)}
         streaming={props.streaming}
         conceal
         concealCode={false}

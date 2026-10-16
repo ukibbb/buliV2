@@ -31,7 +31,7 @@ for (const scrollable of [false, true]) {
             for (const notice of [false, true, false, true, false]) {
                 act(() => showNotice(notice))
                 await act(async () => { await setup.renderOnce() })
-                expect(setup.renderer.root.findDescendantById("panel")!.getLayoutNode().getComputedLayout().height).toBe(AVAILABLE_ROWS)
+                expect(setup.renderer.root.findDescendantById("panel")!.getLayout().height).toBe(AVAILABLE_ROWS)
                 expect(setup.renderer.root.findDescendantById("footer")!.y).toBe(AVAILABLE_ROWS)
             }
         } finally {

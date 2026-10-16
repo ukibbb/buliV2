@@ -13,7 +13,7 @@ import {
   TextRenderable,
 } from "@opentui/core"
 import { testRender as createTestRender } from "@opentui/react/test-utils"
-import { expect, spyOn, test } from "bun:test"
+import { expect, mock, spyOn, test } from "bun:test"
 import { act } from "react"
 
 import type {
@@ -535,7 +535,11 @@ test("draws only visible history cards while streaming compaction and scrolling"
     await act(async () => { await setup.renderOnce() })
     const transcript = scrollBoxRenderable(setup.renderer.root)
     const history = markdownRenderables(setup.renderer.root)
-    const draws = history.map((markdown) => spyOn(markdown, "render"))
+    const draws = history.map((markdown) => {
+      const draw = mock(() => {})
+      markdown.renderBefore = draw
+      return draw
+    })
     try {
       expect(history).toHaveLength(messages.length)
       expect(transcript.content.getChildren()).toHaveLength(messages.length + 1)
@@ -597,7 +601,7 @@ test("draws only visible history cards while streaming compaction and scrolling"
       expect(after).toHaveLength(history.length)
       for (const [index, markdown] of after.entries()) expect(markdown).toBe(history[index]!)
     } finally {
-      for (const draw of draws) draw.mockRestore()
+      for (const draw of draws) draw.mockClear()
     }
   } finally {
     harness.controller.dispose()

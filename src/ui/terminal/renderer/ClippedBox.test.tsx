@@ -21,7 +21,7 @@ test("clips a shrinking box at zero rows before drawing its protected sibling", 
             await act(async () => { await setup.renderOnce() })
             const content = setup.renderer.root.findDescendantById("clipped-content")!
             const footer = setup.renderer.root.findDescendantById("protected-footer")!
-            expect(content.getLayoutNode().getComputedHeight()).toBe(height - 3)
+            expect(content.getLayout().height).toBe(height - 3)
             const frame = setup.captureCharFrame()
             expect(frame.split("\n")[footer.y]!.trim()).toBe("Footer")
             expect(frame.includes("Content must not bleed into footer")).toBe(height > 3)

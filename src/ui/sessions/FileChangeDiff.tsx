@@ -1,8 +1,9 @@
 import { pathToFiletype } from "@opentui/core"
+import { useRenderer } from "@opentui/react"
 import { parsePatch } from "diff"
 import { useMemo, type ReactNode } from "react"
 
-import { syntax, theme } from "@/ui/terminal/theme"
+import { getSyntaxStyle, theme } from "@/ui/terminal/theme"
 
 interface IFileChangeDiffProps {
     readonly diff: string
@@ -11,6 +12,7 @@ interface IFileChangeDiffProps {
 
 /** Displays file changes independently of their operation or approval status. */
 export function FileChangeDiff(props: IFileChangeDiffProps): ReactNode {
+    const renderer = useRenderer()
     const path = useMemo(() => props.path ?? diffPath(props.diff), [props.path, props.diff])
     const filetype = path === undefined ? undefined : pathToFiletype(path)
     return <diff
@@ -19,7 +21,7 @@ export function FileChangeDiff(props: IFileChangeDiffProps): ReactNode {
         width="100%"
         view="unified"
         fg={theme.text}
-        syntaxStyle={syntax}
+        syntaxStyle={getSyntaxStyle(renderer.nativeScene)}
         wrapMode="word"
         showLineNumbers
     />

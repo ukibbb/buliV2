@@ -1,4 +1,4 @@
-import { SyntaxStyle, type ThemeTokenStyle } from "@opentui/core"
+import { SyntaxStyle, type NativeResourceOwner, type ThemeTokenStyle } from "@opentui/core"
 
 // Central Unicode glyph palette. Every usage in the codebase must import from
 // here so substitutions are greppable and inspectable.
@@ -107,7 +107,17 @@ const syntaxTheme = [
     token(["markup.raw.block"], theme.text),
 ] satisfies ThemeTokenStyle[]
 
-export const syntax = SyntaxStyle.fromTheme(syntaxTheme)
+const syntaxStyles = new WeakMap<NativeResourceOwner, SyntaxStyle>()
+
+/** Shares highlighting within a renderer; its native context owns the style lifetime. */
+export function getSyntaxStyle(owner: NativeResourceOwner): SyntaxStyle {
+    let style = syntaxStyles.get(owner)
+    if (!style) {
+        style = SyntaxStyle.fromTheme(syntaxTheme, owner)
+        syntaxStyles.set(owner, style)
+    }
+    return style
+}
 
 function token(
     scope: string[],

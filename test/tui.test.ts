@@ -1457,8 +1457,8 @@ test("keeps a long scrollable queue above menus without displacing the editor an
         const menu = setup.renderer.root.findDescendantById("command-menu")!
         const activity = setup.renderer.root.findDescendantById("chat-activity")!
         const status = setup.renderer.root.findDescendantById("chat-status")!
-        const queueRows = queue.getLayoutNode().getComputedHeight()
-        const scrollRows = scroll.getLayoutNode().getComputedHeight()
+        const queueRows = queue.getLayout().height
+        const scrollRows = scroll.getLayout().height
         expect(queue.y + queueRows).toBeLessThanOrEqual(menu.y)
         expect(menu.y + menu.height).toBeLessThanOrEqual(textarea.parent!.y)
         expect(textarea.parent!.y + textarea.parent!.height).toBeLessThanOrEqual(status.y)

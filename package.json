@@ -1,6 +1,6 @@
 {
   "name": "@ukibbb/buli",
-  "version": "1.6.4",
+  "version": "1.6.5",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -26,8 +26,8 @@
     "@ai-sdk/moonshotai": "3.0.45",
     "@ai-sdk/openai": "^4.0.16",
     "@modelcontextprotocol/client": "2.2.0",
-    "@opentui/core": "0.5.12",
-    "@opentui/react": "0.5.12",
+    "@opentui/core": "0.5.14",
+    "@opentui/react": "0.5.14",
     "ai": "^7.0.31",
     "diff": "9.0.0",
     "open": "10.1.2",

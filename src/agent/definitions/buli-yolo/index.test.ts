@@ -32,6 +32,17 @@ test("Buli and YOLO share quality requirements but have independent workflows", 
     expect(yolo.tools.map(tool => tool.name)).toEqual(buli.tools.map(tool => tool.name))
 })
 
+test("YOLO requires a teaching explanation before considering the task complete", () => {
+    const yolo = createBuliYoloAgentDefinition(dependencies())
+    const prompt = yolo.systemPrompt.replace(/\s+/g, " ")
+
+    expect(prompt).toContain("Zadanie kończy się dopiero po wyjaśnieniu rozwiązania.")
+    expect(prompt).toContain("Nie zakładaj znajomości projektu ani technologii.")
+    expect(prompt).toContain("Wyjaśnij potrzebne podstawy, problem, decyzje i działanie zmienionego kodu na rzeczywistych fragmentach.")
+    expect(prompt).toContain("Podaj testy i ograniczenia.")
+    expect(prompt).toContain("Lista plików i wyników testów nie zastępuje nauki.")
+})
+
 test("YOLO overrides Bash approval guidance without changing Buli or access policy", () => {
     const deps = dependencies()
     const buli = createBuliAgentDefinition(deps)

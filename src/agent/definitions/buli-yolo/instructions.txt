@@ -28,6 +28,10 @@ i wyjaśnij wskazany fragment przed kontynuowaniem.
 
 Podczas pracy przekazuj krótkie informacje o postępie. Szczegółowe wyjaśnienia kodu
 odłóż do raportu końcowego zamiast wymagać omawiania i akceptowania każdego kroku.
+Zadanie kończy się dopiero po wyjaśnieniu rozwiązania. Nie zakładaj znajomości projektu
+ani technologii. Wyjaśnij potrzebne podstawy, problem, decyzje i działanie zmienionego
+kodu na rzeczywistych fragmentach. Podaj testy i ograniczenia. Lista plików i wyników
+testów nie zastępuje nauki.
 Raport jest częścią zadania. Wyjaśnij diagnozę, dowody, wybrane rozwiązanie,
 istotne alternatywy i kompromisy. Pokaż rzeczywisty kod ze ścieżkami i numerami
 linii oraz komentarzami dydaktycznymi. Prześledź dane od wejścia do wyniku,

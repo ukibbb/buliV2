@@ -138,23 +138,23 @@ function shippedTarget(value: string, maximum = 96): string {
 test("preserves compact small tool parameters and fallback targets", () => {
     const cases: [string, Record<string, unknown>, string][] = [
         ["bash", { command: "bun test", timeout: 30 }, "Bash [bun test] timeout=30"],
-        ["read", { path: "src/app.ts", offset: 20, limit: 40 }, "Read [src/app.ts] offset=20 limit=40"],
-        ["find", { pattern: "**/*.ts", path: "src", limit: 25 }, "Find [**/*.ts] path=src limit=25"],
+        ["read", { path: "src/app.ts", offset: 20, limit: 40 }, "Read [src/app.ts] start line=20 line limit=40"],
+        ["find", { pattern: "**/*.ts", path: "src", limit: 25 }, "Find [**/*.ts] directory=src result limit=25"],
         ["glob", { pattern: "*.ts", hidden: false }, "Glob [*.ts] hidden=false"],
         ["grep", {
             pattern: "AgentSession", path: "src", glob: "*.ts", ignoreCase: true,
             literal: true, context: 2, limit: 25,
-        }, "Grep [AgentSession] path=src glob=*.ts ignoreCase=true literal=true context=2 limit=25"],
+        }, "Grep [AgentSession] directory=src files=*.ts matching=literal case=insensitive context lines=2 result limit=25"],
         ["edit", { path: "src/app.ts", edits: [{ oldText: "before", newText: "after" }] },
-            'Edit [src/app.ts]'],
+            'Edit [src/app.ts] replacements=1'],
         ["write", { path: "src/new.ts", content: "export {}\n" }, "Write [src/new.ts]"],
         ["apply_patch", { explanation: "cleanup", changes: [{ kind: "delete", path: "p" }] },
             'Apply patch [cleanup] changes=[{"kind":"delete","path":"p"}]'],
         ["tool_output", { outputId: "id", part: "stdout", encoding: "utf8", offset: 0, maxBytes: 12, maxLines: 2 },
             "Tool output [id] part=stdout encoding=utf8 offset=0 maxBytes=12 maxLines=2"],
         ["custom", { query: "hello", count: 2 }, 'custom [{"query":"hello","count":2}]'],
-        ["read", { offset: 0 }, 'Read [{"offset":0}] offset=0'],
-        ["read", { path: 7, limit: 0 }, 'Read [{"path":7,"limit":0}] limit=0'],
+        ["read", { offset: 0 }, 'Read [{"offset":0}] start line=0'],
+        ["read", { path: 7, limit: 0 }, 'Read [{"path":7,"limit":0}] line limit=0'],
         ["read_file", { path: "p" }, 'read_file [{"path":"p"}]'],
     ]
     for (const [name, input, expected] of cases) {
@@ -164,10 +164,9 @@ test("preserves compact small tool parameters and fallback targets", () => {
 
 test.each([95, 96, 97])("preserves exact target, parameter and JSON boundaries at %i code points", (length) => {
     const value = `${"a".repeat(length - 1)}\u{1F600}`
-    const expected = shippedTarget(value)
-    expect(activity("read", { path: value })).toBe(`Read [${expected}]`)
+    expect(activity("read", { path: value })).toBe(`Read [${value}]`)
     expect(activity("grep", { pattern: "p", path: value, glob: value }))
-        .toBe(`Grep [p] path=${expected} glob=${expected}`)
+        .toBe(`Grep [p] directory=${value} files=${value}`)
     const input = { value: "a".repeat(length - 12) }
     expect(activity("custom", input)).toBe(`custom [${shippedTarget(JSON.stringify(input))}]`)
 })
@@ -185,14 +184,14 @@ test("escapes target controls before truncating code points, not graphemes or es
         ...["\r", "\n", "\t"].map((control) => `${"a".repeat(92)}${control}tail`),
     ]
     for (const value of values) {
-        expect(activity("bash", { command: value })).toBe(`Bash [${shippedTarget(value)}]`)
+        expect(activity("bash", { command: value })).toBe(`Bash [${value}]`)
         expect(activity("find", { pattern: "p", path: value }))
-            .toBe(`Find [p] path=${shippedTarget(value)}`)
+            .toBe(`Find [p] directory=${value.replaceAll("\r", "\\r").replaceAll("\n", "\\n").replaceAll("\t", "\\t")}`)
     }
     expect(activity("read", { path: `${"a".repeat(92)}e\u0301tail` }))
-        .toBe(`Read [${"a".repeat(92)}e...]`)
+        .toBe(`Read [${"a".repeat(92)}e\u0301tail]`)
     expect(activity("read", { path: `${"a".repeat(92)}\ntail` }))
-        .toBe(`Read [${"a".repeat(92)}\\...]`)
+        .toBe(`Read [${"a".repeat(92)}\\ntail]`)
 })
 
 test("matches native compact JSON quoting, property order, omissions and array holes", () => {
@@ -236,7 +235,7 @@ test("keeps detail joining, newline replacement and whole-result trimming in ord
     ]
     for (const [summary, content, expected] of cases) {
         expect(activity("read", { path: "p", offset: 1 }, toolResult({ summary, content })))
-            .toBe(`Read [p] offset=1${expected ? ` | ${expected}` : ""} ${glyphs.failure}`)
+            .toBe(`Read [p] start line=1${expected ? ` | ${expected}` : ""} ${glyphs.failure}`)
     }
     expect(activity("read", { path: "p" }, toolResult({
         isError: false, outcome: "failed", content: "not a displayed error detail",
@@ -283,7 +282,7 @@ test.each(["edit", "apply_patch"])("avoids hidden %s data and bounds visible nes
         expect(activity(name, name === "edit"
             ? { path: "p", edits: entries }
             : { explanation: "why", changes: entries }))
-            .toBe(name === "edit" ? "Edit [p]" : `Apply patch [why] changes=${preview}`)
+            .toBe(name === "edit" ? `Edit [p] replacements=${size}` : `Apply patch [why] changes=${preview}`)
         expect({ entryReads, textReads, suffixReads, serializationHooks })
             .toEqual({
                 entryReads: name === "edit" ? 0 : 1,
@@ -381,36 +380,65 @@ test("uses a fixed fallback for malformed non-JSON data without invoking convers
     }
 })
 
-test("keeps huge malformed JSON-looking string arguments as escaped text", () => {
+test("preserves raw Bash strings while bounding other malformed JSON-looking arguments", () => {
     const prefix = '{"oldText":"'
     const raw = `${prefix}${'"\r\n\t'.repeat(100_000)}`
-    const expected = shippedTarget(`${prefix}${'"\r\n\t'.repeat(100)}`)
     expect(activity("edit", { path: "p", edits: raw })).toBe("Edit [p]")
-    expect(activity("bash", { command: raw })).toBe(`Bash [${expected}]`)
+    expect(activity("bash", { command: raw }) === `Bash [${raw}]`).toBe(true)
     expect(activity("custom", { arguments: raw })).toBe(
         `custom [${shippedTarget(JSON.stringify({ arguments: `${prefix}${'"\r\n\t'.repeat(100)}` }))}]`,
     )
 })
 
-test("does not read hidden edit arguments", () => {
+test("counts edit replacements without reading their content", () => {
     let reads = 0
-    expect(activity("edit", {
-        path: "src/app.ts",
-        get edits() { reads++; throw new Error("Edit arguments are not displayed") },
-    })).toBe("Edit [src/app.ts]")
+    const edits = [{ get oldText() { reads++; throw new Error("Hidden edit content") } }]
+    expect(activity("edit", { path: "src/app.ts", edits }))
+        .toBe("Edit [src/app.ts] replacements=1")
     expect(reads).toBe(0)
 })
 
 test("does not cache mutable input identities or inspect hidden write content", () => {
     const input = { path: "p", edits: [{ oldText: "before", newText: "after" }] }
-    expect(activity("edit", input)).toBe('Edit [p]')
+    expect(activity("edit", input)).toBe('Edit [p] replacements=1')
     input.path = "changed"
     input.edits[0]!.newText = "updated"
-    expect(activity("edit", input)).toBe('Edit [changed]')
+    expect(activity("edit", input)).toBe('Edit [changed] replacements=1')
     let reads = 0
     expect(activity("write", {
         path: "p".repeat(1_000_000),
         get content() { reads++; throw new Error("Write content is not displayed") },
-    })).toBe(`Write [${"p".repeat(93)}...]`)
+    })).toBe(`Write [${"p".repeat(1_000_000)}]`)
     expect(reads).toBe(0)
+})
+
+
+test("preserves multiline Bash commands and tabs exactly as supplied by the model", () => {
+    const command = "printf 'first'\n\techo 'second'\r\nexit 0"
+    expect(activity("bash", { command })).toBe(`Bash [${command}]`)
+})
+
+test("preserves the full Bash command with timeout and completed status", () => {
+    const command = `printf '%s' ${"long-argument ".repeat(25)} && echo UNIQUE_COMMAND_END`
+    const result = toolResult({ toolName: "bash", isError: false })
+    expect(activity("bash", { command, timeout: 120 }, result))
+        .toBe(`Bash [${command}] timeout=120 ${glyphs.success}`)
+})
+
+test("wraps a full Bash command in a narrow terminal without losing its suffix", async () => {
+    const command = `echo ${"argument ".repeat(25)}&& echo UNIQUE_COMMAND_END`
+    const setup = await testRender(<ToolCallDisplay
+        call={{ type: "toolCall", toolCallId: "call", toolName: "bash", input: { command } }}
+        result={toolResult({ toolName: "bash", isError: false })}
+    />, { width: 40, height: 20 })
+    try {
+        await act(async () => { await setup.renderOnce() })
+        const frame = setup.captureCharFrame()
+        const commandText = frame.replaceAll("┃", "").replace(/\s+/g, "")
+        expect(commandText).toContain(command.replace(/\s+/g, ""))
+        expect(frame).not.toContain("...")
+        expect(frame).toContain(glyphs.success)
+    } finally {
+        act(() => setup.renderer.destroy())
+    }
 })

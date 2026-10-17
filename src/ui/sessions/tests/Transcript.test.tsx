@@ -501,10 +501,10 @@ test("renders technical tool parameters without text statuses", async () => {
         const lines = textRenderables(setup.renderer.root)
         expect(lines.map((line) => line.plainText)).toEqual([
             "Bash [bun test] timeout=30",
-            "Read [src/app.ts] offset=20 limit=40",
-            "Find [**/*.ts] path=src limit=25",
-            "Grep [AgentSession] path=src glob=*.ts ignoreCase=true literal=true context=2 limit=25",
-            'Edit [src/app.ts]',
+            "Read [src/app.ts] start line=20 line limit=40",
+            "Find [**/*.ts] directory=src result limit=25",
+            "Grep [AgentSession] directory=src files=*.ts matching=literal case=insensitive context lines=2 result limit=25",
+            'Edit [src/app.ts] replacements=1',
             "Write [src/new.ts]",
         ])
         expect(lines.every((line) => line.fg.equals(RGBA.fromHex(theme.amber)))).toBe(true)
@@ -645,7 +645,7 @@ test("keeps one tool activity line across the streaming message boundary", async
     }
 })
 
-test("truncates tool targets without splitting Unicode code points", async () => {
+test("preserves full tool targets including Unicode code points", async () => {
     const path = `${"a".repeat(92)}😀tail`
     const message: IAssistantMessage = {
         id: "unicode-tool",
@@ -675,7 +675,7 @@ test("truncates tool targets without splitting Unicode code points", async () =>
         })
 
         const line = textRenderables(setup.renderer.root)[0]?.plainText
-        expect(line).toContain("😀...")
+        expect(line).toContain(path)
         expect(line).not.toContain("�")
     } finally {
         act(() => {

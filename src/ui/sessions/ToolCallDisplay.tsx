@@ -141,14 +141,14 @@ function toolPresentation(call: IToolCallContent): IToolPresentation {
         case "bash":
             return knownToolPresentation("Bash", call, "command", ["timeout"])
         case "read":
-            return knownToolPresentation("Read", call, "path", [
-                "offset",
-                "limit",
+            return fullToolPresentation("Read", call, "path", [
+                ["start line", call.input.offset],
+                ["line limit", call.input.limit],
             ])
         case "find":
-            return knownToolPresentation("Find", call, "pattern", [
-                "path",
-                "limit",
+            return fullToolPresentation("Find", call, "pattern", [
+                ["directory", call.input.path],
+                ["result limit", call.input.limit],
             ])
         case "glob":
             return knownToolPresentation("Glob", call, "pattern", [
@@ -157,18 +157,24 @@ function toolPresentation(call: IToolCallContent): IToolPresentation {
                 "limit",
             ])
         case "grep":
-            return knownToolPresentation("Grep", call, "pattern", [
-                "path",
-                "glob",
-                "ignoreCase",
-                "literal",
-                "context",
-                "limit",
+            return fullToolPresentation("Grep", call, "pattern", [
+                ["directory", call.input.path],
+                ["files", call.input.glob],
+                ["matching", typeof call.input.literal === "boolean"
+                    ? call.input.literal ? "literal" : "regex"
+                    : undefined],
+                ["case", typeof call.input.ignoreCase === "boolean"
+                    ? call.input.ignoreCase ? "insensitive" : "sensitive"
+                    : undefined],
+                ["context lines", call.input.context],
+                ["result limit", call.input.limit],
             ])
         case "edit":
-            return knownToolPresentation("Edit", call, "path", [])
+            return fullToolPresentation("Edit", call, "path", [
+                ["replacements", Array.isArray(call.input.edits) ? call.input.edits.length : undefined],
+            ])
         case "write":
-            return knownToolPresentation("Write", call, "path", [])
+            return fullToolPresentation("Write", call, "path", [])
         case "apply_patch":
             return knownToolPresentation("Apply patch", call, "explanation", ["changes"])
         case "tool_output":
@@ -187,6 +193,30 @@ function toolPresentation(call: IToolCallContent): IToolPresentation {
     }
 }
 
+/** Formats known operation arguments without truncating paths or search expressions. */
+function fullToolPresentation(
+    name: string,
+    call: IToolCallContent,
+    targetKey: string,
+    parameters: readonly (readonly [label: string, value: unknown])[],
+): IToolPresentation {
+    const target = call.input[targetKey]
+    const details = parameters.flatMap(([label, value]) => {
+        if (value === undefined) return []
+        const text = typeof value === "string"
+            ? value.replaceAll("\r", "\\r").replaceAll("\n", "\\n").replaceAll("\t", "\\t")
+            : compactJson(value, TOOL_PARAMETER_VALUE_MAX_CHARACTERS)
+        return [`${label}=${text}`]
+    })
+    return {
+        name,
+        target: typeof target === "string"
+            ? target.replaceAll("\r", "\\r").replaceAll("\n", "\\n").replaceAll("\t", "\\t")
+            : compactJson(call.input, TOOL_TARGET_MAX_CHARACTERS),
+        ...(details.length === 0 ? {} : { parameters: details.join(" ") }),
+    }
+}
+
 function knownToolPresentation(
     name: string,
     call: IToolCallContent,
@@ -198,7 +228,9 @@ function knownToolPresentation(
     return {
         name,
         target: typeof target === "string"
-            ? compactText(singleLineTarget(target), TOOL_TARGET_MAX_CHARACTERS)
+            ? call.toolName === "bash"
+                ? target
+                : compactText(singleLineTarget(target), TOOL_TARGET_MAX_CHARACTERS)
             : compactJson(call.input, TOOL_TARGET_MAX_CHARACTERS),
         ...(parameters === undefined ? {} : { parameters }),
     }

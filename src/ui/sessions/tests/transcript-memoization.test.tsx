@@ -164,7 +164,7 @@ test("memoized tool views update visible values even when call and result IDs st
         const changedCall = { ...call, input: { path: "changed.ts", offset: 2 } }
         await act(async () => { update({ call: changedCall, phase: "running" }) })
         expect(view).toHaveBeenCalledTimes(2)
-        expect(view.mock.calls.at(-1)![0]).toMatchObject({ target: "changed.ts", detail: "offset=2" })
+        expect(view.mock.calls.at(-1)![0]).toMatchObject({ target: "changed.ts", detail: "start line=2" })
 
         const completed = { ...result("live"), summary: "Done" }
         await act(async () => { update({ call: changedCall, result: completed }) })
@@ -175,7 +175,7 @@ test("memoized tool views update visible values even when call and result IDs st
         const failed = { ...completed, isError: true, summary: "Failed", content: "Permission denied" }
         await act(async () => { update({ call: changedCall, result: failed }) })
         expect(view).toHaveBeenCalledTimes(4)
-        expect(view.mock.calls.at(-1)![0]).toMatchObject({ detail: "offset=2 | Failed | Permission denied", accent: "#EF4444" })
+        expect(view.mock.calls.at(-1)![0]).toMatchObject({ detail: "start line=2 | Failed | Permission denied", accent: "#EF4444" })
         expect(parse).toHaveBeenCalledTimes(1)
         await act(async () => { update({ call: changedCall, result: { ...completed, outcome: "rejected" } }) })
         expect(view).toHaveBeenCalledTimes(5)
@@ -186,7 +186,7 @@ test("memoized tool views update visible values even when call and result IDs st
         expect(view.mock.calls.at(-1)![0].diff).toBe(changedDiff)
         expect(parse).toHaveBeenCalledTimes(2)
         await act(async () => { await setup!.renderOnce() })
-        expect(setup.captureCharFrame()).toContain("Read [changed.ts] offset=2 | Done")
+        expect(setup.captureCharFrame()).toContain("Read [changed.ts] start line=2 | Done")
         expect(setup.captureCharFrame()).toContain("updated")
     } finally {
         const renderer = setup?.renderer

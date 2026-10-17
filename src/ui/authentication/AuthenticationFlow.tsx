@@ -68,30 +68,22 @@ export function AuthenticationFlow(
         >
             <box
                 width="100%"
-                height="100%"
                 minHeight={0}
                 maxWidth={76}
                 maxHeight="100%"
                 flexDirection="column"
-                border
+                border={["top", "bottom"]}
                 borderStyle="single"
-                borderColor={theme.textSecondary}
+                borderColor={theme.green}
                 padding={1}
                 gap={1}
             >
-                <text fg={theme.green} selectable={false}>
-                    Buli Authentication
-                </text>
-                <text fg={theme.textSecondary} selectable={false}>
-                    {controller.mode === "login" ? "Sign in" : "Sign out"}
-                </text>
                 <scrollbox
                     key={state.type}
                     id="authentication-body"
                     ref={bodyScrollRef}
                     width="100%"
                     minHeight={0}
-                    flexGrow={1}
                     scrollY
                     stickyScroll={state.type === "login"}
                     stickyStart="bottom"

@@ -1,9 +1,9 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite"
 import type { TAgentMessage } from "@/agent"
-import { HISTORY_MESSAGE_TARGET, type IHistoryCursor, type IHistoryPage, type TStoredMessage } from "@/sessions/history-contracts"
+import { HISTORY_MESSAGE_TARGET, type IHistoryCursor, type IHistoryPage, type TStoredMessage } from "@/sessions/history/history-contracts"
 import { rangeWhere, visibleMessage, type IResolvedBranchHistory } from "@/sessions/sqlite/branch-history"
 import { safeNumber } from "@/sessions/sqlite/database"
-import { assertDurableSessionMessage } from "@/sessions/validation"
+import { assertDurableSessionMessage } from "@/sessions/history/validation"
 
 const METADATA_BATCH_SIZE = 256
 

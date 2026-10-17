@@ -5,7 +5,7 @@ import { useBuliApplicationSnapshot, useSessionSelector } from "@/ui/context/app
 import { useBuliUiSelector } from "@/ui/context/ui-controller-context"
 import { sameSnapshotFields } from "@/ui/context/use-snapshot-selector"
 import { theme } from "@/ui/terminal/theme"
-import type { IBuliUiSnapshot } from "@/ui/ui-controller"
+import type { IBuliUiSnapshot } from "@/ui/controller/ui-controller"
 
 /** Model readiness, errors and usage do not invalidate the input or menu. */
 export function ChatFeedback(props: { readonly sessionId: string | undefined }) {

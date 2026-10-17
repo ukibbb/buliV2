@@ -130,7 +130,7 @@ an already-running request retains its captured configuration.
 
 ## Verification and provenance
 
-`test/fixtures/openai-astra-reference.ts` contains a sanitized public reference,
+`tests/fixtures/openai-astra-reference.ts` contains a sanitized public reference,
 not an authenticated account capture:
 
 - [Codex reference catalog](https://github.com/openai/codex/blob/db0568dbbb853ce2c377a27a94b5546d4a4d2ec3/codex-rs/models-manager/models.json), pinned to `db0568dbbb853ce2c377a27a94b5546d4a4d2ec3`.

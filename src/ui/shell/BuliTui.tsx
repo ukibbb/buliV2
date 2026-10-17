@@ -8,7 +8,7 @@ import {
     useBuliUiController,
     useBuliNavigationSnapshot,
 } from "@/ui/context/ui-controller-context"
-import { buliKeyboardShortcuts } from "@/ui/keyboard-shortcuts"
+import { buliKeyboardShortcuts } from "@/ui/shell/keyboard-shortcuts"
 import { Home } from "@/ui/shell/Home"
 import { SessionCompletionNotifier } from "@/ui/shell/SessionCompletionNotifier"
 import { SessionScreen } from "@/ui/shell/SessionScreen"

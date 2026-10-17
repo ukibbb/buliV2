@@ -7,8 +7,8 @@ import {
     type ICompactionCheckpoint,
 } from "@/sessions/compaction/checkpoint"
 import { eligibleCompactionEnd } from "@/sessions/compaction/session-compactor"
-import type { IRequiredContext } from "@/sessions/history-contracts"
-import { assertCompactionCheckpoint } from "@/sessions/validation"
+import type { IRequiredContext } from "@/sessions/history/history-contracts"
+import { assertCompactionCheckpoint } from "@/sessions/history/validation"
 
 /** Projects full durable history; the SQLite reader supplies the same contract selectively. */
 export function projectAgentContext(

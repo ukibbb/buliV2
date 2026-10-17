@@ -5,7 +5,7 @@ import type { ISessionSnapshot } from "@/sessions"
 import { PromptEditor } from "@/ui/chat/PromptEditor"
 import { useBuliUiController, useBuliUiSelector } from "@/ui/context/ui-controller-context"
 import { useTerminalClipboard } from "@/ui/terminal/clipboard/ClipboardOverlay"
-import type { IBuliUiSnapshot } from "@/ui/ui-controller"
+import type { IBuliUiSnapshot } from "@/ui/controller/ui-controller"
 
 /** Subscribe to the resource-aware draft, not just its text, and menu openness. */
 export const ChatInput = memo(function ChatInput(props: { readonly sessionId?: string | undefined }) {

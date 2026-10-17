@@ -1,6 +1,6 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite"
 import { isDeepStrictEqual } from "node:util"
-import type { TAppendMessageResult, TStoredMessage } from "@/sessions/history-contracts"
+import type { TAppendMessageResult, TStoredMessage } from "@/sessions/history/history-contracts"
 import { rangeWhere, visibleMessage, type IResolvedBranchHistory } from "@/sessions/sqlite/branch-history"
 import { assertSafeInteger } from "@/sessions/sqlite/database"
 import { assertStoredMessage, isProviderVisible, readLastMessageMetadata, readVisibleMessage } from "@/sessions/sqlite/history-reader"

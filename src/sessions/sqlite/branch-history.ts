@@ -1,5 +1,5 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite"
-import { MAIN_BRANCH_ID } from "@/sessions/branches"
+import { MAIN_BRANCH_ID } from "@/sessions/history/branches"
 
 export interface IBranchMetadata {
     readonly id: string

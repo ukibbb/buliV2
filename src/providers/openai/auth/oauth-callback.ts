@@ -4,6 +4,7 @@ import {
     type ServerResponse,
 } from "node:http"
 
+import { abortReasonError } from "@/common/abort"
 import { OPENAI_OAUTH_CALLBACK_URL } from "@/providers/openai/constants"
 
 const CALLBACK_HOST = "127.0.0.1"
@@ -86,7 +87,7 @@ export async function startOpenAiOAuthCallback(
     }
 
     const onAbort = (): void => {
-        settle({ error: abortReason(options.signal) })
+        settle({ error: abortReasonError(options.signal, "OpenAI OAuth login was cancelled") })
     }
 
     server = createServer((request, response) => {
@@ -164,7 +165,7 @@ export async function startOpenAiOAuthCallback(
     if (options.signal.aborted) {
         onAbort()
         await stopServer()
-        throw abortReason(options.signal)
+        throw abortReasonError(options.signal, "OpenAI OAuth login was cancelled")
     }
 
     return {
@@ -227,13 +228,9 @@ function sendHtml(
 }
 
 function throwIfAborted(signal: AbortSignal): void {
-    if (signal.aborted) throw abortReason(signal)
-}
-
-function abortReason(signal: AbortSignal): Error {
-    return signal.reason instanceof Error
-        ? signal.reason
-        : abortError("OpenAI OAuth login was cancelled")
+    if (signal.aborted) {
+        throw abortReasonError(signal, "OpenAI OAuth login was cancelled")
+    }
 }
 
 function abortError(message: string): Error {

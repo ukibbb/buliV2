@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer"
 import { createTwoFilesPatch } from "diff"
 
-import type { IAgentToolResult } from "@/agent/tool"
+import type { IAgentToolResult } from "@/agent/tools/tool"
 
 const MAX_DIFF_INPUT_BYTES = 2_000_000
 const MAX_DIFF_BYTES = 100_000

@@ -1,9 +1,9 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite"
 import { USER_PATH_REFERENCES_PER_SESSION_MAX, type IUserPathReference } from "@/agent"
-import type { TStoredMessage } from "@/sessions/history-contracts"
+import type { TStoredMessage } from "@/sessions/history/history-contracts"
 import { rangeWhere, type IResolvedBranchHistory } from "@/sessions/sqlite/branch-history"
 import { messageMetadata, readSelectedPayloads, type IMessageMetadata } from "@/sessions/sqlite/history-reader"
-import { assertUserPathReferences } from "@/sessions/validation"
+import { assertUserPathReferences } from "@/sessions/history/validation"
 
 /** Independent of compaction: the two latest users and only assistants between them. */
 export function readRecentConversation(db: Database, history: IResolvedBranchHistory): readonly TStoredMessage[] {

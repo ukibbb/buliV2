@@ -1,11 +1,11 @@
-import { ToolAccess } from "@/agent/tool-policy"
+import { ToolAccess } from "@/agent/tools/tool-policy"
 import { Type } from "typebox"
 
-import { defineAgentTool, type IAgentTool } from "@/agent/tool"
+import { defineAgentTool, type IAgentTool } from "@/agent/tools/tool"
 import type {
     IToolOutputStore,
     IToolOutputWriter,
-} from "@/agent/tool-output-store"
+} from "@/agent/tools/tool-output-store"
 import {
     PROCESS_INTERPRETER_DISPLAY,
     runShellProcess,

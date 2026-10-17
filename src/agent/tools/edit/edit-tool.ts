@@ -6,8 +6,8 @@ import {
 } from "node:fs/promises"
 import { Type, type Static } from "typebox"
 
-import { defineAgentTool, type IAgentTool } from "@/agent/tool"
-import { ToolAccess } from "@/agent/tool-policy"
+import { defineAgentTool, type IAgentTool } from "@/agent/tools/tool"
+import { ToolAccess } from "@/agent/tools/tool-policy"
 import {
     withFileMutationQueue,
 } from "@/agent/tools/shared/file-mutation"

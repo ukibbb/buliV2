@@ -2,7 +2,7 @@ import { useTerminalDimensions } from "@opentui/react"
 import type { ReactNode } from "react"
 
 import { useMenuSelectionScroll } from "@/ui/chat/use-menu-selection-scroll"
-import type { TBuliMenuSnapshot } from "@/ui/ui-controller"
+import type { TBuliMenuSnapshot } from "@/ui/controller/ui-controller"
 import { ClippedBox } from "@/ui/terminal/renderer/ClippedBox"
 import { theme } from "@/ui/terminal/theme"
 

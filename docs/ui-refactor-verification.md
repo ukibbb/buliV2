@@ -33,7 +33,7 @@ Pominięty test dotyczy niedostępności Bash na Windows. Testy emitują ostrze�
 AI SDK o niewspieranych `reasoningEffort`/`reasoningSummary` w scenariuszach
 modeli bez reasoning; nie powodują błędów testów.
 
-W trakcie pracy pierwsze typechecki wykryły stare importy w `test/tui.test.ts`,
+W trakcie pracy pierwsze typechecki wykryły stare importy w `tests/tui.test.ts`,
 nieprawidłowo typowane kolejki w nowym teście i brak zawężenia opcjonalnego
 `highlights` w skrypcie smoke. Wszystkie poprawiono. Powyżej zapisano wyniki
 końcowe; ostatni typecheck wykonano także po dodaniu skryptu smoke.

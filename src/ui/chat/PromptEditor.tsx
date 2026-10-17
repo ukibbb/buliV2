@@ -18,14 +18,14 @@ import {
     type IPathMention,
 } from "@/ui/chat/prompt-draft"
 import { agentAccentColor } from "@/ui/terminal/agent-accent-color"
-import { buliKeyboardShortcuts } from "@/ui/keyboard-shortcuts"
+import { buliKeyboardShortcuts } from "@/ui/shell/keyboard-shortcuts"
 import type {
     IPathCompletion,
 } from "@/ui/controller/path-menu"
 import type {
     TBuliInputDelivery,
     TBuliInputSubmitResult,
-} from "@/ui/ui-controller"
+} from "@/ui/controller/ui-controller"
 import type {
     IUserImageAttachment,
     IUserInputContent,

@@ -6,7 +6,7 @@ import {
     type ReactNode,
 } from "react"
 
-import { BuliUiController, type IBuliUiSnapshot } from "@/ui/ui-controller"
+import { BuliUiController, type IBuliUiSnapshot } from "@/ui/controller/ui-controller"
 import { useSnapshotSelector } from "@/ui/context/use-snapshot-selector"
 
 const BuliUiControllerContext = createContext<BuliUiController | undefined>(undefined)

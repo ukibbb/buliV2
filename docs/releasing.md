@@ -82,10 +82,10 @@ bun run typecheck \
   && BULI_RELEASE_TAG="v$VERSION" bun run bundle:local
 ```
 
-Use `bun run test` to run the complete suite: colocated tests in `src/` and
-`cli/`, plus application-wide tests in `test/`. The project script also sets
-`SHOW_CONSOLE=0`, which prevents the OpenTUI console from taking focus during UI
-tests. Shared fixtures live in `test/fixtures/`.
+Use `bun run test` to run the complete suite: module-local `tests/` directories
+in `src/` and `cli/`, plus application-wide tests in the root `tests/` directory.
+The project script also sets `SHOW_CONSOLE=0`, which prevents the OpenTUI console
+from taking focus during UI tests. Shared fixtures live in `tests/fixtures/`.
 
 This gate verifies types, the complete test suite, npm tarball contents, tag and
 package version agreement, the native executable, macOS signing when run on

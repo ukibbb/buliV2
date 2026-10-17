@@ -1,6 +1,6 @@
 import { InputMenu } from "@/ui/chat/InputMenu"
 import { useBuliUiSelector } from "@/ui/context/ui-controller-context"
-import type { IBuliUiSnapshot } from "@/ui/ui-controller"
+import type { IBuliUiSnapshot } from "@/ui/controller/ui-controller"
 
 /** Menu selection and search results update only the menu. */
 export function ChatMenu() {

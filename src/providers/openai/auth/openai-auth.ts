@@ -1,3 +1,4 @@
+import { abortReasonError } from "@/common/abort"
 import {
     FileAuthStore,
     type IAuthInteraction,
@@ -518,7 +519,9 @@ function waitWithSignal<T>(
     signal?: AbortSignal,
 ): Promise<T> {
     if (!signal) return promise
-    if (signal.aborted) return Promise.reject(abortReason(signal))
+    if (signal.aborted) {
+        return Promise.reject(abortReasonError(signal, "OpenAI authentication was cancelled"))
+    }
 
     return new Promise<T>((resolve, reject) => {
         let settled = false
@@ -528,19 +531,15 @@ function waitWithSignal<T>(
             signal.removeEventListener("abort", onAbort)
             run()
         }
-        const onAbort = (): void => finish(() => reject(abortReason(signal)))
+        const onAbort = (): void => finish(() => {
+            reject(abortReasonError(signal, "OpenAI authentication was cancelled"))
+        })
         signal.addEventListener("abort", onAbort, { once: true })
         promise.then(
             (value) => finish(() => resolve(value)),
             (error: unknown) => finish(() => reject(error)),
         )
     })
-}
-
-function abortReason(signal: AbortSignal): Error {
-    return signal.reason instanceof Error
-        ? signal.reason
-        : abortError("OpenAI authentication was cancelled")
 }
 
 function abortError(message: string): Error {

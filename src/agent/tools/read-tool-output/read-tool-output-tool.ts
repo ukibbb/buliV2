@@ -1,14 +1,14 @@
-import { ToolAccess } from "@/agent/tool-policy"
+import { ToolAccess } from "@/agent/tools/tool-policy"
 import { Type } from "typebox"
-import type { IAgentToolDeclaration } from "@/agent/definition"
+import type { IAgentToolDeclaration } from "@/agent/definitions/definition"
 
-import { defineAgentTool, type IAgentTool } from "@/agent/tool"
+import { defineAgentTool, type IAgentTool } from "@/agent/tools/tool"
 import {
     TOOL_OUTPUT_PARTS,
     type IToolOutputStore,
     type TToolOutputEncoding,
     type TToolOutputPart,
-} from "@/agent/tool-output-store"
+} from "@/agent/tools/tool-output-store"
 
 export const DEFAULT_TOOL_OUTPUT_PAGE_BYTES = 48 * 1024
 export const MAX_TOOL_OUTPUT_PAGE_BYTES = 64 * 1024

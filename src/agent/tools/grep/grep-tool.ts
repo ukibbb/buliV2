@@ -1,4 +1,4 @@
-import { ToolAccess } from "@/agent/tool-policy"
+import { ToolAccess } from "@/agent/tools/tool-policy"
 import { spawn } from "node:child_process"
 import { readFile, stat } from "node:fs/promises"
 import * as path from "node:path"
@@ -9,8 +9,8 @@ import {
     defineAgentTool,
     type IAgentTool,
     type IAgentToolResult,
-} from "@/agent/tool"
-import type { IAgentToolDeclaration } from "@/agent/definition"
+} from "@/agent/tools/tool"
+import type { IAgentToolDeclaration } from "@/agent/definitions/definition"
 import { resolveToCwd } from "@/agent/tools/shared/path-utils"
 import {
     DEFAULT_MAX_BYTES,

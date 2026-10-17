@@ -1,7 +1,7 @@
-export type { IDelegatedTask, TDelegatedTaskStatus } from "@/sessions/delegated-task"
+export type { IDelegatedTask, TDelegatedTaskStatus } from "@/sessions/history/delegated-task"
 /** Public sessions feature API for application composition and consumers. */
-export { MAIN_BRANCH_ID } from "@/sessions/branches"
-export { AgentSession, type IAgentSessionRunConfiguration, type ISessionConfiguration } from "@/sessions/agent-session"
+export { MAIN_BRANCH_ID } from "@/sessions/history/branches"
+export { AgentSession, type IAgentSessionRunConfiguration, type ISessionConfiguration } from "@/sessions/runtime/agent-session"
 export {
     assertCheckpointAnchor,
     type ICompactionCheckpoint,
@@ -32,19 +32,19 @@ export {
     type ICompactionProgress,
 } from "@/sessions/compaction/session-compactor"
 export { SQLiteSessionManager } from "@/sessions/sqlite/sqlite-session-manager"
-export { defaultHistoryDirectoryPath } from "@/sessions/session-lock"
-export type { IHistoryCursor, IHistoryPage, IRequiredContext } from "@/sessions/history-contracts"
-export { createInterruptedToolResults } from "@/sessions/recovery"
+export { defaultHistoryDirectoryPath } from "@/sessions/history/session-lock"
+export type { IHistoryCursor, IHistoryPage, IRequiredContext } from "@/sessions/history/history-contracts"
+export { createInterruptedToolResults } from "@/sessions/history/recovery"
 export type {
     ISessionInfo,
     ISessionManager,
-} from "@/sessions/repository"
+} from "@/sessions/history/repository"
 export {
     freezeSessionSnapshot,
     type ISessionSnapshot,
-} from "@/sessions/snapshot"
+} from "@/sessions/runtime/snapshot"
 export {
     assertCompactionCheckpoint,
     assertDurableSessionMessage,
     assertSessionInfo,
-} from "@/sessions/validation"
+} from "@/sessions/history/validation"

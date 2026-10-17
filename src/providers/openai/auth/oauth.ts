@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer"
 
 import type { IAuthInteraction, IOAuthCredential } from "@/authentication"
+import { abortReasonError } from "@/common/abort"
 import {
     OPENAI_OAUTH_AUTHORIZE_URL,
     OPENAI_OAUTH_CALLBACK_URL,
@@ -156,7 +157,9 @@ export class OpenAiOAuth {
                     operation.signal,
                 )
             } catch {
-                if (operation.signal.aborted) throw abortReason(operation.signal)
+                if (operation.signal.aborted) {
+                    throw abortReasonError(operation.signal, "OpenAI OAuth operation was cancelled")
+                }
                 // The exact callback port may be occupied; manual input remains valid.
             }
 
@@ -351,7 +354,9 @@ export class OpenAiOAuth {
                 requestSignal,
             )
         } catch {
-            if (signal.aborted) throw abortReason(signal)
+            if (signal.aborted) {
+                throw abortReasonError(signal, "OpenAI OAuth operation was cancelled")
+            }
             if (timeoutSignal.aborted) {
                 throw timeoutError(`OpenAI ${operation} request timed out`)
             }
@@ -703,7 +708,7 @@ function createTimedOperation(
     const controller = new AbortController()
     const onAbort = (): void => {
         if (!controller.signal.aborted) {
-            controller.abort(abortReason(callerSignal))
+            controller.abort(abortReasonError(callerSignal, "OpenAI OAuth operation was cancelled"))
         }
     }
     callerSignal.addEventListener("abort", onAbort, { once: true })
@@ -725,7 +730,9 @@ function createTimedOperation(
 }
 
 function waitWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-    if (signal.aborted) return Promise.reject(abortReason(signal))
+    if (signal.aborted) {
+        return Promise.reject(abortReasonError(signal, "OpenAI OAuth operation was cancelled"))
+    }
 
     return new Promise<T>((resolve, reject) => {
         let settled = false
@@ -735,7 +742,9 @@ function waitWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T>
             signal.removeEventListener("abort", onAbort)
             run()
         }
-        const onAbort = (): void => finish(() => reject(abortReason(signal)))
+        const onAbort = (): void => finish(() => {
+            reject(abortReasonError(signal, "OpenAI OAuth operation was cancelled"))
+        })
         signal.addEventListener("abort", onAbort, { once: true })
         if (signal.aborted) onAbort()
 
@@ -747,12 +756,14 @@ function waitWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T>
 }
 
 function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
-    if (signal.aborted) return Promise.reject(abortReason(signal))
+    if (signal.aborted) {
+        return Promise.reject(abortReasonError(signal, "OpenAI OAuth operation was cancelled"))
+    }
 
     return new Promise((resolve, reject) => {
         const onAbort = (): void => {
             clearTimeout(timeout)
-            reject(abortReason(signal))
+            reject(abortReasonError(signal, "OpenAI OAuth operation was cancelled"))
         }
         const timeout = setTimeout(() => {
             signal.removeEventListener("abort", onAbort)
@@ -763,13 +774,9 @@ function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void
 }
 
 function throwIfAborted(signal: AbortSignal): void {
-    if (signal.aborted) throw abortReason(signal)
-}
-
-function abortReason(signal: AbortSignal): Error {
-    return signal.reason instanceof Error
-        ? signal.reason
-        : abortError("OpenAI OAuth operation was cancelled")
+    if (signal.aborted) {
+        throw abortReasonError(signal, "OpenAI OAuth operation was cancelled")
+    }
 }
 
 function abortError(message: string): Error {

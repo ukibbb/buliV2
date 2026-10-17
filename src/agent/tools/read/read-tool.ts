@@ -1,10 +1,10 @@
-import { ToolAccess } from "@/agent/tool-policy"
+import { ToolAccess } from "@/agent/tools/tool-policy"
 import { Buffer } from "node:buffer"
 import { readFile } from "node:fs/promises"
 import { Type } from "typebox"
 
-import { defineAgentTool, type IAgentTool } from "@/agent/tool"
-import type { IAgentToolDeclaration } from "@/agent/definition"
+import { defineAgentTool, type IAgentTool } from "@/agent/tools/tool"
+import type { IAgentToolDeclaration } from "@/agent/definitions/definition"
 import { resolveReadPath } from "@/agent/tools/shared/path-utils"
 import {
     DEFAULT_MAX_BYTES,

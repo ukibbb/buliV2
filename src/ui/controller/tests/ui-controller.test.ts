@@ -1,0 +1,1385 @@
+import { expect, test } from "bun:test"
+
+import type {
+  IBuliApplication,
+  IBuliApplicationSnapshot,
+  IBuliPromptInput,
+  IBuliPromptRun,
+  IBuliQueuedMessages,
+} from "@/app/contracts"
+import type {
+  TReasoningEffort,
+  IUserInputContent,
+} from "@/agent"
+import { BuliUiController } from "@/ui/controller/ui-controller"
+import type { ISessionInfo, ISessionSnapshot } from "@/sessions"
+
+const APPLICATION_SNAPSHOT: IBuliApplicationSnapshot = {
+  agents: [{ id: "test-agent", name: "Test Agent" }],
+  defaultAgentId: "test-agent",
+  models: [
+    {
+      id: "test",
+      name: "Test",
+      reasoningEfforts: ["low", "medium"],
+    },
+    {
+      id: "other",
+      name: "Other",
+      reasoningEfforts: ["medium", "high"],
+    },
+  ],
+  selection: {
+    modelId: "test",
+    reasoningEffort: "medium",
+  },
+}
+
+interface IApplicationSpyOptions {
+  readonly promptCommands?: IBuliApplication["promptCommands"]
+  readonly activateNovibe?: IBuliApplication["activateNovibe"]
+  readonly deactivateNovibe?: IBuliApplication["deactivateNovibe"]
+  readonly runningSessionId?: string
+  readonly compactingSessionId?: string
+  readonly selectModel?: (modelId: string) => void
+  readonly selectReasoningEffort?: (effort: TReasoningEffort) => void
+  readonly promptPersisted?: Promise<void>
+  readonly runFinished?: Promise<void>
+  readonly submitPrompt?: (prompt: IBuliPromptInput) => IBuliPromptRun
+  readonly steer?: (sessionId: string, text: string) => void
+  readonly followUp?: (sessionId: string, text: string) => void
+  readonly clearQueuedMessages?: (sessionId: string) => IBuliQueuedMessages
+  readonly compactSession?: IBuliApplication["compactSession"]
+  readonly refreshModels?: IBuliApplication["refreshModels"]
+  readonly searchPaths?: NonNullable<IBuliApplication["searchPaths"]>
+  readonly getSnapshot?: IBuliApplication["getSnapshot"]
+}
+
+function applicationSpy(options: IApplicationSpyOptions = {}) {
+  const prompts: IBuliPromptInput[] = []
+  const aborted: string[] = []
+  const opened: string[] = []
+  const created: Array<{ agentId: string; title: string }> = []
+  const selectedModels: string[] = []
+  const selectedReasoningEfforts: TReasoningEffort[] = []
+  const modelRefreshes: number[] = []
+  const steering: Array<{ sessionId: string; text: string }> = []
+  const followUps: Array<{ sessionId: string; text: string }> = []
+  const clearedQueues: string[] = []
+  const compacted: string[] = []
+  let createdCount = 0
+  let runCount = 0
+
+  const infos = new Map<string, ISessionInfo>([
+    ["session-1", sessionInfo("session-1", "First prompt", 100)],
+    ["session-2", sessionInfo("session-2", "Second prompt", 200)],
+  ])
+  const sources = new Map<string, ReturnType<typeof sessionSource>>(
+    [...infos.keys()].map((sessionId) => [
+      sessionId,
+      sessionSource(
+        sessionId === options.runningSessionId,
+        sessionId === options.compactingSessionId,
+      ),
+    ]),
+  )
+
+  const createSession: IBuliApplication["createSession"] = ({ agentId, title }) => {
+    created.push({ agentId, title })
+    const id = `created-${++createdCount}`
+    const info = sessionInfo(id, title.replace(/\s+/g, " ").trim(), 300)
+    infos.set(id, info)
+    sources.set(id, sessionSource(false))
+    return structuredClone(info)
+  }
+
+  const application: IBuliApplication = {
+    workspaceRoot: "/workspace",
+    promptCommands: options.promptCommands,
+    subscribe: () => () => undefined,
+    getSnapshot: () => options.getSnapshot?.() ?? APPLICATION_SNAPSHOT,
+    refreshModels: async (signal) => {
+      modelRefreshes.push(modelRefreshes.length + 1)
+      await options.refreshModels?.(signal)
+    },
+    ...(options.searchPaths ? { searchPaths: options.searchPaths } : {}),
+    selectModel: (modelId) => {
+      options.selectModel?.(modelId)
+      selectedModels.push(modelId)
+    },
+    selectReasoningEffort: (effort) => {
+      options.selectReasoningEffort?.(effort)
+      selectedReasoningEfforts.push(effort)
+    },
+    createSession,
+    openSession: (sessionId) => {
+      const source = sources.get(sessionId)
+      if (!source) throw new Error(`Session does not exist: ${sessionId}`)
+      opened.push(sessionId)
+      return source
+    },
+    closeSession: async () => undefined,
+    listSessions: () => structuredClone([...infos.values()]),
+    toggleBuliAgent: async () => undefined,
+    startLearning: async ({ sessionId, scope }) => application.submitPrompt({ ...(sessionId ? { sessionId } : {}), text: `Learn: ${scope}` }),
+    submitPrompt: (prompt) => {
+      prompts.push(prompt)
+      if (options.submitPrompt) return options.submitPrompt(prompt)
+
+      const sessionId = prompt.sessionId ?? createSession({
+        agentId: APPLICATION_SNAPSHOT.defaultAgentId,
+        title: prompt.text,
+      }).id
+      return {
+        sessionId,
+        runId: `run-${++runCount}`,
+        promptPersisted: options.promptPersisted ?? Promise.resolve(),
+        runFinished: options.runFinished ?? Promise.resolve(),
+      }
+    },
+    steer: (sessionId, text) => {
+      options.steer?.(sessionId, text)
+      steering.push({ sessionId, text })
+    },
+    followUp: (sessionId, text) => {
+      options.followUp?.(sessionId, text)
+      followUps.push({ sessionId, text })
+    },
+    clearQueuedMessages: (sessionId) => {
+      clearedQueues.push(sessionId)
+      return options.clearQueuedMessages?.(sessionId) ?? {
+        steering: [],
+        followUp: [],
+      }
+    },
+    activateNovibe: options.activateNovibe ?? (async () => "NoVibe włączone."),
+    deactivateNovibe: options.deactivateNovibe ?? (async () => "NoVibe wyłączone."),
+    createBranch: () => "side",
+    returnToParentBranch: () => undefined,
+    compactSession: async (sessionId) => {
+      compacted.push(sessionId)
+      return options.compactSession?.(sessionId)
+    },
+    abort: async (sessionId) => {
+      aborted.push(sessionId)
+    },
+    dispose: async () => undefined,
+  }
+
+  return {
+    application,
+    prompts,
+    aborted,
+    opened,
+    created,
+    selectedModels,
+    selectedReasoningEfforts,
+    modelRefreshes,
+    steering,
+    followUps,
+    clearedQueues,
+    compacted,
+  }
+}
+
+test("YOLO from Home creates an empty session and preserves the first draft", async () => {
+  const f = applicationSpy()
+  const controller = new BuliUiController({ application: f.application })
+  controller.updateInput("Keep this draft")
+  await controller.toggleBuliAgent()
+  expect(f.created).toEqual([{ agentId: "buli-yolo", title: "New conversation" }])
+  expect(f.prompts).toHaveLength(0)
+  expect(controller.getInputDraft().text).toBe("Keep this draft")
+  await controller.submitInput("Keep this draft")
+  expect(f.prompts[0]?.sessionId).toBeDefined()
+  expect(f.created).toHaveLength(1)
+  controller.dispose()
+})
+
+test("learn submits the workflow and opens its conversation from Home", async () => {
+  const spy = applicationSpy()
+  const controller = new BuliUiController({ application: spy.application })
+  controller.updateInput("/learn authentication")
+  await controller.submitInput("/learn authentication")
+  expect(spy.prompts[0]?.text).toBe("Learn: authentication")
+  expect(controller.getSnapshot().route.type).toBe("session")
+})
+
+test("learn is not delivered as steering during a running response", async () => {
+  const spy = applicationSpy({ runningSessionId: "session-1" })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+  expect(await controller.submitInput("/learn tools")).toBe("retained")
+  expect(spy.prompts).toHaveLength(0)
+  expect(spy.steering).toHaveLength(0)
+  expect(controller.getSnapshot().inputError).toContain("Stop the active response")
+})
+
+test("occupied navigation target leaves the current conversation open", async () => {
+  const spy = applicationSpy()
+  const closed: string[] = []
+  const openSession = spy.application.openSession
+  const failure = new Error("Conversation is owned by another instance")
+  const application: IBuliApplication = {
+    ...spy.application,
+    openSession: (sessionId) => {
+      if (sessionId === "session-2") throw failure
+      return openSession(sessionId)
+    },
+    closeSession: async (sessionId) => {
+      closed.push(sessionId)
+    },
+  }
+  const controller = new BuliUiController({ application })
+  await controller.activateSession("session-1")
+
+  await expect(controller.activateSession("session-2")).rejects.toBe(failure)
+
+  expect(controller.getSnapshot().route).toEqual({
+    type: "session", sessionId: "session-1",
+  })
+  expect(closed).toEqual([])
+  await controller.submitInput("Continue in the first conversation")
+  expect(spy.prompts).toEqual([{
+    sessionId: "session-1", text: "Continue in the first conversation",
+  }])
+  controller.dispose()
+})
+
+test("navigation opens its target before closing the source and blocks overlapping input", async () => {
+  const spy = applicationSpy()
+  const operations: string[] = []
+  const stopped = Promise.withResolvers<void>()
+  const application: IBuliApplication = {
+    ...spy.application,
+    openSession: (sessionId) => {
+      operations.push(`open:${sessionId}`)
+      return spy.application.openSession(sessionId)
+    },
+    closeSession: async (sessionId) => {
+      operations.push(`close:${sessionId}`)
+      await stopped.promise
+    },
+  }
+  const controller = new BuliUiController({ application })
+  await controller.activateSession("session-1")
+  operations.length = 0
+  const switching = controller.activateSession("session-2")
+
+  try {
+    expect(operations).toEqual([
+      "open:session-1", "open:session-2", "close:session-1",
+    ])
+    expect(controller.getSnapshot().route).toEqual({
+      type: "session", sessionId: "session-2",
+    })
+    controller.updateInput("Keep this draft")
+    expect(await controller.submitInput("Keep this draft")).toBe("retained")
+    expect(spy.prompts).toEqual([])
+    expect(controller.getSnapshot().input).toBe("Keep this draft")
+    await expect(controller.goHome()).rejects.toThrow("Session navigation is still pending")
+    await expect(controller.activateSession("session-1"))
+      .rejects.toThrow("Session navigation is still pending")
+    expect(operations).toEqual([
+      "open:session-1", "open:session-2", "close:session-1",
+    ])
+
+    stopped.resolve()
+    await switching
+    expect(await controller.submitInput("Keep this draft")).toBe("consumed")
+    expect(spy.prompts).toEqual([{
+      sessionId: "session-2", text: "Keep this draft",
+    }])
+  } finally {
+    stopped.resolve()
+    await switching
+    controller.dispose()
+  }
+})
+
+test.each(["session", "home"] as const)(
+  "failed source close retains the destination: %s",
+  async (destination) => {
+    const spy = applicationSpy()
+    const closed: string[] = []
+    const application: IBuliApplication = {
+      ...spy.application,
+      closeSession: async (sessionId) => {
+        closed.push(sessionId)
+        throw new Error("Session did not stop")
+      },
+    }
+    const controller = new BuliUiController({ application })
+    await controller.activateSession("session-1")
+
+    if (destination === "session") {
+      await controller.activateSession("session-2")
+    } else {
+      await controller.goHome()
+    }
+
+    expect(closed).toEqual(["session-1"])
+    expect(controller.getSnapshot().route).toEqual(destination === "session"
+      ? { type: "session", sessionId: "session-2" }
+      : { type: "home" })
+    expect(controller.getSnapshot().inputError).toBe(
+      "Failed to close previous session session-1: Session did not stop",
+    )
+    controller.dispose()
+  },
+)
+
+test("publishes all command suggestions from slash input", () => {
+  const spy = applicationSpy()
+  const controller = new BuliUiController({ application: spy.application })
+  const initial = controller.getSnapshot()
+  let notifications = 0
+  controller.subscribe(() => {
+    notifications += 1
+  })
+
+  controller.updateInput("/")
+
+  expect(controller.getSnapshot()).not.toBe(initial)
+  expect(controller.getSnapshot().menu?.items.map((item) => item.id)).toEqual([
+    "new",
+    "model",
+    "reasoning",
+    "sessions",
+    "login",
+    "logout",
+    "branch",
+    "return",
+    "compact",
+    "novibe",
+    "learn",
+    "commands",
+  ])
+  expect(notifications).toBe(1)
+})
+
+test("saved command panel registers, suggests, expands and removes global prompts", async () => {
+  const saved = new Map<string, string>()
+  const spy = applicationSpy({ promptCommands: {
+    list: () => [...saved].map(([name, prompt]) => ({ name, prompt })),
+    add: ({ name, prompt }) => { if (saved.has(name)) throw new Error("Already exists"); saved.set(name, prompt) },
+    remove: name => { saved.delete(name) },
+  } })
+  const controller = new BuliUiController({ application: spy.application })
+  await controller.submitInput("/commands")
+  expect(controller.getSnapshot().commandPanel?.mode).toBe("list")
+  expect(spy.prompts).toEqual([])
+  controller.showAddCommand()
+  expect(controller.saveCommand("model", "Forbidden")).toBe(false)
+  expect(controller.getSnapshot().commandPanel?.error).toContain("built in")
+  expect(controller.saveCommand("review", "Review code.\nExplain errors.")).toBe(true)
+  expect(controller.getSnapshot().commandPanel?.commands).toEqual([{ name: "review", prompt: "Review code.\nExplain errors." }])
+  controller.closeCommands()
+  controller.updateInput("/rev")
+  expect(controller.getSnapshot().menu?.items.map(item => item.id)).toEqual(["review"])
+  await controller.activateSelectedMenuItem()
+  expect(spy.prompts.at(-1)?.text).toBe("Review code.\nExplain errors.")
+  await controller.submitInput("/review authentication")
+  expect(spy.prompts.at(-1)?.text).toBe("Review code.\nExplain errors.\n\nauthentication")
+  controller.openCommands()
+  controller.removeCommand("review")
+  expect(controller.getSnapshot().commandPanel?.commands).toEqual([])
+  controller.closeCommands()
+  controller.updateInput("/rev")
+  expect(controller.getSnapshot().menu).toBeNull()
+  controller.dispose()
+})
+
+test("command write errors retain form and deletion errors retain list; Escape does not abort", () => {
+  const spy = applicationSpy({ promptCommands: {
+    list: () => [{ name: "review", prompt: "Review" }],
+    add: () => { throw new Error("Disk full") },
+    remove: () => { throw new Error("Access denied") },
+  } })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.openCommands()
+  controller.showAddCommand()
+  expect(controller.saveCommand("explain", "Explain")).toBe(false)
+  expect(controller.getSnapshot().commandPanel).toMatchObject({ mode: "add", error: "Disk full" })
+  controller.escape()
+  expect(controller.getSnapshot().commandPanel?.mode).toBe("list")
+  controller.removeCommand("review")
+  expect(controller.getSnapshot().commandPanel).toMatchObject({ commands: [{ name: "review", prompt: "Review" }], error: "Access denied" })
+  controller.escape()
+  expect(controller.getSnapshot().commandPanel).toBeNull()
+  expect(spy.aborted).toEqual([])
+  controller.dispose()
+})
+
+test("saved commands expand for steering and follow-up without changing agent", async () => {
+  const spy = applicationSpy({ runningSessionId: "session-1", promptCommands: {
+    list: () => [{ name: "review", prompt: "Review code" }], add: () => {}, remove: () => {},
+  } })
+  const controller = new BuliUiController({ application: spy.application })
+  await controller.activateSession("session-1")
+  await controller.submitInput("/review now")
+  await controller.submitInput("/review later", "followUp")
+  expect(spy.steering).toEqual([{ sessionId: "session-1", text: "Review code\n\nnow" }])
+  expect(spy.followUps).toEqual([{ sessionId: "session-1", text: "Review code\n\nlater" }])
+  controller.dispose()
+})
+
+test("publishes fd path suggestions and returns a selected capability", async () => {
+  const spy = applicationSpy({
+    searchPaths: async (query) => {
+      expect(query).toBe("sr")
+      return [{
+        kind: "file",
+        path: "/workspace/src/main.ts",
+        displayPath: "src/main.ts",
+      }]
+    },
+  })
+  const controller = new BuliUiController({ application: spy.application })
+
+  controller.updateDraft(
+    { text: "Review @sr" },
+    { query: "sr", start: 7, end: 10 },
+  )
+  await Bun.sleep(30)
+
+  expect(controller.getSnapshot().menu).toMatchObject({
+    mode: "paths",
+    triggerStart: 7,
+    triggerEnd: 10,
+    items: [{ label: "src/main.ts", kind: "file" }],
+  })
+  await expect(controller.activateSelectedMenuItem()).resolves.toEqual({
+    triggerStart: 7,
+    triggerEnd: 10,
+    value: "@src/main.ts",
+    reference: {
+      type: "path",
+      kind: "file",
+      path: "/workspace/src/main.ts",
+    },
+  })
+  expect(controller.getSnapshot().menu).toBeNull()
+})
+
+test("creates the first session only when a prompt is submitted from Home", async () => {
+  const spy = applicationSpy()
+  const controller = new BuliUiController({ application: spy.application })
+
+  expect(controller.getSnapshot()).toEqual({
+    route: { type: "home" },
+    authenticationMode: null,
+    menu: null,
+    input: "",
+    inputError: null,
+  })
+  expect(spy.created).toEqual([])
+
+  await controller.submitInput("  First\n prompt  ")
+
+  expect(spy.created).toEqual([{
+    agentId: "test-agent",
+    title: "First\n prompt",
+  }])
+  expect(controller.getSnapshot().route).toEqual({
+    type: "session",
+    sessionId: "created-1",
+  })
+  expect(spy.prompts).toEqual([{
+    text: "First\n prompt",
+  }])
+})
+
+test("opens a new session only after its prompt is persisted", async () => {
+  const promptPersisted = Promise.withResolvers<void>()
+  const spy = applicationSpy({
+    promptPersisted: promptPersisted.promise,
+    runFinished: promptPersisted.promise,
+  })
+  const controller = new BuliUiController({ application: spy.application })
+
+  const submission = controller.submitInput("First prompt")
+  await Promise.resolve()
+
+  expect(controller.getSnapshot().route).toEqual({ type: "home" })
+
+  promptPersisted.resolve()
+  expect(await submission).toBe("consumed")
+  expect(controller.getSnapshot().route).toEqual({
+    type: "session",
+    sessionId: "created-1",
+  })
+})
+
+test("retains a second submission while prompt persistence is pending", async () => {
+  const promptPersisted = Promise.withResolvers<void>()
+  const spy = applicationSpy({
+    promptPersisted: promptPersisted.promise,
+    runFinished: promptPersisted.promise,
+  })
+  const controller = new BuliUiController({ application: spy.application })
+
+  const firstSubmission = controller.submitInput("First prompt")
+  await Promise.resolve()
+  const secondResult = await controller.submitInput("Second prompt")
+
+  expect(secondResult).toBe("retained")
+  expect(spy.prompts).toEqual([{ text: "First prompt" }])
+  expect(controller.getSnapshot().inputError).toBe(
+    "Prompt submission is still pending",
+  )
+
+  promptPersisted.resolve()
+  expect(await firstSubmission).toBe("consumed")
+})
+
+test("prompt persistence does not erase newer resources with the same visible text", async () => {
+  const promptPersisted = Promise.withResolvers<void>()
+  const spy = applicationSpy({
+    promptPersisted: promptPersisted.promise,
+    runFinished: promptPersisted.promise,
+  })
+  const controller = new BuliUiController({ application: spy.application })
+  const first = imageDraft("first")
+  const newer = imageDraft("newer")
+  controller.updateDraft(first)
+
+  const submission = controller.submitInput(first)
+  await Promise.resolve()
+  controller.updateDraft(newer)
+  promptPersisted.resolve()
+
+  expect(await submission).toBe("consumed")
+  expect(controller.getInputDraft()).toEqual(newer)
+  expect(controller.getSnapshot().input).toBe("[Image 1]")
+})
+
+test("allows only one concurrent unknown slash command submission", async () => {
+  const promptPersisted = Promise.withResolvers<void>()
+  const spy = applicationSpy({
+    promptPersisted: promptPersisted.promise,
+    runFinished: promptPersisted.promise,
+  })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.updateInput("/unknown")
+
+  const firstSubmission = controller.submitInput("/unknown")
+  const secondResult = await controller.submitInput("/unknown")
+  await Promise.resolve()
+
+  expect(secondResult).toBe("retained")
+  expect(spy.prompts).toEqual([{ text: "/unknown" }])
+  expect(controller.getSnapshot()).toMatchObject({
+    input: "/unknown",
+    inputError: "Prompt submission is still pending",
+  })
+
+  promptPersisted.resolve()
+  expect(await firstSubmission).toBe("consumed")
+})
+
+test("retains synchronous subscriber reentry during submission", async () => {
+  const promptPersisted = Promise.withResolvers<void>()
+  const spy = applicationSpy({
+    promptPersisted: promptPersisted.promise,
+    runFinished: promptPersisted.promise,
+  })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.updateInput("First prompt")
+  let didReenter = false
+  let reentryTask: ReturnType<BuliUiController["submitInput"]> | undefined
+  controller.subscribe(() => {
+    if (didReenter) return
+    didReenter = true
+    reentryTask = controller.submitInput("Reentered prompt")
+  })
+
+  const firstSubmission = controller.submitInput("First prompt")
+  await Promise.resolve()
+
+  if (!reentryTask) throw new Error("Expected synchronous subscriber reentry")
+  expect(await reentryTask).toBe("retained")
+  expect(spy.prompts).toEqual([{ text: "First prompt" }])
+  expect(controller.getSnapshot()).toMatchObject({
+    input: "First prompt",
+    inputError: "Prompt submission is still pending",
+  })
+
+  promptPersisted.resolve()
+  expect(await firstSubmission).toBe("consumed")
+})
+
+test("routes Enter to steering while the active session is running", async () => {
+  const spy = applicationSpy({ runningSessionId: "session-1" })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+  controller.updateInput("Adjust the answer")
+
+  const result = await controller.submitInput("Adjust the answer")
+
+  expect(result).toBe("consumed")
+  expect(spy.steering).toEqual([{
+    sessionId: "session-1",
+    text: "Adjust the answer",
+  }])
+  expect(spy.prompts).toEqual([])
+  expect(controller.getSnapshot().input).toBe("")
+})
+
+test("routes Alt+Enter delivery to follow-up while a session is running", async () => {
+  const spy = applicationSpy({ runningSessionId: "session-1" })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+  controller.updateInput("Summarize when finished")
+
+  const result = await controller.submitInput(
+    "Summarize when finished",
+    "followUp",
+  )
+
+  expect(result).toBe("consumed")
+  expect(spy.followUps).toEqual([{
+    sessionId: "session-1",
+    text: "Summarize when finished",
+  }])
+  expect(spy.steering).toEqual([])
+  expect(spy.prompts).toEqual([])
+  expect(controller.getSnapshot().input).toBe("")
+})
+
+test("retains follow-up input when there is no active run", async () => {
+  const spy = applicationSpy()
+  const controller = new BuliUiController({ application: spy.application })
+  controller.updateInput("Run this later")
+
+  const result = await controller.submitInput("Run this later", "followUp")
+
+  expect(result).toBe("retained")
+  expect(spy.followUps).toEqual([])
+  expect(spy.prompts).toEqual([])
+  expect(controller.getSnapshot()).toMatchObject({
+    input: "Run this later",
+    inputError: "Follow-up requires an active run",
+  })
+})
+
+test("retains input when a finishing run rejects steering", async () => {
+  const spy = applicationSpy({
+    runningSessionId: "session-1",
+    steer: () => {
+      throw new Error("Agent is not accepting steering messages")
+    },
+  })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+  controller.updateInput("Late steering")
+
+  const result = await controller.submitInput("Late steering")
+
+  expect(result).toBe("retained")
+  expect(spy.steering).toEqual([])
+  expect(controller.getSnapshot()).toMatchObject({
+    input: "Late steering",
+    inputError: "Agent is not accepting steering messages",
+  })
+})
+
+test("does not replace a route changed while Home prompt persistence is pending", async () => {
+  const promptPersisted = Promise.withResolvers<void>()
+  const spy = applicationSpy({
+    promptPersisted: promptPersisted.promise,
+    runFinished: promptPersisted.promise,
+  })
+  const controller = new BuliUiController({ application: spy.application })
+
+  const submission = controller.submitInput("First prompt")
+  await Promise.resolve()
+  controller.activateSession("session-2")
+
+  promptPersisted.resolve()
+  expect(await submission).toBe("consumed")
+  expect(controller.getSnapshot().route).toEqual({
+    type: "session",
+    sessionId: "session-2",
+  })
+})
+
+test("opens model picker at the current model and activates a selection", async () => {
+  const spy = applicationSpy()
+  const controller = new BuliUiController({ application: spy.application })
+
+  await controller.submitInput("/model")
+  expect(controller.getSnapshot().menu).toMatchObject({
+    mode: "picker",
+    commandName: "model",
+    selectedIndex: 0,
+  })
+
+  controller.moveMenuSelection(1)
+  await controller.activateSelectedMenuItem()
+
+  expect(spy.selectedModels).toEqual(["other"])
+  expect(spy.modelRefreshes).toEqual([1])
+  expect(controller.getSnapshot().menu).toBeNull()
+  expect(spy.prompts).toEqual([])
+  expect(spy.created).toEqual([])
+})
+
+test("shows a Fast model variant beside its base model", async () => {
+  const snapshot: IBuliApplicationSnapshot = {
+    ...APPLICATION_SNAPSHOT,
+    models: [
+      {
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        reasoningEfforts: ["medium", "high"],
+      },
+      {
+        id: "gpt-5.6-luna::fast",
+        name: "GPT-5.6 Luna Fast",
+        reasoningEfforts: ["medium", "high"],
+      },
+    ],
+    selection: {
+      modelId: "gpt-5.6-luna",
+      reasoningEffort: "medium",
+    },
+  }
+  const spy = applicationSpy({ getSnapshot: () => snapshot })
+  const controller = new BuliUiController({ application: spy.application })
+
+  await controller.submitInput("/model")
+
+  expect(controller.getSnapshot().menu).toMatchObject({
+    mode: "picker",
+    commandName: "model",
+    selectedIndex: 0,
+    items: [
+      { id: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
+      { id: "gpt-5.6-luna::fast", label: "GPT-5.6 Luna Fast" },
+    ],
+  })
+  controller.moveMenuSelection(1)
+  await controller.activateSelectedMenuItem()
+  expect(spy.selectedModels).toEqual(["gpt-5.6-luna::fast"])
+})
+
+test("keeps the model picker usable when catalog refresh fails", async () => {
+  const spy = applicationSpy({
+    refreshModels: async () => {
+      throw new Error("catalog offline")
+    },
+  })
+  const controller = new BuliUiController({ application: spy.application })
+
+  expect(await controller.submitInput("/model")).toBe("consumed")
+
+  expect(controller.getSnapshot().menu).toMatchObject({
+    mode: "picker",
+    commandName: "model",
+    items: [
+      { id: "test", label: "Test" },
+      { id: "other", label: "Other" },
+    ],
+    errorMessage: "Model catalog refresh failed: catalog offline",
+  })
+  expect(spy.modelRefreshes).toEqual([1])
+})
+
+test("does not reopen a model picker dismissed during refresh", async () => {
+  let refreshAborted = false
+  const spy = applicationSpy({
+    refreshModels: async (signal) => {
+      if (!signal) throw new Error("Expected model refresh signal")
+      await new Promise<void>((_resolve, reject) => {
+        const rejectOnAbort = (): void => {
+          refreshAborted = true
+          reject(signal.reason)
+        }
+        signal.addEventListener("abort", rejectOnAbort, { once: true })
+        if (signal.aborted) rejectOnAbort()
+      })
+    },
+  })
+  const controller = new BuliUiController({ application: spy.application })
+
+  const submission = controller.submitInput("/model")
+  await Promise.resolve()
+  await Promise.resolve()
+  expect(controller.getSnapshot().menu).toMatchObject({
+    mode: "picker",
+    commandName: "model",
+    items: [],
+    emptyMessage: "Loading models...",
+  })
+
+  controller.escape()
+  expect(controller.getSnapshot().menu).toBeNull()
+  expect(await submission).toBe("consumed")
+  expect(controller.getSnapshot().menu).toBeNull()
+  expect(refreshAborted).toBe(true)
+})
+
+test("opens reasoning picker with efforts supported by the current model", async () => {
+  const spy = applicationSpy()
+  const controller = new BuliUiController({ application: spy.application })
+
+  await controller.submitInput("/reasoning")
+  expect(controller.getSnapshot().menu).toMatchObject({
+    mode: "picker",
+    commandName: "reasoning",
+    items: [
+      { id: "low", label: "low" },
+      { id: "medium", label: "medium" },
+    ],
+    selectedIndex: 1,
+  })
+
+  controller.moveMenuSelection(-1)
+  await controller.activateSelectedMenuItem()
+
+  expect(spy.selectedReasoningEfforts).toEqual(["low"])
+  expect(controller.getSnapshot().menu).toBeNull()
+})
+
+test("keeps a picker open when selection fails", async () => {
+  const spy = applicationSpy({
+    selectModel: () => {
+      throw new Error("Unsupported reasoning effort: medium")
+    },
+  })
+  const controller = new BuliUiController({ application: spy.application })
+
+  await controller.submitInput("/model")
+  controller.moveMenuSelection(1)
+  await controller.activateSelectedMenuItem()
+
+  expect(controller.getSnapshot().menu).toMatchObject({
+    mode: "picker",
+    commandName: "model",
+    selectedIndex: 1,
+    errorMessage: "Unsupported reasoning effort: medium",
+  })
+  expect(spy.selectedModels).toEqual([])
+})
+
+test("opens saved sessions and marks the active session", async () => {
+  const spy = applicationSpy()
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+
+  await controller.submitInput("/sessions")
+
+  expect(controller.getSnapshot().menu).toMatchObject({
+    mode: "picker",
+    commandName: "sessions",
+    selectedIndex: 0,
+    items: [
+      { id: "session-1", label: "First prompt" },
+      { id: "session-2", label: "Second prompt" },
+    ],
+  })
+
+  controller.moveMenuSelection(1)
+  await controller.activateSelectedMenuItem()
+
+  expect(controller.getSnapshot().route).toEqual({
+    type: "session",
+    sessionId: "session-2",
+  })
+  expect(spy.opened).toContain("session-2")
+})
+
+test("new returns Home without creating an empty session", async () => {
+  const spy = applicationSpy()
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+
+  await controller.submitInput("/new")
+
+  expect(controller.getSnapshot().route).toEqual({ type: "home" })
+  expect(spy.created).toEqual([])
+})
+
+test("new clears the source-close error after consuming its input", async () => {
+  const spy = applicationSpy()
+  const application: IBuliApplication = {
+    ...spy.application,
+    closeSession: async () => {
+      throw new Error("Storage release failed")
+    },
+  }
+  const controller = new BuliUiController({ application })
+  try {
+    await controller.activateSession("session-1")
+    controller.updateInput("/new")
+
+    const result = await controller.submitInput("/new")
+
+    expect(result).toBe("consumed")
+    expect(controller.getSnapshot().route).toEqual({ type: "home" })
+    expect(controller.getSnapshot().input).toBe("")
+    expect(controller.getSnapshot().inputError).toBeNull()
+    expect(spy.created).toEqual([])
+  } finally {
+    controller.dispose()
+  }
+})
+
+test("session picker clears the source-close error after consuming its input", async () => {
+  const spy = applicationSpy()
+  const closed: string[] = []
+  const application: IBuliApplication = {
+    ...spy.application,
+    closeSession: async (sessionId) => {
+      closed.push(sessionId)
+      throw new Error("Storage release failed")
+    },
+  }
+  const controller = new BuliUiController({ application })
+  try {
+    await controller.activateSession("session-1")
+    controller.updateInput("/sessions")
+    await controller.activateSelectedMenuItem()
+    controller.moveMenuSelection(1)
+
+    await controller.activateSelectedMenuItem()
+
+    expect(closed).toEqual(["session-1"])
+    expect(controller.getSnapshot().route).toEqual({
+      type: "session",
+      sessionId: "session-2",
+    })
+    expect(controller.getSnapshot().menu).toBeNull()
+    expect(controller.getSnapshot().input).toBe("")
+    expect(controller.getSnapshot().inputError).toBeNull()
+    expect(spy.created).toEqual([])
+  } finally {
+    controller.dispose()
+  }
+})
+
+test("login and logout commands activate authentication mode", async () => {
+  const spy = applicationSpy()
+  const controller = new BuliUiController({ application: spy.application })
+
+  expect(await controller.submitInput("/login")).toBe("consumed")
+  expect(controller.getSnapshot().authenticationMode).toBe("login")
+  expect(spy.prompts).toEqual([])
+
+  controller.escape()
+  expect(controller.getSnapshot().authenticationMode).toBeNull()
+
+  expect(await controller.submitInput("/logout")).toBe("consumed")
+  expect(controller.getSnapshot().authenticationMode).toBe("logout")
+  expect(spy.prompts).toEqual([])
+})
+
+test("NoVibe action arguments reach the handler and never become model prompts", async () => {
+  const calls: string[] = []
+  const spy = applicationSpy({
+    activateNovibe: async (id) => { calls.push(`on:${id}`); return "NoVibe włączone." },
+    deactivateNovibe: async (id) => { calls.push(`off:${id}`); return "NoVibe wyłączone." },
+  })
+  const controller = new BuliUiController({ application: spy.application })
+  await controller.activateSession("session-1")
+  await controller.submitInput("/novibe")
+  expect(controller.getSnapshot().menu?.emptyMessage).toBe("NoVibe włączone.")
+  await controller.submitInput("/novibe off")
+  expect(controller.getSnapshot().menu?.emptyMessage).toBe("NoVibe wyłączone.")
+  await controller.submitInput("/novibe invalid")
+  expect(controller.getSnapshot().menu?.errorMessage).toBe("Użyj /novibe, /novibe off, /novibe login, /novibe status albo /novibe logout.")
+  expect(calls).toEqual(["on:session-1", "off:session-1"])
+  expect(spy.prompts).toEqual([])
+  expect(spy.steering).toEqual([])
+  controller.dispose()
+})
+
+test("NoVibe from Home opens an empty session before activation and reuses it for the first prompt", async () => {
+  const calls: string[] = []
+  const spy = applicationSpy({
+    activateNovibe: async (id) => {
+      expect(controller.getSnapshot().route).toEqual({ type: "session", sessionId: id })
+      expect(spy.opened).toContain(id)
+      expect(spy.prompts).toEqual([])
+      calls.push(id)
+      return "NoVibe włączone."
+    },
+  })
+  const controller = new BuliUiController({ application: spy.application })
+  try {
+    await controller.submitInput("/novibe")
+    expect(spy.created).toEqual([{ agentId: "test-agent", title: "NoVibe" }])
+    expect(calls).toEqual(["created-1"])
+    controller.dismissMenu()
+    await controller.submitInput("Use NoVibe from the first prompt")
+    expect(spy.prompts).toEqual([{ sessionId: "created-1", text: "Use NoVibe from the first prompt" }])
+    expect(spy.created).toHaveLength(1)
+  } finally {
+    controller.dispose()
+  }
+})
+
+test.each([
+  ["/novibe off", "NoVibe nie jest aktywne."],
+  ["/novibe invalid", "Użyj /novibe, /novibe off, /novibe login, /novibe status albo /novibe logout."],
+])("%s from Home does not create a session or contact MCP", async (command, message) => {
+  const calls: string[] = []
+  const spy = applicationSpy({
+    activateNovibe: async (id) => { calls.push(id); return "unexpected" },
+    deactivateNovibe: async (id) => { calls.push(id); return "unexpected" },
+  })
+  const controller = new BuliUiController({ application: spy.application })
+  try {
+    await controller.submitInput(command!)
+    const menu = controller.getSnapshot().menu
+    expect(menu?.errorMessage ?? menu?.emptyMessage).toBe(message)
+    expect(controller.getSnapshot().route).toEqual({ type: "home" })
+    expect(spy.created).toEqual([])
+    expect(spy.prompts).toEqual([])
+    expect(calls).toEqual([])
+  } finally {
+    controller.dispose()
+  }
+})
+
+test("NoVibe connection failure retains the empty session for retry", async () => {
+  const calls: string[] = []
+  const spy = applicationSpy({
+    activateNovibe: async (id) => {
+      calls.push(id)
+      if (calls.length === 1) throw new Error("MCP connection failed")
+      return "NoVibe włączone."
+    },
+  })
+  const controller = new BuliUiController({ application: spy.application })
+  try {
+    await controller.submitInput("/novibe")
+    expect(controller.getSnapshot().route).toEqual({ type: "session", sessionId: "created-1" })
+    expect(controller.getSnapshot().menu?.errorMessage).toBe("MCP connection failed")
+    await controller.submitInput("/novibe")
+    expect(calls).toEqual(["created-1", "created-1"])
+    expect(spy.created).toHaveLength(1)
+    expect(spy.prompts).toEqual([])
+    expect(controller.getSnapshot().menu?.emptyMessage).toBe("NoVibe włączone.")
+  } finally {
+    controller.dispose()
+  }
+})
+
+test("action commands reject arguments instead of sending a prompt", async () => {
+  const spy = applicationSpy()
+  const controller = new BuliUiController({ application: spy.application })
+
+  expect(await controller.submitInput("/login openai")).toBe("consumed")
+  expect(controller.getSnapshot()).toMatchObject({
+    authenticationMode: null,
+    menu: { errorMessage: "/login does not accept arguments" },
+  })
+  expect(spy.prompts).toEqual([])
+  expect(spy.created).toEqual([])
+})
+
+test("Escape closes authentication without changing the session or draft", () => {
+  const spy = applicationSpy({ runningSessionId: "session-1" })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+  controller.updateInput("Preserved draft")
+  controller.openAuthentication("login")
+
+  controller.escape()
+
+  expect(controller.getSnapshot()).toMatchObject({
+    route: { type: "session", sessionId: "session-1" },
+    authenticationMode: null,
+    input: "Preserved draft",
+  })
+  expect(spy.aborted).toEqual([])
+})
+
+test("blocks session changes while the current session is running", async () => {
+  const spy = applicationSpy({ runningSessionId: "session-1" })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+  await controller.submitInput("/sessions")
+  controller.moveMenuSelection(1)
+
+  await controller.activateSelectedMenuItem()
+
+  expect(controller.getSnapshot().route).toEqual({
+    type: "session",
+    sessionId: "session-1",
+  })
+  expect(controller.getSnapshot().menu).toMatchObject({
+    mode: "picker",
+    errorMessage: "Cannot switch sessions while the current session is running",
+  })
+})
+
+test("shows an error when direct new is blocked by an active run", async () => {
+  const spy = applicationSpy({ runningSessionId: "session-1" })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+
+  await controller.submitInput("/new")
+
+  expect(controller.getSnapshot().route).toEqual({
+    type: "session",
+    sessionId: "session-1",
+  })
+  expect(controller.getSnapshot().menu).toMatchObject({
+    mode: "commands",
+    errorMessage: "Cannot switch sessions while the current session is running",
+  })
+})
+
+test("blocks slash commands while the current session is compacting", async () => {
+  const spy = applicationSpy({ compactingSessionId: "session-1" })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+
+  await controller.submitInput("/new")
+
+  expect(controller.getSnapshot().route).toEqual({
+    type: "session",
+    sessionId: "session-1",
+  })
+  expect(controller.getSnapshot()).toMatchObject({
+    menu: null,
+    inputError: "Cannot submit input while compacting the session",
+  })
+})
+
+test("blocks command-menu activation while the session is compacting", async () => {
+  const spy = applicationSpy({ compactingSessionId: "session-1" })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+  controller.updateInput("/login")
+
+  await controller.activateSelectedMenuItem()
+
+  expect(controller.getSnapshot()).toMatchObject({
+    authenticationMode: null,
+    input: "/login",
+    menu: {
+      mode: "commands",
+      errorMessage: "Cannot submit input while compacting the session",
+    },
+  })
+})
+
+for (const command of ["branch", "return"] as const) {
+  for (const fromMenu of [false, true]) {
+    test(`${command} action targets active session without prompting (menu: ${fromMenu})`, async () => {
+      const spy = applicationSpy()
+      const calls: string[] = []
+      const application = {
+        ...spy.application,
+        createBranch: (id: string) => { calls.push(id); return "side" },
+        returnToParentBranch: (id: string) => { calls.push(id) },
+      }
+      const controller = new BuliUiController({ application })
+      await controller.activateSession("session-1")
+      if (fromMenu) {
+        controller.updateInput(`/${command}`)
+        await controller.activateSelectedMenuItem()
+      } else {
+        expect(await controller.submitInput(`/${command}`)).toBe("consumed")
+      }
+      expect(calls).toEqual(["session-1"])
+      expect(spy.prompts).toEqual([])
+      controller.dispose()
+    })
+  }
+  test(`${command} rejects missing session, arguments and reports application failures`, async () => {
+    const spy = applicationSpy()
+    let calls = 0
+    const fail = () => { calls++; throw new Error("Cannot switch branches while AgentSession is running") }
+    const controller = new BuliUiController({ application: {
+      ...spy.application, createBranch: fail, returnToParentBranch: fail,
+    } })
+    await controller.submitInput(`/${command}`)
+    expect(controller.getSnapshot().menu?.errorMessage).toContain("active session")
+    await controller.activateSession("session-1")
+    await controller.submitInput(`/${command} unexpected`)
+    expect(controller.getSnapshot().menu?.errorMessage).toContain(`Use /${command} without arguments`)
+    expect(calls).toBe(0)
+    await controller.submitInput(`/${command}`)
+    expect(controller.getSnapshot().menu?.errorMessage).toContain("running")
+    expect(calls).toBe(1)
+    expect(spy.prompts).toEqual([])
+    controller.dispose()
+  })
+  test(`${command} is blocked while compacting`, async () => {
+    const spy = applicationSpy({ compactingSessionId: "session-1" })
+    const controller = new BuliUiController({ application: spy.application })
+    await controller.activateSession("session-1")
+    await controller.submitInput(`/${command}`)
+    expect(controller.getSnapshot().inputError).toContain("compacting")
+    expect(spy.prompts).toEqual([])
+    controller.dispose()
+  })
+}
+
+test("compact command targets the active session", async () => {
+  const spy = applicationSpy()
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+
+  expect(await controller.submitInput("/compact")).toBe("consumed")
+  expect(spy.compacted).toEqual(["session-1"])
+})
+
+test("menu activation is single-flight and preserves a newer draft", async () => {
+  const compactFinished = Promise.withResolvers<void>()
+  const spy = applicationSpy({
+    compactSession: async () => {
+      await compactFinished.promise
+      return undefined
+    },
+  })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+  controller.updateInput("/compact")
+
+  const firstActivation = controller.activateSelectedMenuItem()
+  const secondActivation = controller.activateSelectedMenuItem()
+  await Promise.resolve()
+  controller.updateInput("Draft typed while compacting")
+
+  expect(spy.compacted).toEqual(["session-1"])
+  compactFinished.resolve()
+  await Promise.all([firstActivation, secondActivation])
+  expect(controller.getSnapshot().input).toBe("Draft typed while compacting")
+})
+
+test("successful command-menu activation consumes its original slash input", async () => {
+  const spy = applicationSpy()
+  const controller = new BuliUiController({ application: spy.application })
+  controller.updateInput("/login")
+
+  await controller.activateSelectedMenuItem()
+
+  expect(controller.getSnapshot()).toMatchObject({
+    authenticationMode: "login",
+    input: "",
+  })
+})
+
+test("Escape restores queued steering before the current draft and aborts", () => {
+  const spy = applicationSpy({
+    clearQueuedMessages: () => ({
+      steering: ["First steering", "Second steering"],
+      followUp: ["Later follow-up"],
+    }),
+  })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+  controller.updateInput("Current draft")
+
+  controller.escape()
+
+  expect(spy.clearedQueues).toEqual(["session-1"])
+  expect(spy.aborted).toEqual(["session-1"])
+  expect(controller.getSnapshot()).toMatchObject({
+    input: "First steering\n\nSecond steering\n\nLater follow-up\n\nCurrent draft",
+    inputError: null,
+  })
+})
+
+test("first Escape only closes the menu; second restores the queue and aborts", () => {
+  const spy = applicationSpy({
+    runningSessionId: "session-1",
+    clearQueuedMessages: () => ({
+      steering: ["Queued while menu was open"],
+      followUp: [],
+    }),
+  })
+  const controller = new BuliUiController({ application: spy.application })
+  controller.activateSession("session-1")
+  controller.updateInput("/")
+
+  expect(controller.getSnapshot().menu).not.toBeNull()
+  const draft = controller.getInputDraft()
+  controller.escape()
+
+  expect(controller.getSnapshot()).toMatchObject({ menu: null, input: "/" })
+  expect(controller.getInputDraft()).toBe(draft)
+  expect(spy.clearedQueues).toEqual([])
+  expect(spy.aborted).toEqual([])
+
+  controller.escape()
+  expect(spy.clearedQueues).toEqual(["session-1"])
+  expect(controller.getSnapshot()).toMatchObject({
+    menu: null,
+    input: "Queued while menu was open\n\n/",
+  })
+  expect(spy.aborted).toEqual(["session-1"])
+})
+
+test("empty input preserves a picker while typed input closes it", async () => {
+  const spy = applicationSpy()
+  const controller = new BuliUiController({ application: spy.application })
+
+  await controller.submitInput("/model")
+  const picker = controller.getSnapshot().menu
+
+  controller.updateInput("")
+  expect(controller.getSnapshot().menu).toBe(picker)
+
+  controller.updateInput("x")
+  expect(controller.getSnapshot().menu).toBeNull()
+})
+
+test("dismissMenu removes an open menu", () => {
+  const spy = applicationSpy()
+  const controller = new BuliUiController({ application: spy.application })
+  controller.updateInput("/")
+
+  expect(controller.getSnapshot().menu).not.toBeNull()
+  controller.dismissMenu()
+  expect(controller.getSnapshot().menu).toBeNull()
+})
+
+function imageDraft(data: string): IUserInputContent {
+  return {
+    text: "[Image 1]",
+    attachments: [{
+      type: "image",
+      mimeType: "image/png",
+      data,
+      filename: "clipboard-1.png",
+      source: { value: "[Image 1]", start: 0, end: 9 },
+    }],
+  }
+}
+
+function sessionInfo(id: string, title: string, updatedAt: number): ISessionInfo {
+  return {
+    id,
+    agentId: "test-agent",
+    title,
+    createdAt: updatedAt,
+    updatedAt,
+  }
+}
+
+function sessionSource(
+  isRunning: boolean,
+  isCompacting = false,
+) {
+  const snapshot: ISessionSnapshot = {
+    activeBranchId: "main",
+    pendingSteeringMessages: [],
+    pendingFollowUpMessages: [],
+    isRunning,
+    isCompacting,
+    pendingToolCallIds: [],
+  }
+  return {
+    subscribe: () => () => undefined,
+    getSnapshot: () => snapshot,
+    subscribeHistory: () => () => undefined,
+    loadHistoryPage: (branchId: string) => ({ sessionId: "test", branchId, messages: [] }),
+  }
+}

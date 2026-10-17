@@ -1,4 +1,3 @@
-import { Keycap } from "@/ui/components/Keycap"
 import type { InputRenderable } from "@opentui/core"
 import {
     useRef,
@@ -37,7 +36,7 @@ export function AuthenticationOperation(
                 flexDirection="column"
                 gap={1}
             >
-                <text>{`Signing in to ${state.provider.name}...`}</text>
+                <text fg={theme.green}>{`Login to ${state.provider.name}`}</text>
                 {state.event ? <AuthenticationEvent event={state.event} /> : (
                     <text fg={theme.textSecondary}>Starting authentication...</text>
                 )}
@@ -75,16 +74,16 @@ export function AuthenticationOperation(
                             />}
                         </box>
                         <text fg={theme.textSecondary} selectable={false}>
-                            <Keycap keys="Enter" />{" submit  "}<Keycap keys="Esc" />{" cancel"}
+                            Enter submit · Esc cancel
                         </text>
                     </box>
                 ) : (
                     <text fg={theme.textSecondary} selectable={false}>
-                        Waiting...  <Keycap keys="Esc" />{" cancel"}
+                        Waiting... · Esc cancel
                     </text>
                 )}
                 <text fg={theme.textSecondary} selectable={false}>
-                    <Keycap keys="Page Up" />{" / "}<Keycap keys="Page Down" />{" scroll"}
+                    Page Up / Page Down scroll
                 </text>
             </box>
         )
@@ -95,7 +94,7 @@ export function AuthenticationOperation(
             <box flexDirection="column" gap={1}>
                 <text>{`Disconnecting ${state.provider.name}...`}</text>
                 <text fg={theme.textSecondary} selectable={false}>
-                    Please wait  <Keycap keys="Esc" />{" cancel"}
+                    Please wait · Esc cancel
                 </text>
             </box>
         )
@@ -111,7 +110,7 @@ export function AuthenticationOperation(
             <text>{`Provider: ${state.providerName}`}</text>
             <text>{`Account: ${state.accountId ?? "unavailable"}`}</text>
             <text fg={theme.textSecondary} selectable={false}>
-                <Keycap keys="Enter" />{" or "}<Keycap keys="Esc" />{" close"}
+                Enter or Esc close
             </text>
         </box>
     )
@@ -124,24 +123,30 @@ function AuthenticationEvent(props: { readonly event: TAuthEvent }): ReactNode {
     if (props.event.type === "authorization") {
         return (
             <box flexDirection="column" gap={1}>
-                <text>{props.event.instructions}</text>
                 <text wrapMode="word">
                     <a key={props.event.url} href={props.event.url} fg={theme.green}>
                         {props.event.url}
                     </a>
                 </text>
+                <text fg={theme.textSecondary} selectable={false}>
+                    {process.platform === "darwin" ? "Cmd+click to open" : "Ctrl+click to open"}
+                </text>
+                <text fg={theme.amber}>{props.event.instructions}</text>
             </box>
         )
     }
     return (
         <box flexDirection="column" gap={1}>
-            <text>{props.event.instructions}</text>
             <text wrapMode="word">
                 <a key={props.event.url} href={props.event.url} fg={theme.green}>
                     {props.event.url}
                 </a>
             </text>
-            <text>{`Device code: ${props.event.userCode}`}</text>
+            <text fg={theme.textSecondary} selectable={false}>
+                {process.platform === "darwin" ? "Cmd+click to open" : "Ctrl+click to open"}
+            </text>
+            <text fg={theme.amber}>{`Enter code: ${props.event.userCode}`}</text>
+            <text fg={theme.amber}>{props.event.instructions}</text>
         </box>
     )
 }

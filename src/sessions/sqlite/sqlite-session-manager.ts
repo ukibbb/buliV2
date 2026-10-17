@@ -1,11 +1,11 @@
-import type { IDelegatedTask } from "@/sessions/delegated-task"
+import type { IDelegatedTask } from "@/sessions/history/delegated-task"
 import type { Database } from "bun:sqlite"
 import type { IUserPathReference } from "@/agent"
 import { dirname, join } from "node:path"
 import type { ICompactionCheckpoint } from "@/sessions/compaction/checkpoint"
-import type { IHistoryCursor, IHistoryPage, IRequiredContext, TAppendMessageResult, TStoredMessage } from "@/sessions/history-contracts"
-import type { ISessionInfo, ISessionManager } from "@/sessions/repository"
-import { acquireSessionLock } from "@/sessions/session-lock"
+import type { IHistoryCursor, IHistoryPage, IRequiredContext, TAppendMessageResult, TStoredMessage } from "@/sessions/history/history-contracts"
+import type { ISessionInfo, ISessionManager } from "@/sessions/history/repository"
+import { acquireSessionLock } from "@/sessions/history/session-lock"
 import { resolveBranchHistory, type IResolvedBranchHistory } from "@/sessions/sqlite/branch-history"
 import { readRequiredContext, saveCheckpoint, selectedCheckpoint } from "@/sessions/sqlite/checkpoint-repository"
 import { assertSafeInteger, HistoryDatabase, safeNumber } from "@/sessions/sqlite/database"
@@ -13,7 +13,7 @@ import { readLastMessageMetadata, readHistoryPage, validateHistory } from "@/ses
 import { appendStoredMessage } from "@/sessions/sqlite/message-repository"
 import { recoverInterruptedTools } from "@/sessions/sqlite/recovery-repository"
 import { readRecentConversation, readSelectedPaths } from "@/sessions/sqlite/tool-history-repository"
-import { assertSessionInfo } from "@/sessions/validation"
+import { assertSessionInfo } from "@/sessions/history/validation"
 
 interface ISessionRow {
     readonly id: string

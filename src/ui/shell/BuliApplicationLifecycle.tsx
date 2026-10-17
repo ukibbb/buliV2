@@ -5,7 +5,7 @@ import type { IBuliApplication } from "@/app/contracts"
 import { BuliRuntimeProvider } from "@/ui/context/application-context"
 import { BuliUiControllerProvider } from "@/ui/context/ui-controller-context"
 import { BuliTui } from "@/ui/shell/BuliTui"
-import { BuliUiController } from "@/ui/ui-controller"
+import { BuliUiController } from "@/ui/controller/ui-controller"
 import type { IAuthenticationService } from "@/authentication"
 import { theme } from "@/ui/terminal/theme"
 

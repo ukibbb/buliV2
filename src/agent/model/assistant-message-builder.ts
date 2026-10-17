@@ -1,0 +1,196 @@
+import type {
+  TAssistantContent,
+  IAssistantMessage,
+  IReasoningContent,
+  ITextContent,
+  IToolCallContent,
+} from "@/agent/messages/messages"
+import type { TAgentModelEvent } from "@/agent/model/model"
+import type { IModelProfile, IModelUsage } from "@/agent/model/model-values"
+
+interface IAssistantMessageBuilderOptions {
+  readonly sessionId: string
+  readonly runId: string
+  readonly now: () => number
+  readonly generateId: () => string
+  readonly modelProfile?: IModelProfile
+}
+
+const immutableAssistantSnapshots = new WeakSet<IAssistantMessage>()
+
+/** Identifies builder snapshots that are safe to retain without another clone. */
+export function isImmutableAssistantSnapshot(
+  message: IAssistantMessage,
+): boolean {
+  return immutableAssistantSnapshots.has(message)
+}
+
+/** Reduces one provider stream into one assistant message. */
+export class AssistantMessageBuilder {
+  private readonly messageId: string
+  private readonly createdAt: number
+  private readonly modelProfile: IModelProfile | undefined
+  private readonly content: TAssistantContent[] = []
+  private readonly textContent = new Map<string, ITextContent>()
+  private readonly reasoningContent = new Map<string, IReasoningContent>()
+  private stopReason = "pending"
+  private errorMessage: string | undefined
+  private usage: IModelUsage | undefined
+
+  constructor(private readonly options: IAssistantMessageBuilderOptions) {
+    this.messageId = options.generateId()
+    this.createdAt = options.now()
+    this.modelProfile = options.modelProfile === undefined
+      ? undefined
+      : cloneAndFreeze(options.modelProfile)
+  }
+
+  get completed(): boolean {
+    return this.stopReason !== "pending"
+  }
+
+  apply(event: TAgentModelEvent): void {
+    if (this.completed) return
+
+    switch (event.type) {
+      case "text-start":
+        this.startText(event.id)
+        return
+      case "text-delta":
+        this.appendText(event.id, event.delta)
+        return
+      case "text-end":
+        this.textContent.delete(event.id)
+        return
+      case "reasoning-start":
+        this.startReasoning(event.id)
+        return
+      case "reasoning-delta":
+        this.appendReasoning(event.id, event.delta)
+        return
+      case "reasoning-end":
+        this.reasoningContent.delete(event.id)
+        return
+      case "tool-call":
+        this.addToolCall(event)
+        return
+      case "finish":
+        this.finish(event.reason, undefined, event.usage)
+        return
+      case "abort":
+        this.abort(event.reason ?? "Buli interaction was aborted")
+        return
+      case "error":
+        this.finish("error", errorMessage(event.error))
+    }
+  }
+
+  finish(reason = "stop", error?: string, usage?: IModelUsage): void {
+    if (this.completed) return
+    this.stopReason = reason
+    this.errorMessage = error
+    this.usage = usage === undefined ? undefined : cloneAndFreeze(usage)
+    this.textContent.clear()
+    this.reasoningContent.clear()
+  }
+
+  abort(reason: string): void {
+    this.stopReason = "aborted"
+    this.errorMessage = reason
+    this.textContent.clear()
+    this.reasoningContent.clear()
+  }
+
+  snapshot(): IAssistantMessage {
+    // Only the shell and array are new; every shared value is already frozen.
+    const snapshot: IAssistantMessage = Object.freeze({
+      id: this.messageId,
+      sessionId: this.options.sessionId,
+      runId: this.options.runId,
+      role: "assistant" as const,
+      content: Object.freeze([...this.content]),
+      stopReason: this.stopReason,
+      ...(this.errorMessage ? { errorMessage: this.errorMessage } : {}),
+      ...(this.modelProfile ? { model: this.modelProfile } : {}),
+      ...(this.usage ? { usage: this.usage } : {}),
+      createdAt: this.createdAt,
+    })
+    immutableAssistantSnapshots.add(snapshot)
+    return snapshot
+  }
+
+  private startText(id: string): void {
+    if (this.textContent.has(id)) return
+    const content: ITextContent = Object.freeze({ type: "text", text: "" })
+    this.textContent.set(id, content)
+    this.content.push(content)
+  }
+
+  private appendText(id: string, delta: string): void {
+    const current = this.textContent.get(id)
+    if (!current) return
+    const updated: ITextContent = Object.freeze({ ...current, text: current.text + delta })
+    this.textContent.set(id, updated)
+    this.replaceContent(current, updated)
+  }
+
+  private startReasoning(id: string): void {
+    if (this.reasoningContent.has(id)) return
+    const content: IReasoningContent = Object.freeze({ type: "reasoning", text: "" })
+    this.reasoningContent.set(id, content)
+    this.content.push(content)
+  }
+
+  private appendReasoning(id: string, delta: string): void {
+    const current = this.reasoningContent.get(id)
+    if (!current) return
+    const updated: IReasoningContent = Object.freeze({ ...current, text: current.text + delta })
+    this.reasoningContent.set(id, updated)
+    this.replaceContent(current, updated)
+  }
+
+  private addToolCall(
+    event: Extract<TAgentModelEvent, { type: "tool-call" }>,
+  ): void {
+    if (
+      this.content.some(
+        (content) => content.type === "toolCall"
+          && content.toolCallId === event.toolCallId,
+      )
+    ) {
+      return
+    }
+
+    const content: IToolCallContent = Object.freeze({
+      type: "toolCall",
+      toolCallId: event.toolCallId,
+      toolName: event.toolName,
+      input: cloneAndFreeze(event.input),
+    })
+    this.content.push(content)
+  }
+
+  private replaceContent(
+    current: TAssistantContent,
+    replacement: TAssistantContent,
+  ): void {
+    const index = this.content.indexOf(current)
+    if (index !== -1) this.content[index] = replacement
+  }
+}
+
+function errorMessage(value: unknown): string {
+  return value instanceof Error ? value.message : String(value)
+}
+
+function cloneAndFreeze<T>(value: T): T {
+  const clone = structuredClone(value)
+  deepFreeze(clone)
+  return clone
+}
+
+function deepFreeze(value: unknown): void {
+  if (value === null || typeof value !== "object") return
+  for (const child of Object.values(value)) deepFreeze(child)
+  Object.freeze(value)
+}

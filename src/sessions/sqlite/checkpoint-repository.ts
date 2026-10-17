@@ -1,10 +1,10 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite"
 import type { ICompactionCheckpoint } from "@/sessions/compaction/checkpoint"
-import type { IRequiredContext } from "@/sessions/history-contracts"
+import type { IRequiredContext } from "@/sessions/history/history-contracts"
 import { findVisibleMessage, rangeWhere, type IResolvedBranchHistory } from "@/sessions/sqlite/branch-history"
 import { assertSafeInteger, safeNumber } from "@/sessions/sqlite/database"
 import { messageMetadata, readLastMessageMetadata, readSelectedPayloads, validateHistory, type IMessageMetadata } from "@/sessions/sqlite/history-reader"
-import { assertCompactionCheckpoint } from "@/sessions/validation"
+import { assertCompactionCheckpoint } from "@/sessions/history/validation"
 import { isDeepStrictEqual } from "node:util"
 
 interface ICheckpointRow {

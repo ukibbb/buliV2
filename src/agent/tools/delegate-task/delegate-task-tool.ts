@@ -1,6 +1,6 @@
 import { Type } from "typebox"
-import { defineAgentTool, type IAgentToolContext } from "@/agent/tool"
-import { ToolAccess } from "@/agent/tool-policy"
+import { defineAgentTool, type IAgentToolContext } from "@/agent/tools/tool"
+import { ToolAccess } from "@/agent/tools/tool-policy"
 
 export function createDelegateTaskTool(run: (tasks: readonly { readonly task: string }[], context: IAgentToolContext) => Promise<string>) {
     return defineAgentTool({

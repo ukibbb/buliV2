@@ -19,7 +19,7 @@ import {
     type IToolOutputWriter,
     type TToolOutputEncoding,
     type TToolOutputPart,
-} from "@/agent/tool-output-store"
+} from "@/agent/tools/tool-output-store"
 
 export const DEFAULT_TOOL_OUTPUT_ENTRY_BYTES = 512 * 1024 * 1024
 export const DEFAULT_TOOL_OUTPUT_TOTAL_BYTES = 1024 * 1024 * 1024

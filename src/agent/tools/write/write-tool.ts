@@ -1,10 +1,10 @@
-import { ToolAccess } from "@/agent/tool-policy"
+import { ToolAccess } from "@/agent/tools/tool-policy"
 import { Buffer } from "node:buffer"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
 import { Type } from "typebox"
 
-import { defineAgentTool, type IAgentTool } from "@/agent/tool"
+import { defineAgentTool, type IAgentTool } from "@/agent/tools/tool"
 import {
     withFileMutationQueue,
 } from "@/agent/tools/shared/file-mutation"

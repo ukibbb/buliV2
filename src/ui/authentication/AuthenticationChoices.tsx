@@ -1,4 +1,3 @@
-import { Keycap } from "@/ui/components/Keycap"
 import type { SelectOption } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/react"
 import type { ReactNode } from "react"
@@ -22,13 +21,15 @@ interface IAuthenticationChoicesProps {
 const SELECT_STYLE = {
     focused: true,
     wrapSelection: true,
-    showDescription: true,
+    showDescription: false,
+    showSelectionIndicator: true,
+    itemSpacing: 0,
     backgroundColor: "transparent",
     focusedBackgroundColor: "transparent",
     textColor: theme.text,
     focusedTextColor: theme.text,
-    selectedBackgroundColor: theme.green,
-    selectedTextColor: theme.text,
+    selectedBackgroundColor: "transparent",
+    selectedTextColor: theme.green,
     descriptionColor: theme.textSecondary,
     selectedDescriptionColor: theme.text,
 } as const
@@ -51,18 +52,20 @@ export function AuthenticationChoices(
     const { height } = useTerminalDimensions()
 
     if (state.type === "providers") {
-        const options = state.providers.map((provider): SelectOption => ({
-            name: provider.name,
-            description: provider.statusError
+        const options = state.providers.map((provider): SelectOption => {
+            const status = provider.statusError
                 ? "Authentication needs repair"
                 : provider.connected
                 ? `Connected${provider.accountId ? ` as ${provider.accountId}` : ""}`
-                : "Not connected",
-        }))
+                : "Not connected"
+            return { name: `${provider.name}  ${status}`, description: "" }
+        })
 
         return (
             <box flexDirection="column" gap={1}>
-                <text selectable={false}>Select a provider</text>
+                <text fg={theme.green} selectable={false}>
+                    {controller.mode === "login" ? "Select a provider to configure:" : "Select a provider to disconnect:"}
+                </text>
                 {state.providers.length > 0 ? (
                     <select
                         {...SELECT_STYLE}
@@ -82,8 +85,8 @@ export function AuthenticationChoices(
                 )}
                 <text fg={theme.textSecondary} selectable={false}>
                     {state.providers.length > 0
-                        ? <><Keycap keys="Enter" />{" select  "}<Keycap keys="Esc" />{" close"}</>
-                        : <><Keycap keys="Enter" />{" or "}<Keycap keys="Esc" />{" close"}</>}
+                        ? "↑/↓ navigate · Enter select · Esc close"
+                        : "Enter or Esc close"}
                 </text>
             </box>
         )
@@ -97,7 +100,7 @@ export function AuthenticationChoices(
 
         return (
             <box flexDirection="column" gap={1}>
-                <text selectable={false}>{state.provider.name}</text>
+                <text fg={theme.green} selectable={false}>{`Login to ${state.provider.name}`}</text>
                 <text selectable={false}>Select a login method</text>
                 {state.provider.methods.length > 0 ? (
                     <select
@@ -115,7 +118,7 @@ export function AuthenticationChoices(
                     </text>
                 )}
                 <text fg={theme.textSecondary} selectable={false}>
-                    <Keycap keys="Enter" />{" select  "}<Keycap keys="Esc" />{" back"}
+                    ↑/↓ navigate · Enter select · Esc back
                 </text>
             </box>
         )
@@ -138,7 +141,7 @@ export function AuthenticationChoices(
                     }}
                 />
                 <text fg={theme.textSecondary} selectable={false}>
-                    <Keycap keys="Enter" />{" select  "}<Keycap keys="Esc" />{" back"}
+                    ↑/↓ navigate · Enter select · Esc back
                 </text>
             </box>
         )
@@ -157,12 +160,12 @@ export function AuthenticationChoices(
                 }}
             />
             <text fg={theme.textSecondary} selectable={false}>
-                <Keycap keys="Enter" />{" select  "}<Keycap keys="Esc" />{" back"}
+                ↑/↓ navigate · Enter select · Esc back
             </text>
         </box>
     )
 }
 
 function selectHeight(optionCount: number, terminalHeight: number): number {
-    return Math.max(3, Math.min(optionCount * 2, 10, terminalHeight - 14))
+    return Math.max(3, Math.min(optionCount, 8, terminalHeight - 10))
 }

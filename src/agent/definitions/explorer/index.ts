@@ -1,10 +1,10 @@
-import { createAgentDefinition } from "@/agent/create-agent-definition"
+import { createAgentDefinition } from "@/agent/definitions/create-agent-definition"
 import type { IBuliAgentDependencies } from "@/agent/definitions/buli"
 import { ReadTool } from "@/agent/tools/read/read-tool"
 import { FindTool } from "@/agent/tools/find/find-tool"
 import { GrepTool } from "@/agent/tools/grep/grep-tool"
 import { ReadToolOutputTool } from "@/agent/tools/read-tool-output/read-tool-output-tool"
-import { isToolAllowed, ToolPolicy } from "@/agent/tool-policy"
+import { isToolAllowed, ToolPolicy } from "@/agent/tools/tool-policy"
 
 /** Read-only research role; never inherits parent tools or conversation. */
 export function createExplorerAgentDefinition(dependencies: IBuliAgentDependencies) {

@@ -7,8 +7,8 @@ import type {
 } from "@/agent"
 import type { ICompactionCheckpoint } from "@/sessions/compaction/checkpoint"
 import { ESTIMATED_BYTES_PER_TOKEN, type IContextEstimationPolicy } from "@/sessions/compaction/context-budget"
-import type { IRequiredContext } from "@/sessions/history-contracts"
-import { assertCompactionCheckpoint } from "@/sessions/validation"
+import type { IRequiredContext } from "@/sessions/history/history-contracts"
+import { assertCompactionCheckpoint } from "@/sessions/history/validation"
 
 const COMPACTION_MAX_OUTPUT_HEADROOM_TOKENS = 16_384
 const COMPACTION_UNKNOWN_CONTEXT_INPUT_TOKENS = 64_000

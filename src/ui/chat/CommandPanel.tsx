@@ -2,7 +2,7 @@ import { useKeyboard } from "@opentui/react"
 import type { InputRenderable, TextareaRenderable } from "@opentui/core"
 import { useRef, useState } from "react"
 import { useBuliUiController, useBuliUiSelector } from "@/ui/context/ui-controller-context"
-import type { IBuliUiSnapshot } from "@/ui/ui-controller"
+import type { IBuliUiSnapshot } from "@/ui/controller/ui-controller"
 import { useMenuSelectionScroll } from "@/ui/chat/use-menu-selection-scroll"
 import { theme } from "@/ui/terminal/theme"
 

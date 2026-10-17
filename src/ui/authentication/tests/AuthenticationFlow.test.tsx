@@ -13,7 +13,7 @@ import type {
     IAuthenticationService,
 } from "@/authentication/contracts"
 import { AuthenticationFlow } from "@/ui/authentication/AuthenticationFlow"
-import type { TAuthenticationOutcome } from "@/ui/authentication/types"
+import type { TAuthenticationOutcome } from "@/ui/authentication/authentication-screen-types"
 
 const LOGIN_PROVIDER: IAuthProviderInfo = {
   providerId: "cloud",

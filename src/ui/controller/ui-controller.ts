@@ -3,32 +3,32 @@ import type {
     ISnapshotSource,
 } from "@/app/contracts"
 import { BULI_YOLO_AGENT_ID } from "@/agent"
-import { BULI_COMMANDS } from "@/ui/commands/catalog"
+import { BULI_COMMANDS } from "@/ui/commands/builtin-commands"
 import type {
     IBuliCommandContext,
     TBuliCommand,
-} from "@/ui/commands/types"
-import { BuliCommandMenu } from "@/ui/controller/command-menu"
+} from "@/ui/commands/command-contracts"
+import { CommandMenuController } from "@/ui/controller/command-menu-controller"
 import {
     cloneUserInput,
     mergeUserInputs,
     sameUserInput,
     type IPathMention,
-} from "@/ui/chat/prompt-draft"
+} from "@/ui/composer/prompt/prompt-draft"
 import {
-    BuliInputSubmission,
+    BuliPromptSubmission,
     type TBuliInputDelivery,
     type TBuliInputSubmitResult,
-} from "@/ui/controller/input-submission"
+} from "@/ui/controller/prompt-submission"
 import {
-    BuliPathMenu,
+    PathSuggestionsController,
     type IPathCompletion,
-} from "@/ui/controller/path-menu"
+} from "@/ui/controller/path-suggestions-controller"
 import {
     BuliUiStateStore,
     type IBuliUiSnapshot,
     type TBuliRoute,
-} from "@/ui/controller/state"
+} from "@/ui/controller/ui-state-store"
 import type { TAuthenticationMode } from "@/ui/authentication"
 import type {
     TUserInput,
@@ -42,11 +42,11 @@ export type {
     IBuliUiSnapshot,
     TBuliMenuSnapshot,
     TBuliRoute,
-} from "@/ui/controller/state"
+} from "@/ui/controller/ui-state-store"
 export type {
     TBuliInputDelivery,
     TBuliInputSubmitResult,
-} from "@/ui/controller/input-submission"
+} from "@/ui/controller/prompt-submission"
 
 interface IBuliUiControllerOptions {
     readonly application: IBuliApplication
@@ -65,9 +65,9 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
 
     private readonly application: IBuliApplication
     private readonly store = new BuliUiStateStore()
-    private readonly commandMenu: BuliCommandMenu
-    private readonly pathMenu: BuliPathMenu
-    private readonly inputSubmission: BuliInputSubmission
+    private readonly commandMenu: CommandMenuController
+    private readonly pathMenu: PathSuggestionsController
+    private readonly inputSubmission: BuliPromptSubmission
     private inputDraft: IUserInputContent = { text: "" }
     private navigationPending = false
     private agentChangePending = false
@@ -76,17 +76,17 @@ export class BuliUiController implements ISnapshotSource<IBuliUiSnapshot> {
         this.application = options.application
         this.workspaceRoot = options.application.workspaceRoot
         try { this.userCommands = this.loadUserCommands() } catch (error) { this.store.setInputError(error) }
-        this.commandMenu = new BuliCommandMenu({
+        this.commandMenu = new CommandMenuController({
             store: this.store,
             commands: () => this.commands,
             commandContext: this.commandContext,
             submitPromptCommand: (text) => this.submitInput(text),
         })
-        this.pathMenu = new BuliPathMenu({
+        this.pathMenu = new PathSuggestionsController({
             application: this.application,
             store: this.store,
         })
-        this.inputSubmission = new BuliInputSubmission({
+        this.inputSubmission = new BuliPromptSubmission({
             application: this.application,
             store: this.store,
             commands: () => this.commands,

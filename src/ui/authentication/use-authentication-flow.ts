@@ -13,7 +13,7 @@ import {
 import type {
     TAuthenticationMode,
     TAuthenticationOutcome,
-} from "@/ui/authentication/types"
+} from "@/ui/authentication/authentication-screen-types"
 
 interface IUseAuthenticationFlowOptions {
     readonly mode: TAuthenticationMode

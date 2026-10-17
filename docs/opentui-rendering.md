@@ -29,7 +29,7 @@ When removing the patch:
 2. Upgrade `@opentui/core` and `@opentui/react` together to the same release.
 3. Remove the patch file and its `patchedDependencies` entry from `package.json`,
    then run `bun install` to regenerate `bun.lock`.
-4. Keep the scrolling regression in `src/ui/sessions/Transcript.test.tsx` and verify it
+4. Keep the scrolling regression in `src/ui/conversation/history/tests/ConversationMessages.test.tsx` and verify it
    passes without the patch, including background colors, numbered text,
    scrolling back, and narrow resizing for proposals and Markdown diffs.
 5. Run `bun run typecheck`, `bun run test`, and a compiled CLI smoke test.

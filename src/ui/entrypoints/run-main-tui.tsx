@@ -2,7 +2,7 @@ import {
     createBuliApplication,
     type IBuliApplicationStartup,
 } from "@/app/bootstrap/create-application"
-import { BuliApplicationLifecycle } from "@/ui/shell/BuliApplicationLifecycle"
+import { ApplicationStartup } from "@/ui/startup/ApplicationStartup"
 import {
     type Lifetime,
     openExternalUrl,
@@ -23,7 +23,7 @@ export async function runMainTui(): Promise<void> {
         })
 
         return (
-            <BuliApplicationLifecycle
+            <ApplicationStartup
                 runtimeTask={runtimeTask}
                 openUrl={openExternalUrl}
             />

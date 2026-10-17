@@ -3,4 +3,4 @@ export { AuthenticationFlow } from "@/ui/authentication/AuthenticationFlow"
 export type {
     TAuthenticationMode,
     TAuthenticationOutcome,
-} from "@/ui/authentication/types"
+} from "@/ui/authentication/authentication-screen-types"

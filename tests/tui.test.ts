@@ -30,8 +30,8 @@ import type {
 } from "@/agent"
 import { createSessionTestSource, type ISessionTestData } from "./fixtures/session-source"
 import { SQLiteSessionManager } from "@/sessions/sqlite/sqlite-session-manager"
-import { BuliTui } from "@/ui/shell/BuliTui"
-import { COMPLETION_NOTIFICATION_MIN_DURATION_MS } from "@/ui/shell/SessionCompletionNotifier"
+import { ApplicationScreen } from "@/ui/screens/ApplicationScreen"
+import { COMPLETION_NOTIFICATION_MIN_DURATION_MS } from "@/ui/notifications/SessionCompletionNotifier"
 import { BuliUiController } from "@/ui/controller/ui-controller"
 import {
   BuliUiControllerProvider,
@@ -211,7 +211,7 @@ function buliElementWithController(
     runtime,
     children: createElement(BuliUiControllerProvider, {
       controller,
-      children: createElement(BuliTui, {
+      children: createElement(ApplicationScreen, {
         authentication: options.authentication ?? AUTHENTICATION,
         openUrl: () => {},
         ...(options.now ? { now: options.now } : {}),

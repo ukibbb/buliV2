@@ -8,7 +8,7 @@ import type {
 import type {
     TAuthenticationMode,
     TAuthenticationOutcome,
-} from "@/ui/authentication/types"
+} from "@/ui/authentication/authentication-screen-types"
 
 interface IProviderState {
     readonly providers: readonly IAuthProviderInfo[]

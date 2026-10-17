@@ -5,7 +5,7 @@ import type {
   IAuthenticationService,
 } from "@/authentication/contracts"
 import { AuthenticationFlowController } from "@/ui/authentication/authentication-flow-controller"
-import type { TAuthenticationOutcome } from "@/ui/authentication/types"
+import type { TAuthenticationOutcome } from "@/ui/authentication/authentication-screen-types"
 
 const PROVIDER: IAuthProviderInfo = {
   providerId: "openai",

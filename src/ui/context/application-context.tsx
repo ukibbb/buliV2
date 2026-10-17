@@ -69,7 +69,7 @@ export function useSession(sessionId: string): ISessionSnapshot {
 
 const selectSession = (snapshot: ISessionSnapshot) => snapshot
 
-// Home has no live session. Keep its idle source stable and do not open a session.
+// HomeScreen has no live session. Keep its idle source stable and do not open a session.
 const HOME_SESSION: ISessionSnapshot = {
     activeBranchId: "main",
     pendingSteeringMessages: [],

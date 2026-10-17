@@ -12,8 +12,8 @@ import { AuthenticationOperation } from "@/ui/authentication/AuthenticationOpera
 import type {
     TAuthenticationMode,
     TAuthenticationOutcome,
-} from "@/ui/authentication/types"
-import { authenticationKeyboardShortcuts } from "@/ui/authentication/keyboard-shortcuts"
+} from "@/ui/authentication/authentication-screen-types"
+import { authenticationKeyboardShortcuts } from "@/ui/authentication/authentication-shortcuts"
 import { useAuthenticationFlow } from "@/ui/authentication/use-authentication-flow"
 import { theme } from "@/ui/terminal/theme"
 

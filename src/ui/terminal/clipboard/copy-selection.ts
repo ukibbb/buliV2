@@ -22,6 +22,7 @@ export async function writeTextToClipboard(
         })
         const didCopy = result.host.status === "written"
             || result.terminal.status === "attempted"
+
         if (didCopy) return true
 
         const error = result.host.status === "failed"

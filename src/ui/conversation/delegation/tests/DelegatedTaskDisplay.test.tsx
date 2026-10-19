@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { expect, mock, test } from "bun:test"
 import { CodeRenderable, type Renderable } from "@opentui/core"
 import { testRender } from "@opentui/react/test-utils"
 import { act } from "react"
@@ -14,15 +14,18 @@ async function fixture(transcript = false) {
         activeBranchId: "main", messages: [], isRunning: false, isCompacting: false,
         pendingSteeringMessages: [], pendingFollowUpMessages: [], pendingToolCallIds: [],
     })
+    let activeTool: string | undefined = "read"
+    const currentTool = mock(() => activeTool)
+    const list = mock(() => [0, 1].map((position) => ({
+        id: `task-${position}`, childSessionId: `child-${position}`, parentSessionId: "parent", assistantMessageId: "assistant",
+        toolCallId: "call", position, task: `Research ${position + 1}`, modelId: "test-model", reasoningEffort: "high",
+        status: position === 0 ? "running" : "completed", createdAt: 1,
+        answer: "## Findings\n\n**Verified report**",
+    })))
     const runtime = { delegatedTasks: {
-        subscribe: () => () => {}, getSnapshot: () => 0, currentTool: () => "read",
+        subscribe: () => () => {}, getSnapshot: () => 0, currentTool,
         open: () => child.source,
-        list: () => [0, 1].map((position) => ({
-            id: `task-${position}`, childSessionId: `child-${position}`, parentSessionId: "parent", assistantMessageId: "assistant",
-            toolCallId: "call", position, task: `Research ${position + 1}`, modelId: "test-model", reasoningEffort: "high",
-            status: position === 0 ? "running" : "completed", createdAt: 1,
-            answer: "## Findings\n\n**Verified report**",
-        })),
+        list,
     } } as unknown as IBuliApplication
     const message: IAssistantMessage = {
         id: "assistant", sessionId: "parent", runId: "run", role: "assistant", createdAt: 1,
@@ -43,12 +46,16 @@ async function fixture(transcript = false) {
         await setup.renderOnce()
     }) }
     await render()
-    return { setup, render }
+    return { setup, render, currentTool, list, setActiveTool: (name: string | undefined) => {
+        activeTool = name
+        child.setData({ ...child.getData() })
+    } }
 }
 
 test("renders compact ordered Explorers without prompts, status labels or action buttons", async () => {
-    const { setup } = await fixture()
+    const { setup, currentTool } = await fixture()
     try {
+        expect(currentTool).not.toHaveBeenCalled()
         const frame = setup.captureCharFrame()
         expect(frame).toContain("[+] Explorer 1 [test-model: high]")
         expect(frame).toContain("[+] Explorer 2 [test-model: high]")
@@ -77,6 +84,30 @@ test("expands an indented prompt and Markdown report and collapses them again", 
         await render()
         expect(setup.captureCharFrame()).toContain("[+] Explorer 1")
         expect(setup.captureCharFrame()).not.toContain("Research 1")
+    } finally { act(() => setup.renderer.destroy()) }
+})
+
+test("child tool changes update only the expanded card without reloading task records", async () => {
+    const { setup, render, currentTool, list, setActiveTool } = await fixture()
+    try {
+        await act(async () => { await setup.mockMouse.click(1, 0) })
+        await render()
+        expect(setup.captureCharFrame()).toContain("Narzędzie: read")
+        const reads = list.mock.calls.length
+        await act(async () => { setActiveTool("grep") })
+        await render()
+        expect(setup.captureCharFrame()).toContain("Narzędzie: grep")
+        expect(list).toHaveBeenCalledTimes(reads)
+        await act(async () => { setActiveTool(undefined) })
+        await render()
+        expect(setup.captureCharFrame()).not.toContain("Narzędzie:")
+        await act(async () => { await setup.mockMouse.click(1, 0) })
+        await render()
+        const toolReads = currentTool.mock.calls.length
+        await act(async () => { setActiveTool("read") })
+        await render()
+        expect(currentTool).toHaveBeenCalledTimes(toolReads)
+        expect(list).toHaveBeenCalledTimes(reads)
     } finally { act(() => setup.renderer.destroy()) }
 })
 

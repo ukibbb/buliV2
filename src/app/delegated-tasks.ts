@@ -57,15 +57,7 @@ export class DelegatedTasks {
     }
 
     readonly currentTool = (id: string): string | undefined => {
-        const child = this.children.get(id)
-        if (!child?.state.isRunning || child.state.pendingToolCallIds.size === 0) return undefined
-        const messages = this.options.manager.loadRecentConversation(id)
-        for (const message of [...messages].reverse()) {
-            if (message.role !== "assistant") continue
-            const call = message.content.find((part) => part.type === "toolCall" && child.state.pendingToolCallIds.has(part.toolCallId))
-            if (call?.type === "toolCall") return call.toolName
-        }
-        return undefined
+        return this.children.get(id)?.getActiveToolName()
     }
 
     readonly abort = async (id: string): Promise<void> => { await this.children.get(id)?.abort() }
@@ -95,6 +87,7 @@ export class DelegatedTasks {
                 try { return await this.runTask(record, configuration, signal) }
                 catch (error) { controller.abort(error); throw error }
             })
+            this.notify()
             // Wait for every child to settle even when persistence fails in one of them.
             const settled = await Promise.allSettled(pending)
             const failure = settled.find((result) => result.status === "rejected")
@@ -131,7 +124,6 @@ export class DelegatedTasks {
     private async runTask(record: IDelegatedTask, configuration: IAgentSessionRunConfiguration, signal: AbortSignal): Promise<IDelegatedTask> {
         const child = this.createSession(record.childSessionId, () => configuration)
         this.children.set(record.childSessionId, child)
-        const unsubscribe = child.subscribe(() => this.notify())
         let timedOut = false
         let abortFailure: unknown
         let abortTask: Promise<void> | undefined
@@ -152,7 +144,6 @@ export class DelegatedTasks {
             clearTimeout(timer)
             signal.removeEventListener("abort", abort)
             await abortTask
-            unsubscribe()
         }
         if (abortFailure) throw abortFailure
         // Persistence failures are not ordinary research failures.

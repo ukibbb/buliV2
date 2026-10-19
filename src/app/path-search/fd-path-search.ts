@@ -78,7 +78,7 @@ async function searchWithoutFd(
     try {
         const scope = await searchScope(workspace, query)
         const needle = scope.pattern.toLowerCase()
-        const candidates: string[] = []
+        const candidates: IBuliPathSuggestion[] = []
         const directories = [scope.directory]
         let directoryIndex = 0
         const visitedDirectories = new Set<string>()
@@ -125,12 +125,18 @@ async function searchWithoutFd(
                     .split(sep)
                     .join("/")
                     .toLowerCase()
-                if (!needle || candidateName.includes(needle)) candidates.push(path)
+                if (!needle || candidateName.includes(needle)) candidates.push({
+                    path,
+                    kind: candidateStat.isDirectory() ? "directory" : "file",
+                    displayPath: displayPath(workspace, path),
+                })
                 if (!scope.immediate && candidateStat.isDirectory()) directories.push(path)
                 if (candidates.length >= FD_MAX_RESULTS) break
             }
         }
-        return suggestionsFromCandidates(workspace, query, candidates, operationSignal)
+        const direct = query ? await directSuggestion(workspace, query) : undefined
+        operationSignal.throwIfAborted()
+        return rankSuggestions(query, direct ? [direct, ...candidates] : candidates)
     } catch (error) {
         if (signal.aborted) signal.throwIfAborted()
         if (timeout.aborted) throw new Error(`Path search timed out after ${FD_TIMEOUT_MS} ms`)
@@ -223,15 +229,19 @@ async function suggestionsFromCandidates(
 ): Promise<readonly IBuliPathSuggestion[]> {
     const direct = query ? await directSuggestion(workspace, query) : undefined
     signal.throwIfAborted()
-    if (direct) candidates.unshift(direct.path)
-    const suggestions: IBuliPathSuggestion[] = []
-    const seen = new Set<string>()
+    const suggestions: IBuliPathSuggestion[] = direct ? [direct] : []
+    const seenPaths = new Set(direct ? [direct.path] : [])
+    const seenCandidates = new Set<string>()
+    if (direct) seenCandidates.add(resolve(workspace, expandHome(query)))
     for (const candidate of candidates) {
         signal.throwIfAborted()
+        if (seenCandidates.has(candidate)) continue
+        seenCandidates.add(candidate)
         let path: string
         let kind: IBuliPathSuggestion["kind"]
         try {
             path = await realpath(candidate)
+            if (seenPaths.has(path)) continue
             const candidateStat = await stat(path)
             if (candidateStat.isDirectory()) kind = "directory"
             else if (candidateStat.isFile()) kind = "file"
@@ -239,9 +249,7 @@ async function suggestionsFromCandidates(
         } catch {
             continue
         }
-        const key = `${kind}\0${path}`
-        if (seen.has(key)) continue
-        seen.add(key)
+        seenPaths.add(path)
         suggestions.push({
             kind,
             path,
@@ -249,8 +257,20 @@ async function suggestionsFromCandidates(
         })
     }
 
+    signal.throwIfAborted()
+    return rankSuggestions(query, suggestions)
+}
+
+function rankSuggestions(query: string, suggestions: readonly IBuliPathSuggestion[]): readonly IBuliPathSuggestion[] {
+    const seen = new Set<string>()
+    const unique = suggestions.filter(({ kind, path }) => {
+        const key = `${kind}\0${path}`
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+    })
     const normalizedNeedle = basenameQuery(query).toLowerCase()
-    return suggestions
+    return unique
         .toSorted((left, right) => (
             suggestionScore(right, normalizedNeedle)
             - suggestionScore(left, normalizedNeedle)

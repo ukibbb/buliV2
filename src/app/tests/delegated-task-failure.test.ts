@@ -1,18 +1,77 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import { DelegatedTasks } from "@/app/delegated-tasks"
 import { SQLiteSessionManager } from "@/sessions"
-import type { IAgentModel } from "@/agent"
+import { defineAgentTool, type IAgentModel, type IRuntimeAgentTool } from "@/agent"
 
-function fixture() {
+function fixture(tools: IRuntimeAgentTool[] = []) {
     const manager = new SQLiteSessionManager({ databasePath: ":memory:" })
     manager.createSession({ id: "parent", agentId: "buli", title: "Parent", createdAt: 1, updatedAt: 1 })
     manager.appendMessage({ id: "assistant", sessionId: "parent", runId: "run", role: "assistant", createdAt: 2,
         content: [{ type: "toolCall", toolCallId: "call", toolName: "delegate_task", input: {} }], stopReason: "tool-calls" })
-    const service = new DelegatedTasks({ manager, explorer: { id: "explorer", name: "Explorer", systemPrompt: "explorer", tools: [] } })
+    const service = new DelegatedTasks({ manager, explorer: { id: "explorer", name: "Explorer", systemPrompt: "explorer", tools } })
     const controller = new AbortController()
     const context = { sessionId: "parent", assistantMessageId: "assistant", runId: "run", toolCallId: "call", signal: controller.signal }
     return { manager, service, controller, context }
 }
+
+test("streaming does not publish task records and active tools use accepted context without SQLite reads", async () => {
+    const toolStarted = Promise.withResolvers<void>()
+    const releaseTool = Promise.withResolvers<void>()
+    const releaseText = Promise.withResolvers<void>()
+    const textPublished = Promise.withResolvers<void>()
+    const tool = defineAgentTool({
+        name: "probe", description: "Wait for test release", inputSchema: { type: "object" },
+        async execute() { toolStarted.resolve(); await releaseTool.promise; return "Done" },
+    })
+    const { manager, service, context } = fixture([tool])
+    const recentReads = spyOn(manager, "loadRecentConversation")
+    const listReads = spyOn(manager, "loadDelegatedTasks")
+    const statuses: string[] = []
+    const unsubscribe = service.subscribe(() => {
+        statuses.push(service.list("parent", "assistant", "call")[0]!.status)
+    })
+    let requests = 0
+    const model: IAgentModel = { async *stream() {
+        if (requests++ === 0) {
+            yield { type: "tool-call", toolCallId: "probe-call", toolName: "probe", input: {} }
+            yield { type: "finish", reason: "tool-calls" }
+            return
+        }
+        yield { type: "text-start", id: "report" }
+        yield { type: "text-delta", id: "report", delta: "Report" }
+        textPublished.resolve()
+        await releaseText.promise
+        yield { type: "finish", reason: "stop" }
+    } }
+    const pending = service.run([{ task: "Research" }], context, { model, reasoningEffort: "medium" })
+    try {
+        await toolStarted.promise
+        const task = service.list("parent", "assistant", "call")[0]!
+        expect(service.currentTool(task.childSessionId)).toBe("probe")
+        expect(recentReads).not.toHaveBeenCalled()
+        expect(statuses).toEqual(["running"])
+        const reads = listReads.mock.calls.length
+        releaseTool.resolve()
+        await textPublished.promise
+        expect(service.currentTool(task.childSessionId)).toBeUndefined()
+        expect(statuses).toEqual(["running"])
+        expect(listReads).toHaveBeenCalledTimes(reads)
+        releaseText.resolve()
+        const result = JSON.parse(await pending)
+        expect(result.results[0].answer).toBe("Report")
+        expect(statuses).toEqual(["running", "completed"])
+        expect(service.currentTool(task.childSessionId)).toBeUndefined()
+    } finally {
+        releaseTool.resolve()
+        releaseText.resolve()
+        await pending
+        unsubscribe()
+        recentReads.mockRestore()
+        listReads.mockRestore()
+        await service.dispose()
+        manager.dispose()
+    }
+})
 
 test("one failed Explorer retains its position without cancelling its sibling", async () => {
     const { manager, service, context } = fixture()

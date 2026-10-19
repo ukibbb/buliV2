@@ -206,6 +206,20 @@ export class AgentSession {
 
     readonly getSnapshot = (): ISessionSnapshot => this.snapshot
 
+    /** Resolves executing tools from accepted context without rereading durable history. */
+    readonly getActiveToolName = (): string | undefined => {
+        const { isRunning, pendingToolCallIds } = this.agent.state
+        if (!isRunning || pendingToolCallIds.size === 0) return undefined
+        const messages = this.workingContext.getContext().messages
+        for (let index = messages.length - 1; index >= 0; index--) {
+            const message = messages[index]!
+            if (message.role !== "assistant") continue
+            const call = message.content.find((part) => part.type === "toolCall" && pendingToolCallIds.has(part.toolCallId))
+            if (call?.type === "toolCall") return call.toolName
+        }
+        return undefined
+    }
+
     readonly loadHistoryPage = (branchId: string, cursor?: IHistoryCursor): IHistoryPage => {
         if (this.disposed) throw new Error("AgentSession is disposed")
         return this.manager.loadHistoryPage(this.id, branchId, cursor)

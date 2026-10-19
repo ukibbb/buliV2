@@ -1,4 +1,4 @@
-import { memo, type ReactNode } from "react"
+import { memo, useMemo, useState, type ReactNode } from "react"
 import { FileChangeDiff } from "@/ui/conversation/tools/FileChangeDiff"
 import { theme } from "@/ui/terminal/theme"
 import { presentToolCall, type IToolCallDisplayProps, type IToolCallPresentation } from "@/ui/conversation/tools/tool-call-presentation"
@@ -71,6 +71,32 @@ export const ToolCallView = memo(function ToolCallView(props: IToolCallPresentat
         >
             {line}
             {props.diff ? <FileChangeDiff diff={props.diff} /> : null}
+            {props.output ? <BashOutput content={props.output} /> : null}
         </box>
     </box>
 })
+
+const BASH_PREVIEW_LINES = 12
+const BASH_PREVIEW_CHARACTERS = 2_000
+
+/** Disclosure affects presentation only; the recorded tool result stays unchanged. */
+function BashOutput({ content }: { readonly content: string }) {
+    const [expanded, setExpanded] = useState(false)
+    const preview = useMemo(() => {
+        const prefix = content.slice(0, 2 * (BASH_PREVIEW_CHARACTERS + 1))
+        const lines = prefix.split("\n", BASH_PREVIEW_LINES + 1)
+        const text = lines.slice(0, BASH_PREVIEW_LINES).join("\n")
+        const characters = Array.from(text)
+        const truncated = prefix.length < content.length || lines.length > BASH_PREVIEW_LINES || characters.length > BASH_PREVIEW_CHARACTERS
+        return { text: characters.slice(0, BASH_PREVIEW_CHARACTERS).join(""), truncated }
+    }, [content])
+    return <box width="100%" flexDirection="column">
+        <text fg={theme.textSecondary} wrapMode="word" truncate={false}>
+            {expanded || !preview.truncated ? content : `${preview.text}\n… [Podgląd wyniku]`}
+        </text>
+        {preview.truncated && <text fg={theme.textSecondary} selectable={false}
+            onMouseDown={() => setExpanded(value => !value)}>
+            {expanded ? "[-] Zwiń wynik" : "[+] Rozwiń wynik"}
+        </text>}
+    </box>
+}

@@ -425,6 +425,58 @@ test("preserves the full Bash command with timeout and completed status", () => 
         .toBe(`Bash [${command}] timeout=120 ${glyphs.success}`)
 })
 
+test.each([false, true])("expands and collapses multiline Bash output without hiding the command (error=%s)", async (isError) => {
+    const command = `gh api ${"argument ".repeat(20)}UNIQUE_COMMAND_END`
+    const content = Array.from({ length: 15 }, (_, index) => `output line ${index + 1}`).join("\n") + "\nUNIQUE_OUTPUT_END"
+    const setup = await testRender(<ToolCallDisplay
+        call={{ type: "toolCall", toolCallId: "call", toolName: "bash", input: { command } }}
+        result={toolResult({ toolName: "bash", content, isError, summary: "Command finished" })}
+    />, { width: 60, height: 40 })
+    const render = async () => { await act(async () => { await setup.renderOnce() }) }
+    const clickLabel = async (label: string) => {
+        const rows = setup.captureCharFrame().split("\n")
+        const row = rows.findIndex(value => value.includes(label))
+        expect(row).toBeGreaterThanOrEqual(0)
+        await act(async () => { await setup.mockMouse.click(rows[row]!.indexOf(label), row) })
+        await render()
+    }
+    try {
+        await render()
+        let frame = setup.captureCharFrame()
+        expect(frame).toContain("UNIQUE_COMMAND_END")
+        expect(frame).toContain("output line 12")
+        expect(frame).not.toContain("output line 13")
+        expect(frame).not.toContain("UNIQUE_OUTPUT_END")
+        await clickLabel("[+] Rozwiń wynik")
+        frame = setup.captureCharFrame()
+        expect(frame).toContain("output line 13")
+        expect(frame).toContain("UNIQUE_OUTPUT_END")
+        expect(frame).toContain("UNIQUE_COMMAND_END")
+        await clickLabel("[-] Zwiń wynik")
+        expect(setup.captureCharFrame()).not.toContain("UNIQUE_OUTPUT_END")
+    } finally { act(() => setup.renderer.destroy()) }
+})
+
+test("shows short Bash output without disclosure and bounds a single long line by code points", async () => {
+    const short = await testRender(<ToolCallDisplay result={toolResult({ toolName: "bash", content: "stdout:\nOK", isError: false })} />,
+        { width: 60, height: 10 })
+    try {
+        await act(async () => { await short.renderOnce() })
+        expect(short.captureCharFrame()).toContain("stdout:")
+        expect(short.captureCharFrame()).toContain("OK")
+        expect(short.captureCharFrame()).not.toContain("Rozwiń")
+    } finally { act(() => short.renderer.destroy()) }
+    const long = await testRender(<ToolCallDisplay result={toolResult({ toolName: "bash", content: "😀".repeat(2000) + "UNIQUE_TAIL", isError: true })} />,
+        { width: 120, height: 60 })
+    try {
+        await act(async () => { await long.renderOnce() })
+        const frame = long.captureCharFrame()
+        expect(frame).not.toContain("UNIQUE_TAIL")
+        expect(frame).not.toContain("�")
+        expect(frame).toContain("Rozwiń wynik")
+    } finally { act(() => long.renderer.destroy()) }
+})
+
 test("wraps a full Bash command in a narrow terminal without losing its suffix", async () => {
     const command = `echo ${"argument ".repeat(25)}&& echo UNIQUE_COMMAND_END`
     const setup = await testRender(<ToolCallDisplay

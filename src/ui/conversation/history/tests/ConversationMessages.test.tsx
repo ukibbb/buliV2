@@ -365,7 +365,7 @@ test("renders direct, streaming, and persisted legacy tool messages", async () =
         activeRunId="run-3"
     />, {
         width: 80,
-        height: 30,
+        height: 40,
     })
 
     try {
@@ -763,11 +763,12 @@ test("pairs out-of-order results and preserves orphan results", async () => {
         const lines = textRenderables(setup.renderer.root)
         expect(lines.map((line) => line.plainText)).toEqual([
             "Grep [needle] 1 match ✓",
-            "Bash [bun test] Inspect state before retrying | Command may have changed files ×",
+            "Bash [bun test] Inspect state before retrying ×",
+            "Command may have changed files",
             "Read Orphan result detail ×",
         ])
         expect(lines[1]?.fg.equals(RGBA.fromHex(theme.red))).toBe(true)
-        expect(lines[2]?.fg.equals(RGBA.fromHex(theme.red))).toBe(true)
+        expect(lines[3]?.fg.equals(RGBA.fromHex(theme.red))).toBe(true)
     } finally {
         act(() => {
             setup.renderer.destroy()

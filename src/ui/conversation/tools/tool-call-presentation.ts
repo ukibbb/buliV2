@@ -23,6 +23,7 @@ export interface IToolCallPresentation {
     readonly accent: string
     readonly marker: string | undefined
     readonly diff: string | undefined
+    readonly output?: string
 }
 
 /** Prepares display values without creating React elements. */
@@ -52,6 +53,7 @@ export function presentToolCall(props: IToolCallDisplayProps): IToolCallPresenta
         name, target, detail,
         foreground: state.critical ? theme.red : state.live ? theme.amber : theme.textSecondary,
         accent: state.accent, marker: state.marker, diff: props.result?.diff,
+        ...(toolName === "bash" && props.result?.content ? { output: props.result.content } : {}),
     }
 }
 
@@ -262,7 +264,7 @@ function resultDetail(result: IToolResultMessage): string | undefined {
     // around whitespace-only summaries. Full detail normalization remains linear.
     const details = [
         result.summary,
-        result.isError ? result.content : undefined,
+        result.isError && result.toolName !== "bash" ? result.content : undefined,
     ].filter((value): value is string => value !== undefined && value.length > 0)
     return details.length > 0 ? details.join(" | ") : undefined
 }

@@ -14,6 +14,17 @@ test("prepares full Bash commands without React or terminal rendering", () => {
     })
 })
 
+test.each([false, true])("keeps the complete Bash output separate from the compact summary (error=%s)", (isError) => {
+    const content = `stdout:\n${"output line\n".repeat(30)}stderr:\nUNIQUE_OUTPUT_END`
+    const presentation = presentToolCall({
+        result: { id: "result", sessionId: "s", runId: "r", createdAt: 1,
+            role: "toolResult", assistantMessageId: "assistant", toolCallId: "call",
+            toolName: "bash", content, isError, summary: "Command finished" },
+    })
+    expect(presentation?.output).toBe(content)
+    expect(presentation?.detail).toBe("Command finished")
+})
+
 test("does not create presentations for missing or hidden legacy tools", () => {
     expect(presentToolCall({})).toBeUndefined()
     expect(presentToolCall({

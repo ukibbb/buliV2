@@ -4,6 +4,10 @@ import {
 } from "@/app/bootstrap/create-application"
 import { ApplicationStartup } from "@/ui/startup/ApplicationStartup"
 import {
+    createHerdrAgentReporter,
+    readHerdrPane,
+} from "@/ui/integrations/herdr/herdr-agent-reporter"
+import {
     type Lifetime,
     openExternalUrl,
     runTuiRenderer,
@@ -22,10 +26,13 @@ export async function runMainTui(): Promise<void> {
             await startup?.dispose(lifetime.signal.reason)
         })
 
+        const herdrPane = readHerdrPane()
+
         return (
             <ApplicationStartup
                 runtimeTask={runtimeTask}
                 openUrl={openExternalUrl}
+                {...(herdrPane ? { herdr: createHerdrAgentReporter(herdrPane) } : {})}
             />
         )
     })

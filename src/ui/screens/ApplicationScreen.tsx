@@ -11,6 +11,8 @@ import {
 import { buliKeyboardShortcuts } from "@/ui/keyboard/application-shortcuts"
 import { HomeScreen } from "@/ui/screens/HomeScreen"
 import { SessionCompletionNotifier } from "@/ui/notifications/SessionCompletionNotifier"
+import { HerdrAgentStateReporter } from "@/ui/integrations/herdr/HerdrAgentStateReporter"
+import type { IHerdrAgentReporter } from "@/ui/integrations/herdr/herdr-agent-reporter"
 import { SessionScreen } from "@/ui/screens/SessionScreen"
 import type { IAuthenticationService } from "@/authentication"
 import { AuthenticationFlow } from "@/ui/authentication"
@@ -24,6 +26,8 @@ interface IApplicationScreenProps {
     readonly authentication: IAuthenticationService
     readonly openUrl: (url: string) => unknown | Promise<unknown>
     readonly now?: () => number
+    /** Present only when buli runs inside a Herdr pane. */
+    readonly herdr?: IHerdrAgentReporter
 }
 
 /** Renders and routes the connected application terminal interface. */
@@ -66,6 +70,12 @@ export function ApplicationScreen(props: IApplicationScreenProps) {
                     wrapMode="none"
                     truncate
                 >{controller.workspaceRoot}</text>
+            ) : null}
+            {props.herdr ? (
+                <HerdrAgentStateReporter
+                    sessionId={ui.route.type === "session" ? ui.route.sessionId : undefined}
+                    reporter={props.herdr}
+                />
             ) : null}
             {ui.route.type === "session" ? (
                 <SessionCompletionNotifier

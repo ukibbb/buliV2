@@ -7,6 +7,7 @@ import { BuliUiControllerProvider } from "@/ui/context/ui-controller-context"
 import { ApplicationScreen } from "@/ui/screens/ApplicationScreen"
 import { BuliUiController } from "@/ui/controller/ui-controller"
 import type { IAuthenticationService } from "@/authentication"
+import type { IHerdrAgentReporter } from "@/ui/integrations/herdr/herdr-agent-reporter"
 import { theme } from "@/ui/terminal/theme"
 
 type TBuliLifecycleState =
@@ -25,6 +26,7 @@ interface IApplicationStartupProps {
         authentication: IAuthenticationService
     }>
     openUrl: (url: string) => unknown | Promise<unknown>
+    herdr?: IHerdrAgentReporter
 }
 
 /** Renders startup, application, and startup-failure states. */
@@ -79,6 +81,7 @@ export function ApplicationStartup(
                 <ApplicationScreen
                     authentication={state.authentication}
                     openUrl={props.openUrl}
+                    {...(props.herdr ? { herdr: props.herdr } : {})}
                 />
             </BuliUiControllerProvider>
         </BuliRuntimeProvider>

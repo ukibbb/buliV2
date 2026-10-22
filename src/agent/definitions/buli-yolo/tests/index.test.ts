@@ -19,6 +19,9 @@ test("Buli and YOLO share quality requirements but have independent workflows", 
     expect(yolo.name).toBe("Buli YOLO")
     expect(buli.systemPrompt).toContain(QUALITY_INSTRUCTIONS)
     expect(yolo.systemPrompt).toContain(QUALITY_INSTRUCTIONS)
+    const explanationRequirement = "Nie poprzestawaj na tym, co zrobiłeś lub ustaliłeś. Wyjaśnij na konkretach, jak uzyskałeś wynik, dlaczego wybrałeś ten sposób i skąd wiesz, że wynik jest poprawny."
+    expect(buli.systemPrompt).toContain(explanationRequirement)
+    expect(yolo.systemPrompt).toContain(explanationRequirement)
     expect(buli.systemPrompt).toContain("Nie zmieniaj plików, dopóki wyraźnie nie zgodzę się")
     expect(yolo.systemPrompt).not.toContain("Nie zmieniaj plików, dopóki wyraźnie nie zgodzę się")
     expect(yolo.systemPrompt).not.toContain("3. Plan przed edycją")

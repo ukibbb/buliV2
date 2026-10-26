@@ -1,9 +1,10 @@
 import type { IUserPromptCommands } from "@/app/prompt-commands"
-import { DelegatedTasks } from "@/app/delegated-tasks"
-import { BULI_YOLO_AGENT_ID, createDelegateTaskTool } from "@/agent"
+import { DelegatedTasks, type IDelegatedTaskInput } from "@/app/delegated-tasks"
+import { BULI_YOLO_AGENT_ID, createDelegateTaskTool, createRunAgentTool, EXPLORER_AGENT_ID, type IDelegatableAgent } from "@/agent"
 import type {
     IAgentDefinition,
     IAgentHooks,
+    IAgentToolContext,
     IAgentModel,
     IModelProfile,
     IToolOutputStore,
@@ -66,6 +67,8 @@ export interface IBuliRuntimeOptions {
     readonly agents: readonly IAgentDefinition[]
     readonly defaultAgentId: string
     readonly explorer?: IAgentDefinition
+    /** Agents the main agents may hand tasks to with `run_agent`; they run only when `explorer` is given too. */
+    readonly subagents?: readonly IDelegatableAgent[]
     // readonly tuiControler: ITuiController
     readonly models: readonly IBuliModelRuntimeConfig[]
     readonly selection: IBuliModelSelection
@@ -149,15 +152,21 @@ export class BuliApplicationRuntime implements IBuliApplication {
         this.openNovibeUrl = options.openNovibeUrl
         this.workspaceRoot = options.workspaceRoot
         this.manager = options.manager
+        const subagents = options.subagents ?? []
         this.delegatedTasks = options.explorer ? new DelegatedTasks({
-            manager: options.manager, explorer: options.explorer,
+            manager: options.manager,
+            agents: [options.explorer, ...subagents.map((subagent) => subagent.definition)],
             ...(options.toolOutputStore ? { toolOutputStore: options.toolOutputStore } : {}),
         }) : undefined
-        const delegation = this.delegatedTasks ? createDelegateTaskTool((tasks, context) => {
+        const runDelegated = (tasks: readonly IDelegatedTaskInput[], context: IAgentToolContext) => {
             const parent = this.sessions.get(context.sessionId)
             if (!parent) throw new Error("Parent session is not open")
             return this.delegatedTasks!.run(tasks, context, parent.getActiveRunConfiguration(context.runId))
-        }) : undefined
+        }
+        const delegation = this.delegatedTasks
+            ? createDelegateTaskTool((tasks, context) => runDelegated(tasks.map(({ task }) => ({ agent: EXPLORER_AGENT_ID, task })), context))
+            : undefined
+        const runAgent = this.delegatedTasks && subagents.length > 0 ? createRunAgentTool(subagents, runDelegated) : undefined
         const agentIds = new Set<string>()
         this.agents = options.agents.map((registration) => {
             if (agentIds.has(registration.id)) {
@@ -167,7 +176,11 @@ export class BuliApplicationRuntime implements IBuliApplication {
 
             return {
                 ...registration,
-                tools: [...registration.tools, ...(delegation && ["buli", "novibe"].includes(registration.id) ? [delegation] : [])],
+                tools: [
+                    ...registration.tools,
+                    ...(delegation && ["buli", "novibe"].includes(registration.id) ? [delegation] : []),
+                    ...(runAgent && ["buli", BULI_YOLO_AGENT_ID].includes(registration.id) ? [runAgent] : []),
+                ],
             }
         })
         this.defaultAgentId = options.defaultAgentId

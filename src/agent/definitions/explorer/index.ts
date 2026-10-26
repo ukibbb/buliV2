@@ -6,10 +6,12 @@ import { GrepTool } from "@/agent/tools/grep/grep-tool"
 import { ReadToolOutputTool } from "@/agent/tools/read-tool-output/read-tool-output-tool"
 import { isToolAllowed, ToolPolicy } from "@/agent/tools/tool-policy"
 
+export const EXPLORER_AGENT_ID = "explorer"
+
 /** Read-only research role; never inherits parent tools or conversation. */
 export function createExplorerAgentDefinition(dependencies: Omit<IBuliAgentDependencies, "appendedSystemPrompt">) {
     const definition = createAgentDefinition({
-        id: "explorer",
+        id: EXPLORER_AGENT_ID,
         name: "Explorer",
         instructions: [
             "You are Explorer, a read-only codebase research agent. Answer the assigned question precisely.",

@@ -8,7 +8,7 @@ function fixture(tools: IRuntimeAgentTool[] = []) {
     manager.createSession({ id: "parent", agentId: "buli", title: "Parent", createdAt: 1, updatedAt: 1 })
     manager.appendMessage({ id: "assistant", sessionId: "parent", runId: "run", role: "assistant", createdAt: 2,
         content: [{ type: "toolCall", toolCallId: "call", toolName: "delegate_task", input: {} }], stopReason: "tool-calls" })
-    const service = new DelegatedTasks({ manager, explorer: { id: "explorer", name: "Explorer", systemPrompt: "explorer", tools } })
+    const service = new DelegatedTasks({ manager, agents: [{ id: "explorer", name: "Explorer", systemPrompt: "explorer", tools }] })
     const controller = new AbortController()
     const context = { sessionId: "parent", assistantMessageId: "assistant", runId: "run", toolCallId: "call", signal: controller.signal }
     return { manager, service, controller, context }
@@ -43,7 +43,7 @@ test("streaming does not publish task records and active tools use accepted cont
         await releaseText.promise
         yield { type: "finish", reason: "stop" }
     } }
-    const pending = service.run([{ task: "Research" }], context, { model, reasoningEffort: "medium" })
+    const pending = service.run([{ agent: "explorer", task: "Research" }], context, { model, reasoningEffort: "medium" })
     try {
         await toolStarted.promise
         const task = service.list("parent", "assistant", "call")[0]!
@@ -84,7 +84,7 @@ test("one failed Explorer retains its position without cancelling its sibling", 
         yield { type: "finish", reason: "stop" }
     } }
     try {
-        const result = JSON.parse(await service.run([{ task: "first" }, { task: "second" }], context, { model, reasoningEffort: "medium" }))
+        const result = JSON.parse(await service.run([{ agent: "explorer", task: "first" }, { agent: "explorer", task: "second" }], context, { model, reasoningEffort: "medium" }))
         expect(result.results.map((task: { status: string }) => task.status)).toEqual(["failed", "completed"])
         expect(result.results[1].answer).toBe("Sibling report")
     } finally { await service.dispose(); manager.dispose() }
@@ -117,7 +117,7 @@ test("parent cancellation stops all active Explorers and records cancelled state
         yield { type: "abort" }
     } }
     try {
-        const pending = service.run([{ task: "first" }, { task: "second" }], context, { model, reasoningEffort: "medium" })
+        const pending = service.run([{ agent: "explorer", task: "first" }, { agent: "explorer", task: "second" }], context, { model, reasoningEffort: "medium" })
         await started.promise
         controller.abort()
         const result = JSON.parse(await pending)

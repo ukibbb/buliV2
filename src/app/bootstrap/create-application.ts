@@ -1,4 +1,4 @@
-import { createBuliYoloAgentDefinition, createExplorerAgentDefinition } from "@/agent"
+import { createBuliYoloAgentDefinition, createExplorerAgentDefinition, createSubagentDefinition, EXPLORER_AGENT_ID } from "@/agent"
 import { FilePromptCommands } from "@/app/prompt-commands"
 import { realpath } from "node:fs/promises"
 import { defaultModelPreferencesPath, loadModelPreferences, saveModelPreferences } from "@/app/preferences/model-preferences"
@@ -149,6 +149,8 @@ export async function createBuliApplication(
             ...(integration.systemPromptAddition ? { appendedSystemPrompt: integration.systemPromptAddition } : {}),
             ...defaultToolExecutablePaths(),
         }
+        // Delegated agents get the instruction files, not the main agents' appended system prompt.
+        const delegatedDependencies = { workspaceRoot, toolOutputStore, instructionFiles, ...defaultToolExecutablePaths() }
         const agentOptions = {
             ...(options.tools === undefined ? {} : { tools: options.tools }),
             additionalTools: [...modelComposition.additionalTools, ...integration.tools],
@@ -176,11 +178,12 @@ export async function createBuliApplication(
             manager,
             promptCommands: new FilePromptCommands(),
             agents: [buli, yolo, novibe],
-            explorer: createExplorerAgentDefinition({
-                workspaceRoot, toolOutputStore,
-                instructionFiles,
-                ...defaultToolExecutablePaths(),
-            }),
+            explorer: createExplorerAgentDefinition(delegatedDependencies),
+            // A user agent cannot replace the built-in Explorer.
+            subagents: integration.subagents.filter((spec) => spec.id !== EXPLORER_AGENT_ID).map((spec) => ({
+                definition: createSubagentDefinition(delegatedDependencies, spec),
+                description: spec.description,
+            })),
             defaultAgentId: buli.id,
             models: modelComposition.models,
             selection: modelComposition.selection,

@@ -18,4 +18,6 @@ export interface IDelegatedTask {
     readonly finishedAt?: number
     readonly answer?: string
     readonly error?: string
+    /** The agent that ran the task; absent in records from before subagents, which were all Explorer. */
+    readonly agentId?: string
 }

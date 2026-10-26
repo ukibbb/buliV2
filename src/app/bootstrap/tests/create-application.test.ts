@@ -164,9 +164,6 @@ test("sends user, workspace-root and .buli instructions in that order, plus the 
 test("runs prompt hooks from a Claude Code settings file and keeps a Claude Code transcript", async () => {
   const fixture = await applicationFixture()
   let messages: IAgentModelRequest["messages"] | undefined
-  const home = process.env.HOME
-  // The transcript goes to ~/.claude/projects; keep it out of the real home.
-  process.env.HOME = fixture.workspace
 
   try {
     const settingsPath = join(fixture.workspace, "settings.json")
@@ -196,7 +193,50 @@ test("runs prompt hooks from a Claude Code settings file and keeps a Claude Code
     const lines = (await readFile(join(projects, project!, transcript!), "utf8")).trim().split("\n")
     expect(lines.map((line) => JSON.parse(line).type)).toEqual(["user", "assistant"])
   } finally {
-    process.env.HOME = home
+    await fixture.dispose()
+  }
+})
+
+test("runs a ~/.claude/agents subagent through run_agent with its own prompt and tools", async () => {
+  const fixture = await applicationFixture()
+  const requests: IAgentModelRequest[] = []
+
+  try {
+    const agents = join(fixture.workspace, ".claude", "agents")
+    await mkdir(agents, { recursive: true })
+    await writeFile(join(agents, "reviewer.md"), "---\nname: reviewer\ndescription: Review a diff\ntools: Read, Grep\n---\nYou review code for simplicity.")
+    const startup = await fixture.start({
+      model: {
+        async *stream(request) {
+          requests.push(request)
+          if (request.systemPrompt.includes("You review code for simplicity.")) {
+            yield { type: "text-start", id: "r" }
+            yield { type: "text-delta", id: "r", delta: "Looks simple." }
+            yield { type: "text-end", id: "r" }
+            yield { type: "finish", reason: "stop" }
+            return
+          }
+          if (!request.messages.some((message) => message.role === "toolResult")) {
+            yield { type: "tool-call", toolCallId: "c1", toolName: "run_agent", input: { tasks: [{ agent: "reviewer", task: "Review src/a.ts" }] } }
+            yield { type: "finish", reason: "tool-calls" }
+            return
+          }
+          yield { type: "finish", reason: "stop" }
+        },
+      },
+    }, true)
+    await startup.runtime.refreshModels()
+    const promptRun = startup.runtime.submitPrompt({ text: "Review my change" })
+    await Promise.all([promptRun.promptPersisted, promptRun.runFinished])
+
+    const [parent, child, parentAgain] = requests
+    expect(parent!.tools.map((tool) => tool.name)).toContain("run_agent")
+    expect(child!.tools.map((tool) => tool.name)).toEqual(["read", "grep", "tool_output"])
+    const result = parentAgain!.messages.find((message) => message.role === "toolResult")
+    expect(JSON.parse(result!.content as string)).toMatchObject({
+      results: [{ position: 1, status: "completed", answer: "Looks simple." }],
+    })
+  } finally {
     await fixture.dispose()
   }
 })
@@ -689,6 +729,7 @@ test("DeepSeek tool execution uses independent OpenAI web search credentials", a
 })
 
 async function applicationFixture() {
+  const realHome = process.env.HOME
   const workspace = await mkdtemp(join(tmpdir(), "buli-application-"))
   const controller = new AbortController()
   const store = memoryAuthStore()
@@ -759,6 +800,8 @@ async function applicationFixture() {
     deepseekRequests, deepseekResponse, searchRequests,
     start(options: Pick<IBuliApplicationOptions, "model" | "modelCatalog" | "kimiModelCatalog" | "deepseekModelCatalog" | "claudeCode"> = {}, includeDefaultTools = false) {
       if (startupTask) throw new Error("Fixture already started")
+      // ~/.claude (instructions, agents, transcripts) resolves inside the workspace, never the real home.
+      process.env.HOME = workspace
       startupTask = createBuliApplication({
         signal: controller.signal,
         workspaceRoot: workspace,
@@ -770,7 +813,7 @@ async function applicationFixture() {
         // HTTP-focused cases need only model traffic, never executable sidecars.
         ...(options.model === undefined && !includeDefaultTools ? { tools: [] } : {}),
         ...options,
-        claudeCode: { userInstructionsPath: join(workspace, "missing-user-CLAUDE.md"), ...options.claudeCode },
+        ...(options.claudeCode === undefined ? {} : { claudeCode: options.claudeCode }),
       })
       void startupTask.catch(() => {})
       return startupTask
@@ -785,6 +828,7 @@ async function applicationFixture() {
           // Also covers failures before bootstrap takes ownership of auth.
           await authentication.service.dispose()
         } finally {
+          process.env.HOME = realHome
           await rm(workspace, { recursive: true, force: true })
         }
       }

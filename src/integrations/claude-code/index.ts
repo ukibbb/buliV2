@@ -1,6 +1,7 @@
-import type { IAgentHooks, IInstructionFile, IRuntimeAgentTool } from "@/agent"
+import type { IAgentHooks, IInstructionFile, IRuntimeAgentTool, ISubagentSpec } from "@/agent"
 import type { TRenderStatusLine } from "@/common/status-line"
 import type { IMcpClientInfo } from "@/mcp/mcp-connection"
+import { loadClaudeAgents } from "@/integrations/claude-code/agents"
 import { ClaudeCodeHooks } from "@/integrations/claude-code/hooks"
 import {
     defaultUserInstructionsPath,
@@ -37,6 +38,8 @@ export interface IClaudeCodeIntegration {
     /** The appended system prompt file and MCP server instructions; empty when there are none. */
     readonly systemPromptAddition: string
     readonly tools: readonly IRuntimeAgentTool[]
+    /** Agents from `~/.claude/agents`, run through `run_agent`. */
+    readonly subagents: readonly ISubagentSpec[]
     readonly createSessionHooks: ((sessionId: string) => IAgentHooks) | undefined
     readonly renderStatusLine: TRenderStatusLine | undefined
     /** Stops the MCP server processes. */
@@ -61,6 +64,7 @@ export async function createClaudeCodeIntegration(options: IClaudeCodeIntegratio
     const settings = options.settingsPath === undefined ? undefined : await loadClaudeSettings(options.settingsPath, signal)
     if (settings) Object.assign(process.env, settings.env)
     const statusLine = settings?.statusLine
+    const subagents = await loadClaudeAgents(signal)
     const mcpServers = options.mcpConfigPath === undefined ? [] : await loadMcpConfig(options.mcpConfigPath, signal)
     const mcp = await connectConfiguredServers(mcpServers, options.clientInfo, signal)
 
@@ -68,6 +72,7 @@ export async function createClaudeCodeIntegration(options: IClaudeCodeIntegratio
         instructionFiles,
         systemPromptAddition: [appendedSystemPrompt, mcp.instructions].filter(Boolean).join("\n\n"),
         tools: mcp.tools,
+        subagents,
         createSessionHooks: settings && ((sessionId) => new ClaudeCodeHooks({ sessionId, workspaceRoot, hooks: settings.hooks })),
         renderStatusLine: statusLine && ((session, renderSignal) => renderStatusLine(statusLine, session, { cwd: workspaceRoot, signal: renderSignal })),
         close: mcp.close,

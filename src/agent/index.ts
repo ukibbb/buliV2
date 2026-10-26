@@ -1,7 +1,8 @@
 /** Public agent feature API used by sessions, adapters and application composition. */
 export { BULI_YOLO_AGENT_ID, createBuliYoloAgentDefinition } from "@/agent/definitions/buli-yolo"
-export { createExplorerAgentDefinition } from "@/agent/definitions/explorer"
-export { createDelegateTaskTool } from "@/agent/tools/delegate-task/delegate-task-tool"
+export { createExplorerAgentDefinition, EXPLORER_AGENT_ID } from "@/agent/definitions/explorer"
+export { createSubagentDefinition, type ISubagentSpec } from "@/agent/definitions/subagent"
+export { createDelegateTaskTool, createRunAgentTool, type IDelegatableAgent } from "@/agent/tools/delegate-task/delegate-task-tool"
 export { Agent } from "@/agent/runtime/agent"
 export type { IAgentOptions } from "@/agent/runtime/agent"
 export { createAgentDefinition } from "@/agent/definitions/create-agent-definition"

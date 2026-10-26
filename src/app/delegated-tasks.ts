@@ -17,20 +17,30 @@ function boundedReport(answer: string): string {
         if (Buffer.byteLength(JSON.stringify(answer.slice(0, middle)), "utf8") <= 11_500) low = middle
         else high = middle - 1
     }
-    return answer.slice(0, low) + "\n[Report truncated. Full report is available in the Explorer task history.]"
+    return answer.slice(0, low) + "\n[Report truncated. Full report is available in the delegated task history.]"
+}
+
+export interface IDelegatedTaskInput {
+    readonly agent: string
+    readonly task: string
 }
 
 /** Owns child executions, while SQLite owns completed history. */
 export class DelegatedTasks {
     private readonly children = new Map<string, AgentSession>()
     private readonly listeners = new Set<() => void>()
+    private readonly agents: ReadonlyMap<string, IAgentDefinition>
     private revision = 0
 
     constructor(private readonly options: {
         readonly manager: ISessionManager
-        readonly explorer: IAgentDefinition
+        /** Explorer and any configured subagents, by id. */
+        readonly agents: readonly IAgentDefinition[]
         readonly toolOutputStore?: IToolOutputStore
-    }) {}
+    }) {
+        this.agents = new Map(options.agents.map((agent) => [agent.id, agent]))
+        if (this.agents.size !== options.agents.length) throw new Error("Delegated agents need unique ids")
+    }
 
     readonly subscribe = (listener: () => void): (() => void) => {
         this.listeners.add(listener)
@@ -48,10 +58,11 @@ export class DelegatedTasks {
     readonly open = (id: string): AgentSession => {
         const existing = this.children.get(id)
         if (existing) return existing
-        const info = this.options.manager.getSessionInfo(id)
-        if (info?.agentId !== "explorer") throw new Error("Explorer history not found")
+        const agentId = this.options.manager.getSessionInfo(id)?.agentId
+        const agent = agentId === undefined ? undefined : this.agents.get(agentId)
+        if (!agent) throw new Error("Delegated task history not found")
         this.options.manager.openSession(id)
-        const session = this.createSession(id, () => { throw new Error("Archived Explorer cannot run") })
+        const session = this.createSession(id, agent, () => { throw new Error("Archived delegated task cannot run") })
         this.children.set(id, session)
         return session
     }
@@ -62,14 +73,18 @@ export class DelegatedTasks {
 
     readonly abort = async (id: string): Promise<void> => { await this.children.get(id)?.abort() }
 
-    async run(tasks: readonly { readonly task: string }[], context: IAgentToolContext, configuration: IAgentSessionRunConfiguration): Promise<string> {
+    /** Runs each task with the agent it names. */
+    async run(tasks: readonly IDelegatedTaskInput[], context: IAgentToolContext, configuration: IAgentSessionRunConfiguration): Promise<string> {
         context.signal.throwIfAborted()
+        const agents = tasks.map((input) => this.agents.get(input.agent))
+        if (agents.some((agent) => agent === undefined)) throw new Error("Unknown delegated agent")
         if (!context.assistantMessageId) throw new Error("Missing parent assistant message")
         const controller = new AbortController()
         const signal = AbortSignal.any([context.signal, controller.signal])
-        const records: IDelegatedTask[] = []
+        const records: { readonly record: IDelegatedTask; readonly agent: IAgentDefinition }[] = []
         try {
             for (const [position, input] of tasks.entries()) {
+                const agent = agents[position]!
                 const id = crypto.randomUUID()
                 const createdAt = Date.now()
                 const record: IDelegatedTask = {
@@ -77,14 +92,15 @@ export class DelegatedTasks {
                     assistantMessageId: context.assistantMessageId, toolCallId: context.toolCallId,
                     position, task: input.task, modelId: configuration.modelProfile?.modelId ?? "inherited",
                     reasoningEffort: configuration.reasoningEffort, status: "running", createdAt,
+                    agentId: agent.id,
                 }
                 this.options.manager.createDelegatedTask({
-                    id, agentId: "explorer", title: input.task.slice(0, 120), createdAt, updatedAt: createdAt,
+                    id, agentId: agent.id, title: input.task.slice(0, 120), createdAt, updatedAt: createdAt,
                 }, record)
-                records.push(record)
+                records.push({ record, agent })
             }
-            const pending = records.map(async (record) => {
-                try { return await this.runTask(record, configuration, signal) }
+            const pending = records.map(async ({ record, agent }) => {
+                try { return await this.runTask(record, agent, configuration, signal) }
                 catch (error) { controller.abort(error); throw error }
             })
             this.notify()
@@ -101,7 +117,7 @@ export class DelegatedTasks {
             }) })
         } catch (error) {
             controller.abort(error)
-            for (const record of records) {
+            for (const { record } of records) {
                 const current = this.list(record.parentSessionId, record.assistantMessageId, record.toolCallId).find((task) => task.id === record.id)
                 if (current?.status === "running") this.options.manager.updateDelegatedTask({
                     ...current, status: "failed", finishedAt: Date.now(), error: "Delegation could not finish",
@@ -112,17 +128,17 @@ export class DelegatedTasks {
         }
     }
 
-    private createSession(id: string, resolveRunConfiguration: () => IAgentSessionRunConfiguration): AgentSession {
+    private createSession(id: string, agent: IAgentDefinition, resolveRunConfiguration: () => IAgentSessionRunConfiguration): AgentSession {
         return new AgentSession({
-            agentId: "explorer", sessionId: id, manager: this.options.manager,
-            systemPrompt: this.options.explorer.systemPrompt, tools: this.options.explorer.tools,
+            agentId: agent.id, sessionId: id, manager: this.options.manager,
+            systemPrompt: agent.systemPrompt, tools: agent.tools,
             resolveRunConfiguration,
             ...(this.options.toolOutputStore ? { toolOutputStore: this.options.toolOutputStore } : {}),
         })
     }
 
-    private async runTask(record: IDelegatedTask, configuration: IAgentSessionRunConfiguration, signal: AbortSignal): Promise<IDelegatedTask> {
-        const child = this.createSession(record.childSessionId, () => configuration)
+    private async runTask(record: IDelegatedTask, agent: IAgentDefinition, configuration: IAgentSessionRunConfiguration, signal: AbortSignal): Promise<IDelegatedTask> {
+        const child = this.createSession(record.childSessionId, agent, () => configuration)
         this.children.set(record.childSessionId, child)
         let timedOut = false
         let abortFailure: unknown
@@ -158,8 +174,8 @@ export class DelegatedTasks {
         const result: IDelegatedTask = {
             ...record, status, finishedAt: Date.now(),
             ...(status === "completed" ? { answer } : {
-                error: timedOut ? "Explorer exceeded the 10-minute limit" : executionError instanceof Error
-                    ? executionError.message : child.state.errorMessage ?? `Explorer ${status}`,
+                error: timedOut ? `${agent.name} exceeded the 10-minute limit` : executionError instanceof Error
+                    ? executionError.message : child.state.errorMessage ?? `${agent.name} ${status}`,
             }),
         }
         this.options.manager.updateDelegatedTask(result)

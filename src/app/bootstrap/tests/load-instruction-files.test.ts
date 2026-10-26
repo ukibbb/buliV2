@@ -71,6 +71,81 @@ test.skipIf(process.platform === "win32")(
   },
 )
 
+test("follows user @path imports depth-first, skipping code and missing files", async () => {
+  const workspace = await temporaryWorkspace()
+  const home = await temporaryWorkspace("buli-instructions-home-")
+  try {
+    const userPath = join(home, "CLAUDE.md")
+    const userContent = [
+      "User preferences",
+      "@./rules\\ dir/stack.md",
+      "Mention `@./ignored.md` without importing it.",
+      "```",
+      "@./ignored.md",
+      "```",
+      "- list item",
+      "  ```",
+      "  @./ignored.md",
+      "  ```",
+      "@./missing.md",
+      "See @rules\\ dir/ and @~ in prose.",
+      "mail@example.com",
+    ].join("\n")
+    const stackContent = `Stack\n@${join(home, "nested.md")}`
+    await mkdir(join(home, "rules dir"))
+    await writeFile(userPath, userContent)
+    await writeFile(join(home, "rules dir", "stack.md"), stackContent)
+    await writeFile(join(home, "nested.md"), "Nested")
+    await writeFile(join(home, "ignored.md"), "Must not load")
+
+    expect(await loadInstructionFiles(await realpath(workspace), userPath, signal())).toEqual([
+      { source: userPath, content: userContent },
+      { source: join(home, "rules dir", "stack.md"), content: stackContent },
+      { source: join(home, "nested.md"), content: "Nested" },
+    ])
+  } finally {
+    await Promise.all([removeWorkspace(workspace), removeWorkspace(home)])
+  }
+})
+
+test("resolves ~ imports against the home directory", async () => {
+  const workspace = await temporaryWorkspace()
+  const home = await temporaryWorkspace("buli-instructions-home-")
+  const originalHome = process.env.HOME
+  process.env.HOME = home
+  try {
+    const userPath = join(home, "CLAUDE.md")
+    await writeFile(userPath, "@~/stack.md")
+    await writeFile(join(home, "stack.md"), "Stack")
+
+    expect(await loadInstructionFiles(await realpath(workspace), userPath, signal())).toEqual([
+      { source: userPath, content: "@~/stack.md" },
+      { source: join(home, "stack.md"), content: "Stack" },
+    ])
+  } finally {
+    if (originalHome === undefined) delete process.env.HOME
+    else process.env.HOME = originalHome
+    await Promise.all([removeWorkspace(workspace), removeWorkspace(home)])
+  }
+})
+
+test("stops imports after four hops and reads each file once", async () => {
+  const workspace = await temporaryWorkspace()
+  const home = await temporaryWorkspace("buli-instructions-home-")
+  try {
+    const names = ["0.md", "1.md", "2.md", "3.md", "4.md", "5.md"]
+    await Promise.all(names.map((name, index) => {
+      const next = names[index + 1]
+      return writeFile(join(home, name), next === undefined ? "Too deep" : `@./${next}\n@./0.md`)
+    }))
+
+    const files = await loadInstructionFiles(await realpath(workspace), join(home, "0.md"), signal())
+    expect(files.map((file) => file.source)).toEqual(names.slice(0, 5).map((name) => join(home, name)))
+  } finally {
+    await Promise.all([removeWorkspace(workspace), removeWorkspace(home)])
+  }
+})
+
 test("reads an appended system prompt file and rejects a missing one", async () => {
   const workspace = await temporaryWorkspace()
   try {

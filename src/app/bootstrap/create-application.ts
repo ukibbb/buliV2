@@ -26,6 +26,7 @@ import { createFdPathSearcher } from "@/app/path-search/fd-path-search"
 import { ClaudeCodeHooks } from "@/hooks/claude-code-hooks"
 import { loadClaudeSettings } from "@/hooks/claude-settings"
 import { renderStatusLine } from "@/hooks/status-line"
+import { connectConfiguredServers, type IConfiguredMcpTools, loadMcpConfig } from "@/mcp/configured-servers"
 import { createInjectedModelComposition } from "@/app/bootstrap/model-composition"
 import { createProviderModelComposition } from "@/app/bootstrap/create-provider-model-composition"
 import type { IKimiModelCatalog } from "@/providers/kimi"
@@ -41,6 +42,7 @@ import {
 import {
     EphemeralToolOutputStore,
 } from "@/agent/tools"
+import { version as applicationVersion } from "../../../package.json"
 
 function defaultToolExecutablePaths() {
     if (process.env.BULI_DEVELOPMENT === "1") return {}
@@ -104,6 +106,8 @@ export interface IBuliApplicationOptions {
     readonly appendSystemPromptFile?: string
     /** Claude Code settings file whose command hooks Buli runs, like Claude Code's `--settings`. */
     readonly settingsPath?: string
+    /** Claude Code `--mcp-config` file whose stdio servers' tools every Buli session gets. */
+    readonly mcpConfigPath?: string
 }
 
 /** Composes provider, tools, persistence, sessions, and the UI boundary. */
@@ -129,7 +133,10 @@ export async function createBuliApplication(
     const settings = options.settingsPath === undefined
         ? undefined
         : await loadClaudeSettings(options.settingsPath, options.signal)
+    // Like Claude Code: hooks, MCP servers and Bash inherit the settings `env` (e.g. buliOS memory role).
+    if (settings) Object.assign(process.env, settings.env)
     const statusLine = settings?.statusLine
+    const mcpServers = options.mcpConfigPath === undefined ? [] : await loadMcpConfig(options.mcpConfigPath, options.signal)
 
     const auth = options.authentication ?? createAuthentication()
     const authentication = auth.service
@@ -138,7 +145,10 @@ export async function createBuliApplication(
     // nie zostawi częściowo utworzonej usługi bez właściciela.
     let runtime: BuliApplicationRuntime | undefined
     let manager: ISessionManager | undefined
+    let configuredMcp: IConfiguredMcpTools | undefined
     try {
+        configuredMcp = await connectConfiguredServers(mcpServers, { name: "buli", version: applicationVersion }, options.signal)
+        const systemPromptAddition = [appendedSystemPrompt, configuredMcp.instructions].filter(Boolean).join("\n\n")
         manager = options.manager ?? new SQLiteSessionManager({
             directoryPath: defaultHistoryDirectoryPath(workspaceRoot),
         })
@@ -157,12 +167,12 @@ export async function createBuliApplication(
             workspaceRoot,
             toolOutputStore,
             instructionFiles,
-            ...(appendedSystemPrompt === undefined ? {} : { appendedSystemPrompt }),
+            ...(systemPromptAddition ? { appendedSystemPrompt: systemPromptAddition } : {}),
             ...defaultToolExecutablePaths(),
         }
         const agentOptions = {
             ...(options.tools === undefined ? {} : { tools: options.tools }),
-            additionalTools: modelComposition.additionalTools,
+            additionalTools: [...modelComposition.additionalTools, ...configuredMcp.tools],
         }
         const buli = createBuliAgentDefinition(agentDependencies, agentOptions)
         const yolo = createBuliYoloAgentDefinition(agentDependencies, agentOptions)
@@ -224,6 +234,7 @@ export async function createBuliApplication(
             void disposeApplicationResources(
                 applicationRuntime,
                 authentication,
+                configuredMcp,
                 reason,
             ).then(
                 completion.resolve,
@@ -259,6 +270,7 @@ export async function createBuliApplication(
                 toolOutputStore.dispose(),
             ]).then(() => undefined),
             authentication.dispose(startupError),
+            configuredMcp?.close(),
         ])
         const rollbackErrors = rollbackResults.flatMap((result) =>
             result.status === "rejected" ? [result.reason] : []
@@ -276,11 +288,13 @@ export async function createBuliApplication(
 async function disposeApplicationResources(
     runtime: IBuliApplication,
     authentication: IAuthenticationService,
+    configuredMcp: IConfiguredMcpTools | undefined,
     reason: unknown,
 ): Promise<void> {
     const results = await Promise.allSettled([
         runtime.dispose(),
         authentication.dispose(reason),
+        configuredMcp?.close(),
     ])
     const errors = results.flatMap((result) =>
         result.status === "rejected" ? [result.reason] : []

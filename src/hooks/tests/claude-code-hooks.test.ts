@@ -151,6 +151,7 @@ test("settings keep supported command hooks and the status line", async () => {
     const path = join(workspace, "settings.json")
     await writeFile(path, JSON.stringify({
       model: "ignored",
+      env: { BULIOS_MEMORY_ROLE: "client", IGNORED: 1 },
       statusLine: { type: "command", command: "bash status.sh" },
       hooks: {
         PreToolUse: [
@@ -164,6 +165,7 @@ test("settings keep supported command hooks and the status line", async () => {
     expect(await loadClaudeSettings(path, signal())).toEqual({
       hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ command: "guard", timeoutSeconds: 5 }] }] },
       statusLine: { command: "bash status.sh" },
+      env: { BULIOS_MEMORY_ROLE: "client" },
     })
   })
 })

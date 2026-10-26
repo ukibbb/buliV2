@@ -33,6 +33,10 @@ const cli = yargs(args)
     type: "string",
     describe: "append this file to the system prompt, like Claude Code",
   })
+  .option("mcp-config", {
+    type: "string",
+    describe: "start the stdio MCP servers from this Claude Code MCP config file",
+  })
   .option("settings", {
     type: "string",
     describe: "run command hooks from this Claude Code settings file",

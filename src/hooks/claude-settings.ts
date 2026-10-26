@@ -21,9 +21,11 @@ export type THookConfiguration = Readonly<Partial<Record<THookEventName, readonl
 export interface IClaudeSettings {
     readonly hooks: THookConfiguration
     readonly statusLine?: IHookCommand
+    /** Variables Claude Code exports to itself and every process it starts. */
+    readonly env: Readonly<Record<string, string>>
 }
 
-/** Reads command hooks and the status line from a Claude Code `settings.json`; other keys are ignored. */
+/** Reads command hooks, the status line and `env` from a Claude Code `settings.json`; other keys are ignored. */
 export async function loadClaudeSettings(path: string, signal: AbortSignal): Promise<IClaudeSettings> {
     let settings: unknown
     try {
@@ -41,7 +43,10 @@ export async function loadClaudeSettings(path: string, signal: AbortSignal): Pro
         if (Array.isArray(groups)) hooks[event] = groups.flatMap(parseMatcherGroup)
     }
     const statusLine = parseCommand(settings.statusLine)
-    return { hooks, ...(statusLine === undefined ? {} : { statusLine }) }
+    const env = isRecord(settings.env)
+        ? Object.fromEntries(Object.entries(settings.env).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
+        : {}
+    return { hooks, env, ...(statusLine === undefined ? {} : { statusLine }) }
 }
 
 function parseMatcherGroup(value: unknown): IHookMatcherGroup[] {

@@ -1,18 +1,27 @@
 import { Client, StreamableHTTPClientTransport, type OAuthClientProvider } from "@modelcontextprotocol/client"
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio"
 
 export type TMcpTool = Awaited<ReturnType<Client["listTools"]>>["tools"][number]
 export type TMcpToolResult = Awaited<ReturnType<Client["callTool"]>>
 export const DEFAULT_MCP_TIMEOUT_MS = 30_000
 
+/** A local server process speaking MCP over stdio. */
+export interface IMcpStdioCommand {
+    readonly command: string
+    readonly args: readonly string[]
+    readonly env?: Readonly<Record<string, string>>
+}
+
 interface IMcpConnectionOptions {
-    readonly endpoint: URL
+    /** An HTTP endpoint, or a command whose process the connection owns until `close`. */
+    readonly endpoint: URL | IMcpStdioCommand
     readonly clientInfo: { readonly name: string; readonly version: string }
     readonly signal: AbortSignal
     readonly timeoutMs?: number
     readonly authProvider?: OAuthClientProvider
 }
 
-/** One HTTP client. The caller owns closing it on deactivation or session shutdown. */
+/** One MCP client. The caller owns closing it on deactivation or session shutdown. */
 export class McpConnection {
     private closed = false
 
@@ -30,7 +39,16 @@ export class McpConnection {
         }
         options.signal.throwIfAborted()
         const client = new Client(options.clientInfo)
-        const transport = new StreamableHTTPClientTransport(options.endpoint, options.authProvider ? { authProvider: options.authProvider } : {})
+        const endpoint = options.endpoint
+        const transport = endpoint instanceof URL
+            ? new StreamableHTTPClientTransport(endpoint, options.authProvider ? { authProvider: options.authProvider } : {})
+            : new StdioClientTransport({
+                command: endpoint.command,
+                args: [...endpoint.args],
+                // Like Claude Code, the server inherits Buli's environment; the SDK default keeps only a few variables.
+                env: { ...process.env as Record<string, string>, ...endpoint.env },
+                stderr: "ignore",
+            })
         const signal = AbortSignal.any([options.signal, AbortSignal.timeout(timeoutMs)])
         try {
             await client.connect(transport, { signal, timeout: timeoutMs })

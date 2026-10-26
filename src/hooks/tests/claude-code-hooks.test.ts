@@ -5,7 +5,7 @@ import { join } from "node:path"
 
 import type { IToolCallContent, IToolResultMessage, IUserMessage } from "@/agent"
 import { ClaudeCodeHooks } from "@/hooks/claude-code-hooks"
-import { loadClaudeHooks, type THookConfiguration } from "@/hooks/claude-settings"
+import { loadClaudeSettings, type THookConfiguration } from "@/hooks/claude-settings"
 
 const signal = () => new AbortController().signal
 
@@ -146,7 +146,7 @@ test("failing, plain-output, and timed-out tool hooks do not block", async () =>
   })
 })
 
-test("settings keep only supported command hooks", async () => {
+test("settings keep supported command hooks and the status line", async () => {
   await withWorkspace(async (workspace) => {
     const path = join(workspace, "settings.json")
     await writeFile(path, JSON.stringify({
@@ -161,8 +161,9 @@ test("settings keep only supported command hooks", async () => {
       },
     }))
 
-    expect(await loadClaudeHooks(path, signal())).toEqual({
-      PreToolUse: [{ matcher: "Bash", hooks: [{ command: "guard", timeoutSeconds: 5 }] }],
+    expect(await loadClaudeSettings(path, signal())).toEqual({
+      hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ command: "guard", timeoutSeconds: 5 }] }] },
+      statusLine: { command: "bash status.sh" },
     })
   })
 })

@@ -81,6 +81,7 @@ export interface IBuliRuntimeOptions {
     readonly now?: () => number
     readonly generateId?: () => string
     readonly toolOutputStore?: IToolOutputStore
+    readonly renderStatusLine?: IBuliApplication["renderStatusLine"]
     /** Hooks for each live user session; delegated Explorer sessions run without them. */
     readonly createSessionHooks?: (sessionId: string) => IAgentHooks
     readonly novibeAuth?: NovibeAuth
@@ -111,6 +112,8 @@ export class BuliApplicationRuntime implements IBuliApplication {
     private readonly generateId: () => string
     private readonly toolOutputStore: IToolOutputStore | undefined
     private readonly createSessionHooks: ((sessionId: string) => IAgentHooks) | undefined
+    /** Status line processes end with the runtime as well as with the caller's signal. */
+    readonly renderStatusLine: IBuliApplication["renderStatusLine"]
     private readonly lifetime = new AbortController()
     private readonly novibeAuth: NovibeAuth | undefined
     private readonly openNovibeUrl: ((url: string) => Promise<unknown>) | undefined
@@ -187,6 +190,11 @@ export class BuliApplicationRuntime implements IBuliApplication {
         this.generateId = options.generateId ?? generateRandomId
         this.toolOutputStore = options.toolOutputStore
         this.createSessionHooks = options.createSessionHooks
+        const renderStatusLine = options.renderStatusLine
+        this.renderStatusLine = renderStatusLine && (async (session, signal) => {
+            if (this.disposed) throw new Error("Buli runtime is disposed")
+            return await renderStatusLine(session, AbortSignal.any([signal, this.lifetime.signal]))
+        })
 
         this.resolveAgent(this.defaultAgentId)
         this.selectedRegistration = this.resolveSelectedModel()

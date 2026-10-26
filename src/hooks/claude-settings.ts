@@ -17,8 +17,14 @@ export interface IHookMatcherGroup {
 
 export type THookConfiguration = Readonly<Partial<Record<THookEventName, readonly IHookMatcherGroup[]>>>
 
-/** Reads the command hooks from a Claude Code `settings.json`; other keys are ignored. */
-export async function loadClaudeHooks(path: string, signal: AbortSignal): Promise<THookConfiguration> {
+/** The parts of a Claude Code settings file Buli runs. */
+export interface IClaudeSettings {
+    readonly hooks: THookConfiguration
+    readonly statusLine?: IHookCommand
+}
+
+/** Reads command hooks and the status line from a Claude Code `settings.json`; other keys are ignored. */
+export async function loadClaudeSettings(path: string, signal: AbortSignal): Promise<IClaudeSettings> {
     let settings: unknown
     try {
         settings = JSON.parse(await readFile(path, { encoding: "utf8", signal }))
@@ -34,7 +40,8 @@ export async function loadClaudeHooks(path: string, signal: AbortSignal): Promis
         const groups = configured[event]
         if (Array.isArray(groups)) hooks[event] = groups.flatMap(parseMatcherGroup)
     }
-    return hooks
+    const statusLine = parseCommand(settings.statusLine)
+    return { hooks, ...(statusLine === undefined ? {} : { statusLine }) }
 }
 
 function parseMatcherGroup(value: unknown): IHookMatcherGroup[] {

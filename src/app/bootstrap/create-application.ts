@@ -24,7 +24,8 @@ import {
 } from "@/app/bootstrap/load-instruction-files"
 import { createFdPathSearcher } from "@/app/path-search/fd-path-search"
 import { ClaudeCodeHooks } from "@/hooks/claude-code-hooks"
-import { loadClaudeHooks } from "@/hooks/claude-settings"
+import { loadClaudeSettings } from "@/hooks/claude-settings"
+import { renderStatusLine } from "@/hooks/status-line"
 import { createInjectedModelComposition } from "@/app/bootstrap/model-composition"
 import { createProviderModelComposition } from "@/app/bootstrap/create-provider-model-composition"
 import type { IKimiModelCatalog } from "@/providers/kimi"
@@ -125,9 +126,10 @@ export async function createBuliApplication(
     const appendedSystemPrompt = options.appendSystemPromptFile === undefined
         ? undefined
         : await loadSystemPromptFile(options.appendSystemPromptFile, options.signal)
-    const hooks = options.settingsPath === undefined
+    const settings = options.settingsPath === undefined
         ? undefined
-        : await loadClaudeHooks(options.settingsPath, options.signal)
+        : await loadClaudeSettings(options.settingsPath, options.signal)
+    const statusLine = settings?.statusLine
 
     const auth = options.authentication ?? createAuthentication()
     const authentication = auth.service
@@ -195,8 +197,11 @@ export async function createBuliApplication(
             selection: modelComposition.selection,
             searchPaths: defaultPathSearcher(workspaceRoot),
             toolOutputStore,
-            ...(hooks === undefined ? {} : {
-                createSessionHooks: (sessionId: string) => new ClaudeCodeHooks({ sessionId, workspaceRoot, hooks }),
+            ...(settings === undefined ? {} : {
+                createSessionHooks: (sessionId: string) => new ClaudeCodeHooks({ sessionId, workspaceRoot, hooks: settings.hooks }),
+            }),
+            ...(statusLine === undefined ? {} : {
+                renderStatusLine: (session, signal) => renderStatusLine(statusLine, session, { cwd: workspaceRoot, signal }),
             }),
             ...(modelComposition.discovery ?? {}),
         })

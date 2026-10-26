@@ -155,6 +155,37 @@ test("sends user instructions and the appended system prompt to the model", asyn
   }
 })
 
+test("runs prompt hooks from a Claude Code settings file", async () => {
+  const fixture = await applicationFixture()
+  let messages: IAgentModelRequest["messages"] | undefined
+
+  try {
+    const settingsPath = join(fixture.workspace, "settings.json")
+    await writeFile(settingsPath, JSON.stringify({
+      hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: "echo Remember the ISA" }] }] },
+    }))
+    const startup = await fixture.start({
+      settingsPath,
+      model: {
+        async *stream(request) {
+          messages = request.messages
+          yield { type: "finish", reason: "stop" }
+        },
+      },
+    })
+    await startup.runtime.refreshModels()
+    const promptRun = startup.runtime.submitPrompt({ text: "Hello" })
+    await Promise.all([promptRun.promptPersisted, promptRun.runFinished])
+
+    expect(messages?.[0]).toMatchObject({
+      role: "user",
+      content: "Hello\n\n<system-reminder>\nRemember the ISA\n</system-reminder>",
+    })
+  } finally {
+    await fixture.dispose()
+  }
+})
+
 test("a missing appended system prompt file fails startup", async () => {
   const fixture = await applicationFixture()
   try {
@@ -711,7 +742,7 @@ async function applicationFixture() {
     workspace, controller, store, manager, authentication, modelCatalog,
     accountResponse, accountRequests, modelRequests, publicRequests,
     deepseekRequests, deepseekResponse, searchRequests,
-    start(options: Pick<IBuliApplicationOptions, "model" | "modelCatalog" | "kimiModelCatalog" | "deepseekModelCatalog" | "userInstructionsPath" | "appendSystemPromptFile"> = {}, includeDefaultTools = false) {
+    start(options: Pick<IBuliApplicationOptions, "model" | "modelCatalog" | "kimiModelCatalog" | "deepseekModelCatalog" | "userInstructionsPath" | "appendSystemPromptFile" | "settingsPath"> = {}, includeDefaultTools = false) {
       if (startupTask) throw new Error("Fixture already started")
       startupTask = createBuliApplication({
         signal: controller.signal,

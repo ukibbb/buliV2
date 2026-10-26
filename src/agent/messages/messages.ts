@@ -56,6 +56,8 @@ export interface IUserMessage extends IMessageBase {
     //
     readonly references?: readonly IUserPathReference[]
     readonly attachments?: readonly IUserImageAttachment[]
+    /** Added by hooks: sent to the model, not shown as the user's text. */
+    readonly hookContext?: string
 }
 
 export interface ITextContent {
@@ -101,6 +103,8 @@ export interface IToolResultMessage extends IMessageBase {
     readonly outcome?: TToolExecutionOutcome
     readonly summary?: string
     readonly diff?: string
+    /** Added by hooks: sent to the model after the tool output. */
+    readonly hookContext?: string
 }
 
 /** One durable provider-neutral conversation message. */
@@ -108,3 +112,10 @@ export type TAgentMessage =
     | IUserMessage
     | IAssistantMessage
     | IToolResultMessage
+
+/** The message as the model receives it: hook context follows the content as a system reminder. */
+export function withHookContextInContent(message: TAgentMessage): TAgentMessage {
+    if (message.role === "assistant" || message.hookContext === undefined) return message
+    const { hookContext, ...rest } = message
+    return { ...rest, content: `${message.content}\n\n<system-reminder>\n${hookContext}\n</system-reminder>` }
+}

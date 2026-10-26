@@ -23,6 +23,8 @@ import {
     loadSystemPromptFile,
 } from "@/app/bootstrap/load-instruction-files"
 import { createFdPathSearcher } from "@/app/path-search/fd-path-search"
+import { ClaudeCodeHooks } from "@/hooks/claude-code-hooks"
+import { loadClaudeHooks } from "@/hooks/claude-settings"
 import { createInjectedModelComposition } from "@/app/bootstrap/model-composition"
 import { createProviderModelComposition } from "@/app/bootstrap/create-provider-model-composition"
 import type { IKimiModelCatalog } from "@/providers/kimi"
@@ -99,6 +101,8 @@ export interface IBuliApplicationOptions {
     readonly userInstructionsPath?: string
     /** File appended to Buli's system prompt, like Claude Code's `--append-system-prompt-file`. */
     readonly appendSystemPromptFile?: string
+    /** Claude Code settings file whose command hooks Buli runs, like Claude Code's `--settings`. */
+    readonly settingsPath?: string
 }
 
 /** Composes provider, tools, persistence, sessions, and the UI boundary. */
@@ -121,6 +125,9 @@ export async function createBuliApplication(
     const appendedSystemPrompt = options.appendSystemPromptFile === undefined
         ? undefined
         : await loadSystemPromptFile(options.appendSystemPromptFile, options.signal)
+    const hooks = options.settingsPath === undefined
+        ? undefined
+        : await loadClaudeHooks(options.settingsPath, options.signal)
 
     const auth = options.authentication ?? createAuthentication()
     const authentication = auth.service
@@ -188,6 +195,9 @@ export async function createBuliApplication(
             selection: modelComposition.selection,
             searchPaths: defaultPathSearcher(workspaceRoot),
             toolOutputStore,
+            ...(hooks === undefined ? {} : {
+                createSessionHooks: (sessionId: string) => new ClaudeCodeHooks({ sessionId, workspaceRoot, hooks }),
+            }),
             ...(modelComposition.discovery ?? {}),
         })
         runtime = applicationRuntime

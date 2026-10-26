@@ -3,6 +3,7 @@ import { DelegatedTasks } from "@/app/delegated-tasks"
 import { BULI_YOLO_AGENT_ID, createDelegateTaskTool } from "@/agent"
 import type {
     IAgentDefinition,
+    IAgentHooks,
     IAgentModel,
     IModelProfile,
     IToolOutputStore,
@@ -80,6 +81,8 @@ export interface IBuliRuntimeOptions {
     readonly now?: () => number
     readonly generateId?: () => string
     readonly toolOutputStore?: IToolOutputStore
+    /** Hooks for each live user session; delegated Explorer sessions run without them. */
+    readonly createSessionHooks?: (sessionId: string) => IAgentHooks
     readonly novibeAuth?: NovibeAuth
     readonly openNovibeUrl?: (url: string) => Promise<unknown>
 }
@@ -107,6 +110,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
     private readonly now: () => number
     private readonly generateId: () => string
     private readonly toolOutputStore: IToolOutputStore | undefined
+    private readonly createSessionHooks: ((sessionId: string) => IAgentHooks) | undefined
     private readonly lifetime = new AbortController()
     private readonly novibeAuth: NovibeAuth | undefined
     private readonly openNovibeUrl: ((url: string) => Promise<unknown>) | undefined
@@ -182,6 +186,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
         this.now = options.now ?? Date.now
         this.generateId = options.generateId ?? generateRandomId
         this.toolOutputStore = options.toolOutputStore
+        this.createSessionHooks = options.createSessionHooks
 
         this.resolveAgent(this.defaultAgentId)
         this.selectedRegistration = this.resolveSelectedModel()
@@ -1001,6 +1006,7 @@ export class BuliApplicationRuntime implements IBuliApplication {
             ...(this.toolOutputStore === undefined
                 ? {}
                 : { toolOutputStore: this.toolOutputStore }),
+            ...(this.createSessionHooks === undefined ? {} : { hooks: this.createSessionHooks(info.id) }),
         })
         this.sessionMcpControllers.set(info.id, this.createSessionMcpController(session, agent))
         return session

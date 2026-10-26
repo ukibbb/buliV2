@@ -7,6 +7,7 @@ import type {
     IUserPathReference,
 } from "@/agent/messages/messages"
 import { USER_PATH_REFERENCES_PER_SESSION_MAX } from "@/agent/messages/messages"
+import type { IAgentHooks } from "@/agent/runtime/hooks"
 import type { IAgentModel } from "@/agent/model/model"
 import { streamModelTurn } from "@/agent/model/model-turn"
 import type {
@@ -62,6 +63,7 @@ export interface IAgentLoopConfig {
     readonly now?: () => number
     readonly generateId?: () => string
     readonly toolOutputStore?: IToolOutputStore
+    readonly hooks?: IAgentHooks
 }
 
 /** Orchestrates provider turns, queued input, and sequential local tool batches. */
@@ -79,10 +81,11 @@ export async function runAgentLoop(
         context.selectedPathReferences ?? [],
     )
     let providerAccountId = config.providerAccountId
+    const hookedPrompt = await applyPromptHooks(prompt, config)
 
     await config.emit({ type: "agent_start", runId: config.runId })
     await config.emit({ type: "turn_start", runId: config.runId, index: 0 })
-    await emitCompletedMessage(prompt, config.runId, config.emit)
+    await emitCompletedMessage(hookedPrompt, config.runId, config.emit)
     mergePathReferences(selectedPathReferences, prompt.references ?? [])
 
     let iteration = 0
@@ -113,7 +116,7 @@ export async function runAgentLoop(
 
                 if (queuedMessage) {
                     await emitCompletedMessage(
-                        queuedMessage,
+                        await applyPromptHooks(queuedMessage, config),
                         config.runId,
                         config.emit,
                     )
@@ -198,6 +201,7 @@ export async function runAgentLoop(
                 ...(config.toolOutputStore === undefined
                     ? {}
                     : { toolOutputStore: config.toolOutputStore }),
+                ...(config.hooks === undefined ? {} : { hooks: config.hooks }),
             }
             const toolResults = assistant.stopReason === "length"
                 ? await failToolCallsWithoutExecution(
@@ -261,6 +265,18 @@ export async function runAgentLoop(
         }
         pendingMessage = followUpMessage
     }
+}
+
+/** Runs prompt hooks; a block rejects the message before it reaches history. */
+async function applyPromptHooks(
+    message: IUserMessage,
+    config: IAgentLoopConfig,
+): Promise<IUserMessage> {
+    const decision = await config.hooks?.beforePrompt(message, config.signal)
+    if (decision?.blockReason !== undefined) {
+        throw new Error(`Prompt blocked by hook: ${decision.blockReason}`)
+    }
+    return decision?.context ? { ...message, hookContext: decision.context } : message
 }
 
 function mergePathReferences(

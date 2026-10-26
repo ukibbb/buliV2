@@ -22,6 +22,7 @@ import {
     truncateToolOutput,
 } from "@/agent/tools/tool-output"
 import type { IToolOutputStore } from "@/agent/tools/tool-output-store"
+import type { IAgentHooks } from "@/agent/runtime/hooks"
 
 const COMMITTED_AFTER_ABORT_SUMMARY =
     "WARNING: Workspace changes were committed despite cancellation."
@@ -41,6 +42,7 @@ interface IExecuteToolCallsOptions {
     readonly now: () => number
     readonly generateId: () => string
     readonly toolOutputStore?: IToolOutputStore
+    readonly hooks?: IAgentHooks
 }
 
 export function createToolIndex(
@@ -73,7 +75,7 @@ export async function executeToolCallsSequentially(
             input: structuredClone(toolCall.input),
         })
 
-        const result = await executeToolCall(toolCall, toolsByName, options)
+        const result = await executeToolCallWithHooks(toolCall, toolsByName, options)
         await options.emit({
             type: "tool_execution_end",
             runId: options.runId,
@@ -86,6 +88,24 @@ export async function executeToolCallsSequentially(
     }
 
     return results
+}
+
+/** Hooks may block a call before it runs and add context after it ran. */
+async function executeToolCallWithHooks(
+    toolCall: IToolCallContent,
+    toolsByName: ReadonlyMap<string, IRuntimeAgentTool>,
+    options: IExecuteToolCallsOptions,
+): Promise<IToolResultMessage> {
+    if (!options.hooks) return await executeToolCall(toolCall, toolsByName, options)
+    const decision = await options.hooks.beforeTool(toolCall, options.signal)
+    if (decision.blockReason !== undefined) {
+        const blocked = errorToolResult(toolCall, `Tool call blocked by hook: ${decision.blockReason}`, options)
+        return decision.context ? { ...blocked, hookContext: decision.context } : blocked
+    }
+    const result = await executeToolCall(toolCall, toolsByName, options)
+    const after = await options.hooks.afterTool(toolCall, result, options.signal)
+    const hookContext = [decision.context, after].filter(Boolean).join("\n\n")
+    return hookContext ? { ...result, hookContext } : result
 }
 
 /** Publishes error results for tool calls that must not reach local executors. */
@@ -104,18 +124,7 @@ export async function failToolCallsWithoutExecution(
             toolName: toolCall.toolName,
             input: structuredClone(toolCall.input),
         })
-        const result: IToolResultMessage = {
-            id: options.generateId(),
-            sessionId: options.sessionId,
-            runId: options.runId,
-            role: "toolResult",
-            assistantMessageId: options.assistantMessageId,
-            toolCallId: toolCall.toolCallId,
-            toolName: toolCall.toolName,
-            content: truncateToolOutput(content),
-            isError: true,
-            createdAt: options.now(),
-        }
+        const result = errorToolResult(toolCall, content, options)
         await options.emit({
             type: "tool_execution_end",
             runId: options.runId,
@@ -128,6 +137,25 @@ export async function failToolCallsWithoutExecution(
     }
 
     return results
+}
+
+function errorToolResult(
+    toolCall: IToolCallContent,
+    content: string,
+    options: IExecuteToolCallsOptions,
+): IToolResultMessage {
+    return {
+        id: options.generateId(),
+        sessionId: options.sessionId,
+        runId: options.runId,
+        role: "toolResult",
+        assistantMessageId: options.assistantMessageId,
+        toolCallId: toolCall.toolCallId,
+        toolName: toolCall.toolName,
+        content: truncateToolOutput(content),
+        isError: true,
+        createdAt: options.now(),
+    }
 }
 
 async function executeToolCall(

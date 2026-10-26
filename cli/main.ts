@@ -33,6 +33,10 @@ const cli = yargs(args)
     type: "string",
     describe: "append this file to the system prompt, like Claude Code",
   })
+  .option("settings", {
+    type: "string",
+    describe: "run command hooks from this Claude Code settings file",
+  })
   // Authentication commands use the same interactive OpenTUI flow as the app.
   .command(LoginCommand)
   .command(LogoutCommand)

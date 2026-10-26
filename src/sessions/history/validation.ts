@@ -101,9 +101,11 @@ export function assertDurableSessionMessage(
                     "content",
                     ...(value.references === undefined ? [] : ["references"]),
                     ...(value.attachments === undefined ? [] : ["attachments"]),
+                    ...(value.hookContext === undefined ? [] : ["hookContext"]),
                     "createdAt",
                 ])
                 || typeof value.content !== "string"
+                || !isOptionalHookContext(value.hookContext)
                 || (
                     value.content.trim().length === 0
                     && (!Array.isArray(value.attachments) || value.attachments.length === 0)
@@ -154,8 +156,10 @@ export function assertDurableSessionMessage(
                     ...(value.outcome === undefined ? [] : ["outcome"]),
                     ...(value.summary === undefined ? [] : ["summary"]),
                     ...(value.diff === undefined ? [] : ["diff"]),
+                    ...(value.hookContext === undefined ? [] : ["hookContext"]),
                     "createdAt",
                 ])
+                || !isOptionalHookContext(value.hookContext)
                 || typeof value.assistantMessageId !== "string"
                 || value.assistantMessageId.trim().length === 0
                 || typeof value.toolCallId !== "string"
@@ -483,4 +487,8 @@ function hasExactKeys(
     const actual = Object.keys(value)
     return actual.length === keys.length
         && keys.every((key) => Object.hasOwn(value, key))
+}
+
+function isOptionalHookContext(value: unknown): boolean {
+    return value === undefined || (typeof value === "string" && value.length > 0)
 }

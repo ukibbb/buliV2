@@ -5,6 +5,8 @@ import {
     type TAgentEvent,
     type IAgentModelRequest,
     type IAgentContextProjection,
+    type IAgentHooks,
+    withHookContextInContent,
     type IAgentRunConfiguration,
     type IAgentRunHandle,
     type IAgentState,
@@ -67,6 +69,7 @@ interface IAgentSessionOptions {
     readonly generateId?: () => string
     readonly disposeTimeoutMs?: number
     readonly toolOutputStore?: IToolOutputStore
+    readonly hooks?: IAgentHooks
 }
 
 export interface ISessionConfiguration {
@@ -165,6 +168,7 @@ export class AgentSession {
             ...(options.toolOutputStore === undefined
                 ? {}
                 : { toolOutputStore: options.toolOutputStore }),
+            ...(options.hooks === undefined ? {} : { hooks: options.hooks }),
             criticalEventSink: (event) => {
                 if (!this.acceptCriticalEvents) {
                     throw new Error("AgentSession stopped accepting events during shutdown")
@@ -928,7 +932,7 @@ function requestWithContext(
     originalRequest: IAgentModelRequest,
     projection: IAgentContextProjection,
 ): IAgentModelRequest {
-    const request = { ...originalRequest, messages: projection.messages }
+    const request = { ...originalRequest, messages: projection.messages.map(withHookContextInContent) }
     if (projection.contextSummary === undefined) {
         delete request.contextSummary
     } else {

@@ -31,6 +31,7 @@ import type {
 import { reduceAgentState } from "@/agent/runtime/state-reducer"
 import type { IRuntimeAgentTool } from "@/agent/tools/tool"
 import type { IToolOutputStore } from "@/agent/tools/tool-output-store"
+import type { IAgentHooks } from "@/agent/runtime/hooks"
 import { generateRandomId } from "@/common/ids"
 
 export interface IAgentOptions {
@@ -49,6 +50,7 @@ export interface IAgentOptions {
     readonly now?: () => number
     readonly generateId?: () => string
     readonly toolOutputStore?: IToolOutputStore
+    readonly hooks?: IAgentHooks
 }
 
 interface IActiveAgentRun {
@@ -83,6 +85,7 @@ export class Agent {
     private readonly getSelectedPathReferences: () => readonly IUserPathReference[]
     private readonly getRecentConversation: () => readonly TAgentMessage[]
     private readonly toolOutputStore: IToolOutputStore | undefined
+    private readonly hooks: IAgentHooks | undefined
     private steeringQueue: IUserMessage[] = []
     private followUpQueue: IUserMessage[] = []
     private queuedMessagesRevisionValue = 0
@@ -97,6 +100,7 @@ export class Agent {
         this.getContext = options.getContext
         this.getSelectedPathReferences = options.getSelectedPathReferences
         this.toolOutputStore = options.toolOutputStore
+        this.hooks = options.hooks
         this.getRecentConversation = options.getRecentConversation
         this.stateValue = {
             sessionId: options.sessionId,
@@ -374,6 +378,7 @@ export class Agent {
                 ...(this.toolOutputStore === undefined
                     ? {}
                     : { toolOutputStore: this.toolOutputStore }),
+                ...(this.hooks === undefined ? {} : { hooks: this.hooks }),
             }
             const result = await runAgentLoop(
                 prompt,

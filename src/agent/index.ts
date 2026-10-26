@@ -20,6 +20,7 @@ export type {
 } from "@/agent/runtime/agent-loop"
 export { isImmutableAssistantSnapshot } from "@/agent/model/assistant-message-builder"
 export type { IInstructionFile } from "@/agent/definitions/instruction-file"
+export type { IAgentHooks, IHookDecision } from "@/agent/runtime/hooks"
 export type {
     TAgentCriticalEventSink,
     TAgentEvent,
@@ -47,6 +48,7 @@ export {
     USER_IMAGE_TOTAL_MAX_BYTES,
     USER_PATH_REFERENCES_PER_MESSAGE_MAX,
     USER_PATH_REFERENCES_PER_SESSION_MAX,
+    withHookContextInContent,
 } from "@/agent/messages/messages"
 export { isValidUserImage } from "@/agent/messages/user-image"
 export type {

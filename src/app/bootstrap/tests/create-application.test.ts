@@ -101,6 +101,8 @@ test("passes workspace instructions to an injected model without attaching OpenA
     expect(modelRequest.systemPrompt).not.toContain("web_search")
     expect(modelRequest.systemPrompt).toContain("When a result contains outputId")
     expect(modelRequest.systemPrompt).not.toContain("generate immutable proposals")
+    // No Claude Code configuration in this home, so no Claude Code tool equivalents either.
+    expect(modelRequest.systemPrompt).not.toContain("Running Claude Code instructions in Buli")
     expect(modelRequest.systemPrompt).toContain(JSON.stringify({
       instructionFiles: [{
         source: ".buli/AGENTS.md",
@@ -149,6 +151,7 @@ test("sends user, workspace-root and .buli instructions in that order, plus the 
     await Promise.all([promptRun.promptPersisted, promptRun.runFinished])
 
     expect(systemPrompt).toContain("Run every task through the Algorithm.")
+    expect(systemPrompt).toContain("# Running Claude Code instructions in Buli")
     expect(systemPrompt).toContain(JSON.stringify({
       instructionFiles: [
         { source: userInstructionsPath, content: "Explain from the ground up." },

@@ -11,6 +11,7 @@ import {
 import { connectConfiguredServers, loadMcpConfig } from "@/integrations/claude-code/mcp-config"
 import { loadClaudeSettings } from "@/integrations/claude-code/settings"
 import { renderStatusLine } from "@/integrations/claude-code/status-line"
+import runningInBuli from "@/integrations/claude-code/running-in-buli.txt" with { type: "text" }
 
 /** The Claude Code files Buli is pointed at, mirroring Claude Code's own flags. */
 export interface IClaudeCodeConfig {
@@ -35,7 +36,7 @@ export interface IClaudeCodeIntegrationOptions extends IClaudeCodeConfig {
 export interface IClaudeCodeIntegration {
     /** User and workspace-root `CLAUDE.md` files, placed before Buli's own `.buli` instructions. */
     readonly instructionFiles: readonly IInstructionFile[]
-    /** The appended system prompt file and MCP server instructions; empty when there are none. */
+    /** The appended system prompt file, the Buli equivalents of Claude Code tools and MCP server instructions; empty without Claude Code configuration. */
     readonly systemPromptAddition: string
     readonly tools: readonly IRuntimeAgentTool[]
     /** Agents from `~/.claude/agents`, run through `run_agent`. */
@@ -67,10 +68,14 @@ export async function createClaudeCodeIntegration(options: IClaudeCodeIntegratio
     const subagents = await loadClaudeAgents(signal)
     const mcpServers = options.mcpConfigPath === undefined ? [] : await loadMcpConfig(options.mcpConfigPath, signal)
     const mcp = await connectConfiguredServers(mcpServers, options.clientInfo, signal)
+    // Claude Code instructions in play need the Buli equivalents of the tools they name.
+    const usesClaudeCode = instructionFiles.length > 0 || appendedSystemPrompt !== undefined || settings !== undefined
+        || mcpServers.length > 0 || subagents.length > 0
 
     return {
         instructionFiles,
-        systemPromptAddition: [appendedSystemPrompt, mcp.instructions].filter(Boolean).join("\n\n"),
+        systemPromptAddition: [appendedSystemPrompt, usesClaudeCode ? runningInBuli : undefined, mcp.instructions]
+            .filter(Boolean).join("\n\n"),
         tools: mcp.tools,
         subagents,
         createSessionHooks: settings && ((sessionId) => new ClaudeCodeHooks({ sessionId, workspaceRoot, hooks: settings.hooks })),

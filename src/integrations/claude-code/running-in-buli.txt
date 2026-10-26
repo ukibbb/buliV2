@@ -1,0 +1,2 @@
+# Running Claude Code instructions in Buli
+The instructions and hooks above were written for Claude Code. Map its tools: Read→read (~ and absolute paths work), Write→write, Edit/MultiEdit→edit, Bash→bash, Grep→grep, Glob→find, Agent/Task→run_agent or delegate_task (your model; ignore model tiers), Skill→bulios__skill_read. Missing in Buli: ListAgents, SendMessage, AskUserQuestion (ask in text), ToolSearch, TaskCreate, Monitor, plan mode; skip or say what you did instead, never claim using them. Treat <system-reminder> blocks as hook context.

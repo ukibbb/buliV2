@@ -99,6 +99,7 @@ export class AgentSession {
     private readonly listeners = new Set<TSessionListener>()
     private readonly unsubscribeAgent: () => void
     private readonly disposeTimeoutMs: number
+    private readonly hooks: IAgentHooks | undefined
     private readonly resolveRunConfiguration: TSessionRunConfigurationResolver
     private systemPrompt: string
     private mcpStatusCache: {
@@ -156,6 +157,7 @@ export class AgentSession {
         this.manager.recoverInterruptedTools(this.id)
         this.workingContext = new AgentWorkingContext(this.manager.loadRequiredContext(this.id))
         this.initializeContextUsage()
+        this.hooks = options.hooks
         this.agent = new Agent({
             // agent for sessionId
             sessionId: options.sessionId,
@@ -545,6 +547,8 @@ export class AgentSession {
                 "Timed out waiting for AgentSession to stop",
             )
         } finally {
+            // Runs even when stopping the agent timed out, so SessionEnd hooks are not lost.
+            await this.hooks?.endSession()
             this.acceptCriticalEvents = false
             this.unsubscribeAgent()
             this.listeners.clear()

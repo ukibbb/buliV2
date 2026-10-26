@@ -1,5 +1,5 @@
 import { expect, mock, test } from "bun:test"
-import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setImmediate } from "node:timers/promises"
@@ -161,9 +161,12 @@ test("sends user, workspace-root and .buli instructions in that order, plus the 
   }
 })
 
-test("runs prompt hooks from a Claude Code settings file", async () => {
+test("runs prompt hooks from a Claude Code settings file and keeps a Claude Code transcript", async () => {
   const fixture = await applicationFixture()
   let messages: IAgentModelRequest["messages"] | undefined
+  const home = process.env.HOME
+  // The transcript goes to ~/.claude/projects; keep it out of the real home.
+  process.env.HOME = fixture.workspace
 
   try {
     const settingsPath = join(fixture.workspace, "settings.json")
@@ -187,7 +190,13 @@ test("runs prompt hooks from a Claude Code settings file", async () => {
       role: "user",
       content: "Hello\n\n<system-reminder>\nRemember the ISA\n</system-reminder>",
     })
+    const projects = join(fixture.workspace, ".claude", "projects")
+    const [project] = await readdir(projects)
+    const [transcript] = await readdir(join(projects, project!))
+    const lines = (await readFile(join(projects, project!, transcript!), "utf8")).trim().split("\n")
+    expect(lines.map((line) => JSON.parse(line).type)).toEqual(["user", "assistant"])
   } finally {
+    process.env.HOME = home
     await fixture.dispose()
   }
 })

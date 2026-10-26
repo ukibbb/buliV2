@@ -68,6 +68,9 @@ function hooks(overrides: Partial<{
       calls.push(`after:${call.toolName}:${result.content}`)
       return overrides.afterTool
     },
+    afterMessage() {},
+    afterRun() {},
+    async endSession() {},
   }
 }
 

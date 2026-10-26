@@ -7,9 +7,14 @@ import { readInstructionFile, readWorkspaceFile, skipIfMissing } from "@/common/
 /** Claude Code follows `@path` imports at most four hops from the importing file. */
 const MAX_IMPORT_DEPTH = 4
 
+/** `~/.claude`, read live because Bun's `homedir()` keeps the value from process start. */
+export function claudeDirectory(): string {
+    return join(homeDirectory(), ".claude")
+}
+
 /** User-level instructions shared with Claude Code. */
 export function defaultUserInstructionsPath(): string {
-    return join(homeDirectory(), ".claude", "CLAUDE.md")
+    return join(claudeDirectory(), "CLAUDE.md")
 }
 
 /** `$HOME` is read live because Bun's `homedir()` keeps the value from process start. */

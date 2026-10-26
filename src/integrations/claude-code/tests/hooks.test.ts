@@ -6,6 +6,7 @@ import { join } from "node:path"
 import type { IToolCallContent, IToolResultMessage, IUserMessage } from "@/agent"
 import { ClaudeCodeHooks } from "@/integrations/claude-code/hooks"
 import { loadClaudeSettings, type THookConfiguration } from "@/integrations/claude-code/settings"
+import { claudeTranscriptPath } from "@/integrations/claude-code/transcript"
 
 const signal = () => new AbortController().signal
 
@@ -24,11 +25,15 @@ function result(content: string): IToolResultMessage {
   }
 }
 
+/** A temporary workspace that is also HOME, so transcripts never reach the real ~/.claude. */
 async function withWorkspace(body: (workspace: string) => Promise<void>) {
   const workspace = await realpath(await mkdtemp(join(tmpdir(), "buli-hooks-")))
+  const home = process.env.HOME
+  process.env.HOME = workspace
   try {
     await body(workspace)
   } finally {
+    process.env.HOME = home
     await rm(workspace, { recursive: true, force: true })
   }
 }
@@ -66,6 +71,7 @@ test("UserPromptSubmit receives Claude Code input and exit 2 blocks with stderr"
     expect(JSON.parse(await readFile(inputPath, "utf8"))).toEqual({
       session_id: "session-1",
       cwd: workspace,
+      transcript_path: claudeTranscriptPath(workspace, "session-1"),
       hook_event_name: "UserPromptSubmit",
       permission_mode: "default",
       prompt: "token=abc",
@@ -146,6 +152,39 @@ test("failing, plain-output, and timed-out tool hooks do not block", async () =>
   })
 })
 
+test("Stop reads the transcript in the background and SessionEnd waits for it", async () => {
+  await withWorkspace(async (workspace) => {
+    const stopInput = join(workspace, "stop.json")
+    const order = join(workspace, "order.txt")
+    const hooks = sessionHooks(workspace, {
+      Stop: [command(`cat > "${stopInput}"; sleep 0.3; echo stop >> "${order}"; echo '{"decision":"block","reason":"ignored"}'`)],
+      SessionEnd: [command(`cat > /dev/null; echo end >> "${order}"`)],
+    })
+
+    await hooks.beforePrompt(prompt("Hello"), signal())
+    hooks.afterMessage({ id: "u1", sessionId: "session-1", runId: "r", role: "user", source: "prompt", content: "Hello", createdAt: 1 })
+    const started = Date.now()
+    hooks.afterRun()
+    expect(Date.now() - started).toBeLessThan(100)
+    await hooks.endSession()
+
+    expect(await readFile(order, "utf8")).toBe("stop\nend\n")
+    const input = JSON.parse(await readFile(stopInput, "utf8"))
+    expect(input).toMatchObject({ hook_event_name: "Stop", stop_hook_active: false, session_id: "session-1" })
+    expect(input.transcript_path.startsWith(join(workspace, ".claude", "projects"))).toBe(true)
+    const [entry] = (await readFile(input.transcript_path, "utf8")).trim().split("\n").map((line) => JSON.parse(line))
+    expect(entry).toMatchObject({ type: "user", uuid: "u1", message: { role: "user", content: "Hello" } })
+  })
+})
+
+test("a session never prompted reports no SessionEnd", async () => {
+  await withWorkspace(async (workspace) => {
+    const marker = join(workspace, "ended")
+    await sessionHooks(workspace, { SessionEnd: [command(`touch "${marker}"`)] }).endSession()
+    expect(await Bun.file(marker).exists()).toBe(false)
+  })
+})
+
 test("settings keep supported command hooks and the status line", async () => {
   await withWorkspace(async (workspace) => {
     const path = join(workspace, "settings.json")
@@ -158,7 +197,7 @@ test("settings keep supported command hooks and the status line", async () => {
           { matcher: "Bash", hooks: [{ type: "command", command: "guard", timeout: 5 }, { type: "prompt", prompt: "x" }] },
           { matcher: "Agent", hooks: [{ type: "prompt", prompt: "x" }] },
         ],
-        Stop: [{ hooks: [{ type: "command", command: "later" }] }],
+        Notification: [{ hooks: [{ type: "command", command: "unsupported" }] }],
       },
     }))
 

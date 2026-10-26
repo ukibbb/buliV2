@@ -1,38 +1,21 @@
-import { isAbsolute, resolve } from "node:path"
-
 import type {
     IAgentHooks,
     IHookDecision,
     IToolCallContent,
     IToolResultMessage,
     IUserMessage,
+    TAgentMessage,
 } from "@/agent"
 import type { THookConfiguration, THookEventName } from "@/integrations/claude-code/settings"
 import { type IHookCommandResult, runHookCommand } from "@/integrations/claude-code/hook-command"
-
-/** Claude Code tool names for Buli tools, so hook matchers such as `Bash|Write|Edit` apply. */
-const CLAUDE_TOOL_NAMES: Readonly<Record<string, string>> = {
-    read: "Read",
-    write: "Write",
-    edit: "MultiEdit",
-    bash: "Bash",
-    grep: "Grep",
-    find: "Glob",
-    delegate_task: "Task",
-    web_search: "WebSearch",
-}
-
-/** Buli tools whose `path` input Claude Code hooks read as an absolute `file_path`. */
-const FILE_PATH_TOOLS = new Set(["read", "write", "edit"])
-
-interface IClaudeToolCall {
-    readonly name: string
-    readonly input: Record<string, unknown>
-}
+import { toClaudeToolCall } from "@/integrations/claude-code/tool-calls"
+import { ClaudeTranscript } from "@/integrations/claude-code/transcript"
 
 /** Event-specific fields of Claude Code's hook input. */
 type TClaudeHookEventInput =
     | { readonly source: "startup" }
+    | { readonly stop_hook_active: false }
+    | { readonly reason: "other" }
     | { readonly prompt: string }
     | {
         readonly tool_name: string
@@ -40,15 +23,24 @@ type TClaudeHookEventInput =
         readonly tool_response?: { readonly content: string; readonly is_error: boolean }
     }
 
-/** Runs one session's Claude Code command hooks with Claude Code's input and output protocol. */
+/**
+ * Runs one session's Claude Code command hooks with Claude Code's input and output protocol and keeps
+ * the session's Claude Code transcript, which the hooks read. Stop hooks only run for their effects:
+ * Buli does not continue a response a Stop hook blocks.
+ */
 export class ClaudeCodeHooks implements IAgentHooks {
     private sessionStarted = false
+    private readonly transcript: ClaudeTranscript
+    /** Stop hooks still running; the session's end waits for them. */
+    private readonly backgroundRuns = new Set<Promise<IHookDecision>>()
 
     constructor(private readonly options: {
         readonly sessionId: string
         readonly workspaceRoot: string
         readonly hooks: THookConfiguration
-    }) {}
+    }) {
+        this.transcript = new ClaudeTranscript(options.sessionId, options.workspaceRoot)
+    }
 
     /** The session's first prompt also runs SessionStart; its context cannot block. */
     async beforePrompt(message: IUserMessage, signal: AbortSignal): Promise<IHookDecision> {
@@ -61,19 +53,36 @@ export class ClaudeCodeHooks implements IAgentHooks {
     }
 
     async beforeTool(call: IToolCallContent, signal: AbortSignal): Promise<IHookDecision> {
-        const tool = this.toClaudeToolCall(call)
+        const tool = toClaudeToolCall(call, this.options.workspaceRoot)
         return await this.run("PreToolUse", tool.name, { tool_name: tool.name, tool_input: tool.input }, signal)
     }
 
     /** A PostToolUse block cannot undo the call; Claude Code feeds its reason to the model. */
     async afterTool(call: IToolCallContent, result: IToolResultMessage, signal: AbortSignal): Promise<string | undefined> {
-        const tool = this.toClaudeToolCall(call)
+        const tool = toClaudeToolCall(call, this.options.workspaceRoot)
         const decision = await this.run("PostToolUse", tool.name, {
             tool_name: tool.name,
             tool_input: tool.input,
             tool_response: { content: result.content, is_error: result.isError },
         }, signal)
         return joinText([decision.blockReason, decision.context])
+    }
+
+    afterMessage(message: TAgentMessage): void {
+        this.transcript.append(message)
+    }
+
+    afterRun(): void {
+        const run = this.run("Stop", undefined, { stop_hook_active: false }, new AbortController().signal)
+        this.backgroundRuns.add(run)
+        void run.finally(() => this.backgroundRuns.delete(run))
+    }
+
+    /** Pairs with SessionStart: a session only opened to read its history has no end to report. */
+    async endSession(): Promise<void> {
+        await Promise.allSettled(this.backgroundRuns)
+        if (!this.sessionStarted) return
+        await this.run("SessionEnd", undefined, { reason: "other" }, new AbortController().signal)
     }
 
     private async run(
@@ -89,6 +98,7 @@ export class ClaudeCodeHooks implements IAgentHooks {
         const input = {
             session_id: this.options.sessionId,
             cwd: this.options.workspaceRoot,
+            transcript_path: this.transcript.path,
             hook_event_name: event,
             permission_mode: "default" as const,
             ...eventInput,
@@ -97,28 +107,6 @@ export class ClaudeCodeHooks implements IAgentHooks {
             runHookCommand(command, input, { cwd: this.options.workspaceRoot, signal })
         ))
         return mergeDecisions(results.map((result) => decisionFrom(event, result)))
-    }
-
-    /** Claude Code hooks read `file_path` as an absolute path and Edit fields as `old_string`/`new_string`. */
-    private toClaudeToolCall(call: IToolCallContent): IClaudeToolCall {
-        const name = CLAUDE_TOOL_NAMES[call.toolName] ?? call.toolName
-        const { path, edits, ...rest } = call.input
-        if (typeof path !== "string" || !FILE_PATH_TOOLS.has(call.toolName)) {
-            return { name, input: call.input }
-        }
-        const file_path = isAbsolute(path) ? path : resolve(this.options.workspaceRoot, path)
-        if (call.toolName !== "edit" || !Array.isArray(edits)) return { name, input: { ...rest, file_path } }
-        return {
-            name,
-            input: {
-                ...rest,
-                file_path,
-                edits: edits.map((edit: { oldText?: unknown; newText?: unknown }) => ({
-                    old_string: edit.oldText,
-                    new_string: edit.newText,
-                })),
-            },
-        }
     }
 }
 

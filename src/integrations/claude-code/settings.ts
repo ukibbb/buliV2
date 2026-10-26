@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises"
 
-/** Claude Code hook events Buli runs; Stop and SessionEnd need a transcript Buli does not write yet. */
-export const HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse"] as const
+/** Claude Code hook events Buli runs. */
+export const HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"] as const
 export type THookEventName = typeof HOOK_EVENTS[number]
 
 export interface IHookCommand {

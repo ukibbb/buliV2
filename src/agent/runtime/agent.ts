@@ -435,6 +435,7 @@ export class Agent {
 
                 if (failed) activeRun.rejectRunFinished(failure)
                 else activeRun.resolveRunFinished()
+                if (!failed && reason === "completed") this.hooks?.afterRun()
             }
         }
     }
@@ -466,6 +467,7 @@ export class Agent {
     ): Promise<void> {
         const signal = activeRun.abortController.signal
         await this.criticalEventSink?.(event, signal)
+        if (event.type === "message_end") this.hooks?.afterMessage(event.message)
         this.reduce(event)
         this.notifyListeners(event, signal)
 

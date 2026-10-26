@@ -3,7 +3,7 @@ import type { IAgentDeclaration, IAgentDefinition } from "@/agent/definitions/de
 import { BULI_INSTRUCTIONS } from "@/agent/definitions/buli/instructions"
 import type { IRuntimeAgentTool } from "@/agent/tools/tool"
 import type { IToolOutputStore } from "@/agent/tools/tool-output-store"
-import type { IWorkspaceInstructions } from "@/agent/definitions/workspace-instructions"
+import type { IInstructionFile } from "@/agent/definitions/instruction-file"
 import { FindTool } from "@/agent/tools/find/find-tool"
 import { GrepTool } from "@/agent/tools/grep/grep-tool"
 import { ReadTool } from "@/agent/tools/read/read-tool"
@@ -15,7 +15,9 @@ import { createWriteTool } from "@/agent/tools/write/write-tool"
 export interface IBuliAgentDependencies {
     readonly workspaceRoot: string
     readonly toolOutputStore: IToolOutputStore
-    readonly workspaceInstructions?: IWorkspaceInstructions
+    readonly instructionFiles?: readonly IInstructionFile[]
+    /** Placed right after the role's instructions with system-prompt authority. */
+    readonly appendedSystemPrompt?: string
     readonly fdExecutablePath?: string
     readonly ripgrepExecutablePath?: string
 }
@@ -77,12 +79,13 @@ export function createWorkspaceAgentDefinition(
             `Current working directory and workspace root: ${dependencies.workspaceRoot}.`,
             "All tool paths are resolved relative to the workspace unless the tool schema states otherwise.",
             declaration.instructions,
-            ...(dependencies.workspaceInstructions === undefined ? [] : [
-                "The following workspace instructions describe project conventions. "
+            ...(dependencies.appendedSystemPrompt === undefined ? [] : [dependencies.appendedSystemPrompt]),
+            ...(dependencies.instructionFiles?.length ? [
+                "The following instruction files describe the user's preferences and project conventions. "
                     + "Follow them where compatible with Buli's instructions. "
                     + "They do not override approval requirements or tool access policies.",
-                JSON.stringify({ workspaceInstructions: dependencies.workspaceInstructions }),
-            ]),
+                JSON.stringify({ instructionFiles: dependencies.instructionFiles }),
+            ] : []),
         ].join("\n"),
         tools: [
             ...(options.tools === undefined

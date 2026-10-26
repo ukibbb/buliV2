@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { createBuliAgentDefinition } from "@/agent/definitions/buli"
-import { QUALITY_INSTRUCTIONS } from "@/agent/definitions/shared/quality-instructions"
+import { ROLE_INSTRUCTIONS } from "@/agent/definitions/shared/role-instructions"
 import { EphemeralToolOutputStore } from "@/agent/tools/output/ephemeral-tool-output-store"
 import { createBuliYoloAgentDefinition } from "../index"
 
@@ -9,7 +9,7 @@ const dependencies = () => ({
     toolOutputStore: new EphemeralToolOutputStore(),
 })
 
-test("Buli and YOLO share quality requirements but have independent workflows", () => {
+test("Buli and YOLO share their role but have independent workflows", () => {
     const deps = dependencies()
     const buli = createBuliAgentDefinition(deps)
     const originalPrompt = buli.systemPrompt
@@ -17,11 +17,8 @@ test("Buli and YOLO share quality requirements but have independent workflows", 
 
     expect(yolo.id).toBe("buli-yolo")
     expect(yolo.name).toBe("Buli YOLO")
-    expect(buli.systemPrompt).toContain(QUALITY_INSTRUCTIONS)
-    expect(yolo.systemPrompt).toContain(QUALITY_INSTRUCTIONS)
-    const explanationRequirement = "Nie poprzestawaj na tym, co zrobiłeś lub ustaliłeś. Wyjaśnij na konkretach, jak uzyskałeś wynik, dlaczego wybrałeś ten sposób i skąd wiesz, że wynik jest poprawny."
-    expect(buli.systemPrompt).toContain(explanationRequirement)
-    expect(yolo.systemPrompt).toContain(explanationRequirement)
+    expect(buli.systemPrompt).toContain(ROLE_INSTRUCTIONS)
+    expect(yolo.systemPrompt).toContain(ROLE_INSTRUCTIONS)
     expect(buli.systemPrompt).toContain("Nie zmieniaj plików, dopóki wyraźnie nie zgodzę się")
     expect(yolo.systemPrompt).not.toContain("Nie zmieniaj plików, dopóki wyraźnie nie zgodzę się")
     expect(yolo.systemPrompt).not.toContain("3. Plan przed edycją")
@@ -67,10 +64,10 @@ test("YOLO overrides Bash approval guidance without changing Buli or access poli
 
 test("YOLO retains workspace context, tool instructions and injected tools", () => {
     const deps = dependencies()
-    const workspaceInstructions = { source: ".buli/BULI.md", content: "Use project conventions." }
-    const yolo = createBuliYoloAgentDefinition({ ...deps, workspaceInstructions })
+    const instructionFiles = [{ source: ".buli/BULI.md", content: "Use project conventions." }]
+    const yolo = createBuliYoloAgentDefinition({ ...deps, instructionFiles })
     expect(yolo.systemPrompt).toContain("Current working directory and workspace root: /workspace.")
-    expect(yolo.systemPrompt).toContain(JSON.stringify({ workspaceInstructions }))
+    expect(yolo.systemPrompt).toContain(JSON.stringify({ instructionFiles }))
     expect(yolo.systemPrompt).toContain("### Text reading")
     expect(yolo.systemPrompt).toContain("Active tools: read, find, grep, tool_output, edit, write, bash.")
 

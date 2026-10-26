@@ -3,6 +3,7 @@ import {
   mkdir,
   mkdtemp,
   readdir,
+  realpath,
   rm,
   stat,
   symlink,
@@ -12,14 +13,83 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import {
-  loadWorkspaceInstructions,
-  WORKSPACE_INSTRUCTIONS_MAX_BYTES,
-} from "@/app/bootstrap/load-workspace-instructions"
+  INSTRUCTION_FILE_MAX_BYTES,
+  loadInstructionFiles,
+  loadSystemPromptFile,
+} from "@/app/bootstrap/load-instruction-files"
+
+test("loads user, workspace root, and .buli instructions in that order", async () => {
+  const workspace = await temporaryWorkspace()
+  const home = await temporaryWorkspace("buli-instructions-home-")
+  try {
+    const userPath = join(home, "CLAUDE.md")
+    await writeFile(userPath, "User preferences")
+    await writeFile(join(workspace, "CLAUDE.md"), "Project conventions")
+    await writeInstruction(workspace, "BULI.md", "Buli conventions")
+
+    expect(await loadInstructionFiles(await realpath(workspace), userPath, signal())).toEqual([
+      { source: userPath, content: "User preferences" },
+      { source: "CLAUDE.md", content: "Project conventions" },
+      { source: ".buli/BULI.md", content: "Buli conventions" },
+    ])
+  } finally {
+    await Promise.all([removeWorkspace(workspace), removeWorkspace(home)])
+  }
+})
+
+test("skips missing user and workspace root instructions", async () => {
+  const workspace = await temporaryWorkspace()
+  try {
+    expect(await loadInstructionFiles(await realpath(workspace), join(workspace, "missing.md"), signal())).toEqual([])
+  } finally {
+    await removeWorkspace(workspace)
+  }
+})
+
+test.skipIf(process.platform === "win32")(
+  "follows a user instructions symlink outside the workspace but not a workspace root one",
+  async () => {
+    const workspace = await temporaryWorkspace()
+    const dotfiles = await temporaryWorkspace("buli-instructions-dotfiles-")
+    try {
+      const target = join(dotfiles, "CLAUDE.md")
+      await writeFile(target, "Dotfiles preferences")
+      const userPath = join(dotfiles, "linked-CLAUDE.md")
+      await symlink(target, userPath)
+
+      expect(await loadInstructionFiles(await realpath(workspace), userPath, signal())).toEqual([
+        { source: userPath, content: "Dotfiles preferences" },
+      ])
+
+      await symlink(target, join(workspace, "CLAUDE.md"))
+      await expect(
+        loadInstructionFiles(await realpath(workspace), userPath, signal()),
+      ).rejects.toThrow(/resolve outside the workspace: CLAUDE\.md/)
+    } finally {
+      await Promise.all([removeWorkspace(workspace), removeWorkspace(dotfiles)])
+    }
+  },
+)
+
+test("reads an appended system prompt file and rejects a missing one", async () => {
+  const workspace = await temporaryWorkspace()
+  try {
+    const path = join(workspace, "system.md")
+    await writeFile(path, "System rules")
+
+    expect(await loadSystemPromptFile(path, signal())).toBe("System rules")
+    await expect(
+      loadSystemPromptFile(join(workspace, "missing.md"), signal()),
+    ).rejects.toThrow(/Unable to inspect instructions: .*missing\.md/)
+  } finally {
+    await removeWorkspace(workspace)
+  }
+})
 
 test("creates the workspace .buli directory when no instructions exist", async () => {
   const workspace = await temporaryWorkspace()
   try {
-    const result = await loadWorkspaceInstructions(workspace, signal())
+    const result = await loadBuliInstructions(workspace)
 
     expect(result).toBeUndefined()
     expect((await stat(join(workspace, ".buli"))).isDirectory()).toBe(true)
@@ -34,7 +104,7 @@ for (const fileName of ["BULI.md", "AGENTS.md", "CLAUDE.md"] as const) {
     try {
       await writeInstruction(workspace, fileName, `${fileName} instructions`)
 
-      expect(await loadWorkspaceInstructions(workspace, signal())).toEqual({
+      expect(await loadBuliInstructions(workspace)).toEqual({
         source: `.buli/${fileName}`,
         content: `${fileName} instructions`,
       })
@@ -53,7 +123,7 @@ test("loads only the highest-priority workspace instruction file", async () => {
       writeInstruction(workspace, "BULI.md", "Buli instructions"),
     ])
 
-    expect(await loadWorkspaceInstructions(workspace, signal())).toEqual({
+    expect(await loadBuliInstructions(workspace)).toEqual({
       source: ".buli/BULI.md",
       content: "Buli instructions",
     })
@@ -70,7 +140,7 @@ test("an empty higher-priority file blocks lower-priority files", async () => {
       writeInstruction(workspace, "AGENTS.md", "Agent instructions"),
     ])
 
-    expect(await loadWorkspaceInstructions(workspace, signal())).toEqual({
+    expect(await loadBuliInstructions(workspace)).toEqual({
       source: ".buli/BULI.md",
       content: "",
     })
@@ -88,7 +158,7 @@ test("ignores singular, unrelated, and incorrectly cased filenames", async () =>
       writeInstruction(workspace, "README.md", "unrelated"),
     ])
 
-    expect(await loadWorkspaceInstructions(workspace, signal())).toBeUndefined()
+    expect(await loadBuliInstructions(workspace)).toBeUndefined()
   } finally {
     await removeWorkspace(workspace)
   }
@@ -100,7 +170,7 @@ test("rejects invalid or oversized selected instructions", async () => {
     ["invalid UTF-8", Uint8Array.from([0xc3, 0x28]), /not valid UTF-8/],
     [
       "oversized content",
-      new Uint8Array(WORKSPACE_INSTRUCTIONS_MAX_BYTES + 1).fill(65),
+      new Uint8Array(INSTRUCTION_FILE_MAX_BYTES + 1).fill(65),
       /exceed 65536 bytes/,
     ],
   ]
@@ -111,7 +181,7 @@ test("rejects invalid or oversized selected instructions", async () => {
       await writeInstruction(workspace, "BULI.md", content)
 
       await expect(
-        loadWorkspaceInstructions(workspace, signal()),
+        loadBuliInstructions(workspace),
       ).rejects.toThrow(expectedError)
     } finally {
       await removeWorkspace(workspace)
@@ -125,8 +195,8 @@ test("rejects a directory selected as an instruction file", async () => {
     await mkdir(join(workspace, ".buli", "BULI.md"), { recursive: true })
 
     await expect(
-      loadWorkspaceInstructions(workspace, signal()),
-    ).rejects.toThrow(/Unable to inspect workspace instructions: \.buli\/BULI\.md/)
+      loadBuliInstructions(workspace),
+    ).rejects.toThrow(/Unable to inspect instructions: \.buli\/BULI\.md/)
   } finally {
     await removeWorkspace(workspace)
   }
@@ -143,7 +213,7 @@ test.skipIf(process.platform === "win32")(
       await mkdir(join(workspace, ".buli"), { recursive: true })
       await symlink(internalTarget, join(workspace, ".buli", "AGENTS.md"))
 
-      expect(await loadWorkspaceInstructions(workspace, signal())).toEqual({
+      expect(await loadBuliInstructions(workspace)).toEqual({
         source: ".buli/AGENTS.md",
         content: "Shared instructions",
       })
@@ -154,13 +224,28 @@ test.skipIf(process.platform === "win32")(
       await symlink(externalTarget, join(workspace, ".buli", "AGENTS.md"))
 
       await expect(
-        loadWorkspaceInstructions(workspace, signal()),
+        loadBuliInstructions(workspace),
       ).rejects.toThrow(/resolve outside the workspace/)
     } finally {
       await Promise.all([
         removeWorkspace(workspace),
         removeWorkspace(outside),
       ])
+    }
+  },
+)
+
+test.skipIf(process.platform === "win32")(
+  "a dangling .buli symlink fails instead of being skipped",
+  async () => {
+    const workspace = await temporaryWorkspace()
+    try {
+      await mkdir(join(workspace, ".buli"), { recursive: true })
+      await symlink(join(workspace, "deleted.md"), join(workspace, ".buli", "BULI.md"))
+
+      await expect(loadBuliInstructions(workspace)).rejects.toThrow(/Unable to inspect instructions: \.buli\/BULI\.md/)
+    } finally {
+      await removeWorkspace(workspace)
     }
   },
 )
@@ -172,13 +257,20 @@ test("does not create .buli when startup is already aborted", async () => {
   controller.abort(reason)
   try {
     await expect(
-      loadWorkspaceInstructions(workspace, controller.signal),
+      loadInstructionFiles(workspace, join(workspace, "missing-user.md"), controller.signal),
     ).rejects.toBe(reason)
     expect(await readdir(workspace)).toEqual([])
   } finally {
     await removeWorkspace(workspace)
   }
 })
+
+/** The `.buli` file alone, or undefined; no user or root instructions exist in these workspaces. */
+async function loadBuliInstructions(workspace: string) {
+  const files = await loadInstructionFiles(await realpath(workspace), join(workspace, "missing-user.md"), signal())
+  if (files.length > 1) throw new Error("Expected at most the .buli instructions")
+  return files[0]
+}
 
 function signal(): AbortSignal {
   return new AbortController().signal

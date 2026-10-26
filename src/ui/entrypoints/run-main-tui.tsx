@@ -1,5 +1,6 @@
 import {
     createBuliApplication,
+    type IBuliApplicationOptions,
     type IBuliApplicationStartup,
 } from "@/app/bootstrap/create-application"
 import { ApplicationStartup } from "@/ui/startup/ApplicationStartup"
@@ -14,11 +15,11 @@ import {
 } from "@/ui/terminal"
 
 /** Composes and runs the primary interactive Buli terminal application. */
-export async function runMainTui(): Promise<void> {
+export async function runMainTui(options: Pick<IBuliApplicationOptions, "appendSystemPromptFile"> = {}): Promise<void> {
     await runTuiRenderer((lifetime: Lifetime) => {
 
         const runtimeTask: Promise<IBuliApplicationStartup>
-            = createBuliApplication({ signal: lifetime.signal })
+            = createBuliApplication({ ...options, signal: lifetime.signal })
 
         void runtimeTask.catch(() => { })
         lifetime.addCleanup(async () => {

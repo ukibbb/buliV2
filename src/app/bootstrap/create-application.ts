@@ -17,7 +17,11 @@ import {
     type IAuthenticationComposition,
 } from "@/app/bootstrap/create-authentication"
 import { createNovibeAgentDefinition } from "@/agent"
-import { loadWorkspaceInstructions } from "@/app/bootstrap/load-workspace-instructions"
+import {
+    defaultUserInstructionsPath,
+    loadInstructionFiles,
+    loadSystemPromptFile,
+} from "@/app/bootstrap/load-instruction-files"
 import { createFdPathSearcher } from "@/app/path-search/fd-path-search"
 import { createInjectedModelComposition } from "@/app/bootstrap/model-composition"
 import { createProviderModelComposition } from "@/app/bootstrap/create-provider-model-composition"
@@ -92,6 +96,9 @@ export interface IBuliApplicationOptions {
     readonly kimiModelCatalog?: IKimiModelCatalog
     readonly deepseekModelCatalog?: IDeepSeekModelCatalog
     readonly preferencesPath?: string
+    readonly userInstructionsPath?: string
+    /** File appended to Buli's system prompt, like Claude Code's `--append-system-prompt-file`. */
+    readonly appendSystemPromptFile?: string
 }
 
 /** Composes provider, tools, persistence, sessions, and the UI boundary. */
@@ -106,10 +113,14 @@ export async function createBuliApplication(
         options.workspaceRoot ?? process.cwd(),
     )
     options.signal.throwIfAborted()
-    const workspaceInstructions = await loadWorkspaceInstructions(
+    const instructionFiles = await loadInstructionFiles(
         workspaceRoot,
+        options.userInstructionsPath ?? defaultUserInstructionsPath(),
         options.signal,
     )
+    const appendedSystemPrompt = options.appendSystemPromptFile === undefined
+        ? undefined
+        : await loadSystemPromptFile(options.appendSystemPromptFile, options.signal)
 
     const auth = options.authentication ?? createAuthentication()
     const authentication = auth.service
@@ -136,7 +147,8 @@ export async function createBuliApplication(
         const agentDependencies = {
             workspaceRoot,
             toolOutputStore,
-            ...(workspaceInstructions === undefined ? {} : { workspaceInstructions }),
+            instructionFiles,
+            ...(appendedSystemPrompt === undefined ? {} : { appendedSystemPrompt }),
             ...defaultToolExecutablePaths(),
         }
         const agentOptions = {
@@ -168,7 +180,7 @@ export async function createBuliApplication(
             agents: [buli, yolo, novibe],
             explorer: createExplorerAgentDefinition({
                 workspaceRoot, toolOutputStore,
-                ...(workspaceInstructions === undefined ? {} : { workspaceInstructions }),
+                instructionFiles,
                 ...defaultToolExecutablePaths(),
             }),
             defaultAgentId: buli.id,

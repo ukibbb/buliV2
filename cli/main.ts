@@ -28,6 +28,11 @@ const cli = yargs(args)
   .usage("")
   // Add a built-in completion command for future shell completion scripts.
   .completion("completion", "generate shell completion script")
+  // Global so a shell alias that always passes it keeps `buli login` and other commands working.
+  .option("append-system-prompt-file", {
+    type: "string",
+    describe: "append this file to the system prompt, like Claude Code",
+  })
   // Authentication commands use the same interactive OpenTUI flow as the app.
   .command(LoginCommand)
   .command(LogoutCommand)

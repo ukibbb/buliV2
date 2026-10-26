@@ -102,10 +102,10 @@ test("passes workspace instructions to an injected model without attaching OpenA
     expect(modelRequest.systemPrompt).toContain("When a result contains outputId")
     expect(modelRequest.systemPrompt).not.toContain("generate immutable proposals")
     expect(modelRequest.systemPrompt).toContain(JSON.stringify({
-      workspaceInstructions: {
+      instructionFiles: [{
         source: ".buli/AGENTS.md",
         content: "Run the project checks before finishing.",
-      },
+      }],
     }))
     expect(startup.runtime.workspaceRoot).toBe(await realpath(fixture.workspace))
     const session = startup.runtime.openSession(promptRun.sessionId).getSnapshot()
@@ -118,6 +118,50 @@ test("passes workspace instructions to an injected model without attaching OpenA
     expect(fixture.accountRequests).toEqual([])
     expect(fixture.modelRequests).toEqual([])
     expect(fixture.publicRequests).toEqual([])
+  } finally {
+    await fixture.dispose()
+  }
+})
+
+test("sends user instructions and the appended system prompt to the model", async () => {
+  const fixture = await applicationFixture()
+  let systemPrompt: string | undefined
+
+  try {
+    const userInstructionsPath = join(fixture.workspace, "user-CLAUDE.md")
+    const appendSystemPromptFile = join(fixture.workspace, "system.md")
+    await writeFile(userInstructionsPath, "Explain from the ground up.")
+    await writeFile(appendSystemPromptFile, "Run every task through the Algorithm.")
+    const startup = await fixture.start({
+      userInstructionsPath,
+      appendSystemPromptFile,
+      model: {
+        async *stream(request) {
+          systemPrompt = request.systemPrompt
+          yield { type: "finish", reason: "stop" }
+        },
+      },
+    })
+    await startup.runtime.refreshModels()
+    const promptRun = startup.runtime.submitPrompt({ text: "Hello" })
+    await Promise.all([promptRun.promptPersisted, promptRun.runFinished])
+
+    expect(systemPrompt).toContain("Run every task through the Algorithm.")
+    expect(systemPrompt).toContain(JSON.stringify({
+      instructionFiles: [{ source: userInstructionsPath, content: "Explain from the ground up." }],
+    }))
+  } finally {
+    await fixture.dispose()
+  }
+})
+
+test("a missing appended system prompt file fails startup", async () => {
+  const fixture = await applicationFixture()
+  try {
+    await expect(fixture.start({
+      appendSystemPromptFile: join(fixture.workspace, "missing.md"),
+      model: { async *stream() {} },
+    })).rejects.toThrow(/Unable to inspect instructions: .*missing\.md/)
   } finally {
     await fixture.dispose()
   }
@@ -667,12 +711,13 @@ async function applicationFixture() {
     workspace, controller, store, manager, authentication, modelCatalog,
     accountResponse, accountRequests, modelRequests, publicRequests,
     deepseekRequests, deepseekResponse, searchRequests,
-    start(options: Pick<IBuliApplicationOptions, "model" | "modelCatalog" | "kimiModelCatalog" | "deepseekModelCatalog"> = {}, includeDefaultTools = false) {
+    start(options: Pick<IBuliApplicationOptions, "model" | "modelCatalog" | "kimiModelCatalog" | "deepseekModelCatalog" | "userInstructionsPath" | "appendSystemPromptFile"> = {}, includeDefaultTools = false) {
       if (startupTask) throw new Error("Fixture already started")
       startupTask = createBuliApplication({
         signal: controller.signal,
         workspaceRoot: workspace,
         preferencesPath: join(workspace, "preferences.json"),
+        userInstructionsPath: join(workspace, "missing-user-CLAUDE.md"),
         manager,
         authentication,
         modelCatalog,

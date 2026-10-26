@@ -19,7 +19,7 @@ export type {
     IAgentLoopConfig,
 } from "@/agent/runtime/agent-loop"
 export { isImmutableAssistantSnapshot } from "@/agent/model/assistant-message-builder"
-export type { IWorkspaceInstructions } from "@/agent/definitions/workspace-instructions"
+export type { IInstructionFile } from "@/agent/definitions/instruction-file"
 export type {
     TAgentCriticalEventSink,
     TAgentEvent,

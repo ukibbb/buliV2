@@ -4,8 +4,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import type { IToolCallContent, IToolResultMessage, IUserMessage } from "@/agent"
-import { ClaudeCodeHooks } from "@/hooks/claude-code-hooks"
-import { loadClaudeSettings, type THookConfiguration } from "@/hooks/claude-settings"
+import { ClaudeCodeHooks } from "@/integrations/claude-code/hooks"
+import { loadClaudeSettings, type THookConfiguration } from "@/integrations/claude-code/settings"
 
 const signal = () => new AbortController().signal
 

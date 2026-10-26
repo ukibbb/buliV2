@@ -9,9 +9,11 @@ export const RunBuliTuiCommand: CommandModule<{}, RunBuliTuiArgs> = {
   describe: "start the Buli terminal user interface",
   handler: async ({ appendSystemPromptFile, settings, mcpConfig }) => {
     await runMainTui({
-      ...(appendSystemPromptFile === undefined ? {} : { appendSystemPromptFile }),
-      ...(settings === undefined ? {} : { settingsPath: settings }),
-      ...(mcpConfig === undefined ? {} : { mcpConfigPath: mcpConfig }),
+      claudeCode: {
+        ...(appendSystemPromptFile === undefined ? {} : { appendSystemPromptFile }),
+        ...(settings === undefined ? {} : { settingsPath: settings }),
+        ...(mcpConfig === undefined ? {} : { mcpConfigPath: mcpConfig }),
+      },
     });
   },
 };

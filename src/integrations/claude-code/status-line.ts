@@ -1,14 +1,7 @@
-import type { IHookCommand } from "@/hooks/claude-settings"
-import { runHookCommand } from "@/hooks/hook-command"
+import type { IStatusLineSession } from "@/common/status-line"
+import type { IHookCommand } from "@/integrations/claude-code/settings"
+import { runHookCommand } from "@/integrations/claude-code/hook-command"
 
-/** What Buli knows about the visible session when it draws the status line. */
-export interface IStatusLineSession {
-    readonly sessionId: string | undefined
-    readonly modelId: string
-    readonly modelName: string
-    readonly inputTokens: number
-    readonly contextWindowTokens: number | undefined
-}
 
 /** Runs Claude Code's `statusLine` command with its session JSON; undefined when the command fails. */
 export async function renderStatusLine(

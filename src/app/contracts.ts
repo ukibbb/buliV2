@@ -1,7 +1,7 @@
 import type { IUserPromptCommands } from "@/app/prompt-commands"
 export type { IUserPromptCommand, IUserPromptCommands } from "@/app/prompt-commands"
 
-import type { IStatusLineSession } from "@/hooks/status-line"
+import type { TRenderStatusLine } from "@/common/status-line"
 import type { IDelegatedTask } from "@/sessions"
 import type {
     TReasoningEffort,
@@ -137,8 +137,8 @@ export interface IBuliApplication
         query: string,
         signal?: AbortSignal,
     ) => Promise<readonly IBuliPathSuggestion[]>
-    /** Present when a Claude Code settings file configures a status line; returns its ANSI output. */
-    readonly renderStatusLine?: ((session: IStatusLineSession, signal: AbortSignal) => Promise<string | undefined>) | undefined
+    /** Present when an integration configures a status line command; returns its ANSI output. */
+    readonly renderStatusLine?: TRenderStatusLine | undefined
     readonly novibeAccount?: (action: "login" | "status" | "logout", sessionId?: string) => Promise<string>
     readonly activateNovibe: (sessionId: string) => Promise<string>
     readonly deactivateNovibe: (sessionId: string) => Promise<string>

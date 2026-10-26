@@ -1,4 +1,4 @@
-import type { IHookCommand } from "@/hooks/claude-settings"
+import type { IHookCommand } from "@/integrations/claude-code/settings"
 
 /** Claude Code's default hook timeout. */
 const DEFAULT_TIMEOUT_SECONDS = 60

@@ -12,10 +12,16 @@ export interface IMcpStdioCommand {
     readonly env?: Readonly<Record<string, string>>
 }
 
+/** How Buli introduces itself to an MCP server. */
+export interface IMcpClientInfo {
+    readonly name: string
+    readonly version: string
+}
+
 interface IMcpConnectionOptions {
     /** An HTTP endpoint, or a command whose process the connection owns until `close`. */
     readonly endpoint: URL | IMcpStdioCommand
-    readonly clientInfo: { readonly name: string; readonly version: string }
+    readonly clientInfo: IMcpClientInfo
     readonly signal: AbortSignal
     readonly timeoutMs?: number
     readonly authProvider?: OAuthClientProvider
@@ -45,7 +51,7 @@ export class McpConnection {
             : new StdioClientTransport({
                 command: endpoint.command,
                 args: [...endpoint.args],
-                // Like Claude Code, the server inherits Buli's environment; the SDK default keeps only a few variables.
+                // The server inherits Buli's environment; the SDK default keeps only a few variables.
                 env: { ...process.env as Record<string, string>, ...endpoint.env },
                 stderr: "ignore",
             })

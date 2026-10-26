@@ -7,8 +7,8 @@ import type {
     IToolResultMessage,
     IUserMessage,
 } from "@/agent"
-import type { THookConfiguration, THookEventName } from "@/hooks/claude-settings"
-import { type IHookCommandResult, runHookCommand } from "@/hooks/hook-command"
+import type { THookConfiguration, THookEventName } from "@/integrations/claude-code/settings"
+import { type IHookCommandResult, runHookCommand } from "@/integrations/claude-code/hook-command"
 
 /** Claude Code tool names for Buli tools, so hook matchers such as `Bash|Write|Edit` apply. */
 const CLAUDE_TOOL_NAMES: Readonly<Record<string, string>> = {

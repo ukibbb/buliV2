@@ -15,7 +15,7 @@ import {
 } from "@/ui/terminal"
 
 /** Composes and runs the primary interactive Buli terminal application. */
-export async function runMainTui(options: Pick<IBuliApplicationOptions, "appendSystemPromptFile" | "settingsPath" | "mcpConfigPath"> = {}): Promise<void> {
+export async function runMainTui(options: Pick<IBuliApplicationOptions, "claudeCode"> = {}): Promise<void> {
     await runTuiRenderer((lifetime: Lifetime) => {
 
         const runtimeTask: Promise<IBuliApplicationStartup>

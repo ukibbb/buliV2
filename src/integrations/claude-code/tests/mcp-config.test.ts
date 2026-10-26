@@ -4,9 +4,9 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
 import { ToolAccess } from "@/agent/tools/tool-policy"
-import { connectConfiguredServers, loadMcpConfig } from "@/mcp/configured-servers"
+import { connectConfiguredServers, loadMcpConfig } from "@/integrations/claude-code/mcp-config"
 
-const SERVER_SCRIPT = resolve(import.meta.dir, "../../../tests/fixtures/stdio-mcp-server.ts")
+const SERVER_SCRIPT = resolve(import.meta.dir, "../../../../tests/fixtures/stdio-mcp-server.ts")
 const client = { name: "buli-test", version: "1.0.0" }
 const signal = () => new AbortController().signal
 

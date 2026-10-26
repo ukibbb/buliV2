@@ -123,7 +123,7 @@ test("passes workspace instructions to an injected model without attaching OpenA
   }
 })
 
-test("sends user instructions and the appended system prompt to the model", async () => {
+test("sends user, workspace-root and .buli instructions in that order, plus the appended system prompt", async () => {
   const fixture = await applicationFixture()
   let systemPrompt: string | undefined
 
@@ -131,10 +131,12 @@ test("sends user instructions and the appended system prompt to the model", asyn
     const userInstructionsPath = join(fixture.workspace, "user-CLAUDE.md")
     const appendSystemPromptFile = join(fixture.workspace, "system.md")
     await writeFile(userInstructionsPath, "Explain from the ground up.")
+    await writeFile(join(fixture.workspace, "CLAUDE.md"), "Project conventions.")
+    await mkdir(join(fixture.workspace, ".buli"))
+    await writeFile(join(fixture.workspace, ".buli", "BULI.md"), "Buli conventions.")
     await writeFile(appendSystemPromptFile, "Run every task through the Algorithm.")
     const startup = await fixture.start({
-      userInstructionsPath,
-      appendSystemPromptFile,
+      claudeCode: { userInstructionsPath, appendSystemPromptFile },
       model: {
         async *stream(request) {
           systemPrompt = request.systemPrompt
@@ -148,7 +150,11 @@ test("sends user instructions and the appended system prompt to the model", asyn
 
     expect(systemPrompt).toContain("Run every task through the Algorithm.")
     expect(systemPrompt).toContain(JSON.stringify({
-      instructionFiles: [{ source: userInstructionsPath, content: "Explain from the ground up." }],
+      instructionFiles: [
+        { source: userInstructionsPath, content: "Explain from the ground up." },
+        { source: "CLAUDE.md", content: "Project conventions." },
+        { source: ".buli/BULI.md", content: "Buli conventions." },
+      ],
     }))
   } finally {
     await fixture.dispose()
@@ -165,7 +171,7 @@ test("runs prompt hooks from a Claude Code settings file", async () => {
       hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: "echo Remember the ISA" }] }] },
     }))
     const startup = await fixture.start({
-      settingsPath,
+      claudeCode: { settingsPath },
       model: {
         async *stream(request) {
           messages = request.messages
@@ -190,7 +196,7 @@ test("a missing appended system prompt file fails startup", async () => {
   const fixture = await applicationFixture()
   try {
     await expect(fixture.start({
-      appendSystemPromptFile: join(fixture.workspace, "missing.md"),
+      claudeCode: { appendSystemPromptFile: join(fixture.workspace, "missing.md") },
       model: { async *stream() {} },
     })).rejects.toThrow(/Unable to inspect instructions: .*missing\.md/)
   } finally {
@@ -742,13 +748,12 @@ async function applicationFixture() {
     workspace, controller, store, manager, authentication, modelCatalog,
     accountResponse, accountRequests, modelRequests, publicRequests,
     deepseekRequests, deepseekResponse, searchRequests,
-    start(options: Pick<IBuliApplicationOptions, "model" | "modelCatalog" | "kimiModelCatalog" | "deepseekModelCatalog" | "userInstructionsPath" | "appendSystemPromptFile" | "settingsPath"> = {}, includeDefaultTools = false) {
+    start(options: Pick<IBuliApplicationOptions, "model" | "modelCatalog" | "kimiModelCatalog" | "deepseekModelCatalog" | "claudeCode"> = {}, includeDefaultTools = false) {
       if (startupTask) throw new Error("Fixture already started")
       startupTask = createBuliApplication({
         signal: controller.signal,
         workspaceRoot: workspace,
         preferencesPath: join(workspace, "preferences.json"),
-        userInstructionsPath: join(workspace, "missing-user-CLAUDE.md"),
         manager,
         authentication,
         modelCatalog,
@@ -756,6 +761,7 @@ async function applicationFixture() {
         // HTTP-focused cases need only model traffic, never executable sidecars.
         ...(options.model === undefined && !includeDefaultTools ? { tools: [] } : {}),
         ...options,
+        claudeCode: { userInstructionsPath: join(workspace, "missing-user-CLAUDE.md"), ...options.claudeCode },
       })
       void startupTask.catch(() => {})
       return startupTask

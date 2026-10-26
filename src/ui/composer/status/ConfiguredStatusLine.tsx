@@ -5,7 +5,7 @@ import type { IBuliApplication } from "@/app/contracts"
 import type { IContextUsage } from "@/sessions"
 import { type IAnsiSpan, parseAnsiLines } from "@/ui/terminal/ansi-text"
 
-/** Claude Code redraws its status line at most every 300 ms. */
+/** A typing burst redraws once; terminal status lines redraw at about this rate. */
 const REFRESH_DELAY_MS = 300
 
 interface IConfiguredStatusLineProps {
@@ -16,7 +16,7 @@ interface IConfiguredStatusLineProps {
     readonly contextUsage: IContextUsage | undefined
 }
 
-/** Draws the status line command from the Claude Code settings file, refreshed when the session's model or context changes; a failed run clears it. */
+/** Draws the output of the configured status line command, refreshed when the session's model or context changes; a failed run clears it. */
 export function ConfiguredStatusLine(props: IConfiguredStatusLineProps) {
     const { render } = props
     const [lines, setLines] = useState<readonly IAnsiSpan[][]>([])

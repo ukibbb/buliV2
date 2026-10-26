@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises"
 
 import type { IRuntimeAgentTool } from "@/agent"
-import { type IMcpStdioCommand, McpConnection } from "@/mcp/mcp-connection"
+import { type IMcpClientInfo, type IMcpStdioCommand, McpConnection } from "@/mcp/mcp-connection"
 import { createMcpTool } from "@/mcp/mcp-tool-adapter"
 
 /** One stdio server from a Claude Code `--mcp-config` file. */
@@ -52,7 +52,7 @@ export async function loadMcpConfig(path: string, signal: AbortSignal): Promise<
  */
 export async function connectConfiguredServers(
     servers: readonly IConfiguredMcpServer[],
-    clientInfo: { readonly name: string; readonly version: string },
+    clientInfo: IMcpClientInfo,
     signal: AbortSignal,
 ): Promise<IConfiguredMcpTools> {
     const attempts = await Promise.allSettled(servers.map((server) =>

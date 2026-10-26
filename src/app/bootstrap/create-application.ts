@@ -17,16 +17,9 @@ import {
     type IAuthenticationComposition,
 } from "@/app/bootstrap/create-authentication"
 import { createNovibeAgentDefinition } from "@/agent"
-import {
-    defaultUserInstructionsPath,
-    loadInstructionFiles,
-    loadSystemPromptFile,
-} from "@/app/bootstrap/load-instruction-files"
+import { loadBuliInstructions } from "@/app/bootstrap/load-buli-instructions"
 import { createFdPathSearcher } from "@/app/path-search/fd-path-search"
-import { ClaudeCodeHooks } from "@/hooks/claude-code-hooks"
-import { loadClaudeSettings } from "@/hooks/claude-settings"
-import { renderStatusLine } from "@/hooks/status-line"
-import { connectConfiguredServers, type IConfiguredMcpTools, loadMcpConfig } from "@/mcp/configured-servers"
+import { createClaudeCodeIntegration, type IClaudeCodeConfig, type IClaudeCodeIntegration } from "@/integrations/claude-code"
 import { createInjectedModelComposition } from "@/app/bootstrap/model-composition"
 import { createProviderModelComposition } from "@/app/bootstrap/create-provider-model-composition"
 import type { IKimiModelCatalog } from "@/providers/kimi"
@@ -101,13 +94,7 @@ export interface IBuliApplicationOptions {
     readonly kimiModelCatalog?: IKimiModelCatalog
     readonly deepseekModelCatalog?: IDeepSeekModelCatalog
     readonly preferencesPath?: string
-    readonly userInstructionsPath?: string
-    /** File appended to Buli's system prompt, like Claude Code's `--append-system-prompt-file`. */
-    readonly appendSystemPromptFile?: string
-    /** Claude Code settings file whose command hooks Buli runs, like Claude Code's `--settings`. */
-    readonly settingsPath?: string
-    /** Claude Code `--mcp-config` file whose stdio servers' tools every Buli session gets. */
-    readonly mcpConfigPath?: string
+    readonly claudeCode?: IClaudeCodeConfig
 }
 
 /** Composes provider, tools, persistence, sessions, and the UI boundary. */
@@ -122,21 +109,7 @@ export async function createBuliApplication(
         options.workspaceRoot ?? process.cwd(),
     )
     options.signal.throwIfAborted()
-    const instructionFiles = await loadInstructionFiles(
-        workspaceRoot,
-        options.userInstructionsPath ?? defaultUserInstructionsPath(),
-        options.signal,
-    )
-    const appendedSystemPrompt = options.appendSystemPromptFile === undefined
-        ? undefined
-        : await loadSystemPromptFile(options.appendSystemPromptFile, options.signal)
-    const settings = options.settingsPath === undefined
-        ? undefined
-        : await loadClaudeSettings(options.settingsPath, options.signal)
-    // Like Claude Code: hooks, MCP servers and Bash inherit the settings `env` (e.g. buliOS memory role).
-    if (settings) Object.assign(process.env, settings.env)
-    const statusLine = settings?.statusLine
-    const mcpServers = options.mcpConfigPath === undefined ? [] : await loadMcpConfig(options.mcpConfigPath, options.signal)
+    const buliInstructions = await loadBuliInstructions(workspaceRoot, options.signal)
 
     const auth = options.authentication ?? createAuthentication()
     const authentication = auth.service
@@ -145,10 +118,16 @@ export async function createBuliApplication(
     // nie zostawi częściowo utworzonej usługi bez właściciela.
     let runtime: BuliApplicationRuntime | undefined
     let manager: ISessionManager | undefined
-    let configuredMcp: IConfiguredMcpTools | undefined
+    let claudeCode: IClaudeCodeIntegration | undefined
     try {
-        configuredMcp = await connectConfiguredServers(mcpServers, { name: "buli", version: applicationVersion }, options.signal)
-        const systemPromptAddition = [appendedSystemPrompt, configuredMcp.instructions].filter(Boolean).join("\n\n")
+        const integration = await createClaudeCodeIntegration({
+            ...options.claudeCode,
+            workspaceRoot,
+            clientInfo: { name: "buli", version: applicationVersion },
+            signal: options.signal,
+        })
+        claudeCode = integration
+        const instructionFiles = [...integration.instructionFiles, ...buliInstructions ? [buliInstructions] : []]
         manager = options.manager ?? new SQLiteSessionManager({
             directoryPath: defaultHistoryDirectoryPath(workspaceRoot),
         })
@@ -167,12 +146,12 @@ export async function createBuliApplication(
             workspaceRoot,
             toolOutputStore,
             instructionFiles,
-            ...(systemPromptAddition ? { appendedSystemPrompt: systemPromptAddition } : {}),
+            ...(integration.systemPromptAddition ? { appendedSystemPrompt: integration.systemPromptAddition } : {}),
             ...defaultToolExecutablePaths(),
         }
         const agentOptions = {
             ...(options.tools === undefined ? {} : { tools: options.tools }),
-            additionalTools: [...modelComposition.additionalTools, ...configuredMcp.tools],
+            additionalTools: [...modelComposition.additionalTools, ...integration.tools],
         }
         const buli = createBuliAgentDefinition(agentDependencies, agentOptions)
         const yolo = createBuliYoloAgentDefinition(agentDependencies, agentOptions)
@@ -207,12 +186,8 @@ export async function createBuliApplication(
             selection: modelComposition.selection,
             searchPaths: defaultPathSearcher(workspaceRoot),
             toolOutputStore,
-            ...(settings === undefined ? {} : {
-                createSessionHooks: (sessionId: string) => new ClaudeCodeHooks({ sessionId, workspaceRoot, hooks: settings.hooks }),
-            }),
-            ...(statusLine === undefined ? {} : {
-                renderStatusLine: (session, signal) => renderStatusLine(statusLine, session, { cwd: workspaceRoot, signal }),
-            }),
+            createSessionHooks: integration.createSessionHooks,
+            renderStatusLine: integration.renderStatusLine,
             ...(modelComposition.discovery ?? {}),
         })
         runtime = applicationRuntime
@@ -234,7 +209,7 @@ export async function createBuliApplication(
             void disposeApplicationResources(
                 applicationRuntime,
                 authentication,
-                configuredMcp,
+                integration,
                 reason,
             ).then(
                 completion.resolve,
@@ -270,7 +245,7 @@ export async function createBuliApplication(
                 toolOutputStore.dispose(),
             ]).then(() => undefined),
             authentication.dispose(startupError),
-            configuredMcp?.close(),
+            claudeCode?.close(),
         ])
         const rollbackErrors = rollbackResults.flatMap((result) =>
             result.status === "rejected" ? [result.reason] : []
@@ -288,13 +263,13 @@ export async function createBuliApplication(
 async function disposeApplicationResources(
     runtime: IBuliApplication,
     authentication: IAuthenticationService,
-    configuredMcp: IConfiguredMcpTools | undefined,
+    claudeCode: IClaudeCodeIntegration,
     reason: unknown,
 ): Promise<void> {
     const results = await Promise.allSettled([
         runtime.dispose(),
         authentication.dispose(reason),
-        configuredMcp?.close(),
+        claudeCode.close(),
     ])
     const errors = results.flatMap((result) =>
         result.status === "rejected" ? [result.reason] : []

@@ -83,7 +83,7 @@ export interface IBuliRuntimeOptions {
     readonly toolOutputStore?: IToolOutputStore
     readonly renderStatusLine?: IBuliApplication["renderStatusLine"]
     /** Hooks for each live user session; delegated Explorer sessions run without them. */
-    readonly createSessionHooks?: (sessionId: string) => IAgentHooks
+    readonly createSessionHooks?: ((sessionId: string) => IAgentHooks) | undefined
     readonly novibeAuth?: NovibeAuth
     readonly openNovibeUrl?: (url: string) => Promise<unknown>
 }
